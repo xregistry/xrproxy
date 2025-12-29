@@ -28,9 +28,9 @@
   },
   "devDependencies": {
     "axios": "^1.13.2",
-    "chai": "^6.2.1",
+    "chai": "^6.2.2",
     "mocha": "^11.7.5",
-    "sinon": "^21.0.0",
+    "sinon": "^21.0.1",
     "supertest": "^7.1.4"
   },
   "keywords": [
