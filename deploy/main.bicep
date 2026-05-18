@@ -468,7 +468,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             }
             {
               name: 'NODE_OPTIONS'
-              value: enableWorkloadProfiles ? '--max-old-space-size=2560' : '--max-old-space-size=1280 --optimize-for-size'
+              value: enableWorkloadProfiles ? '--max-old-space-size=2560' : '--max-old-space-size=768'
             }
             {
               name: 'PORT'
