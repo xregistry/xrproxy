@@ -284,6 +284,18 @@ class FilterOptimizer {
     this.enableTwoStepFiltering = options.enableTwoStepFiltering !== false; // Default: enabled
     this.metadataFetcher = options.metadataFetcher || null; // Function to fetch metadata
     this.maxMetadataFetches = options.maxMetadataFetches || 100; // Limit concurrent fetches
+
+    // Lite mode: skip building Map-based name/attribute indices and instead
+    // linear-scan the entities array on every name filter. Trades O(1) hash
+    // lookups for O(n) scans in exchange for ~600 MB of avoided heap on
+    // very large name-only catalogs (e.g. the full npm registry, ~3.76M
+    // entries). Wildcard queries already linear-scan today, so only exact
+    // equality lookups become measurably slower.
+    this.liteMode = options.liteMode === true;
+    this._nameGetter = (entity) => entity && entity.name;
+    // Above which result-set size lite mode refuses to cache; very large
+    // results would otherwise reintroduce the OOM via filterCache.
+    this.liteCacheMaxResultSize = options.liteCacheMaxResultSize || 10000;
   }
 
   /**
@@ -291,9 +303,16 @@ class FilterOptimizer {
    */
   buildIndices(entities, getEntityNameValue = (entity) => entity.name) {
     this.entities = entities;
+    this._nameGetter = getEntityNameValue;
+    this.lastIndexUpdate = Date.now();
     this.nameIndex.clear();
     this.attributeIndices.clear();
-    this.lastIndexUpdate = Date.now();
+    this.filterCache.clear();
+
+    if (this.liteMode) {
+      // Intentionally no per-entity index build. See constructor note.
+      return;
+    }
 
     // Build name index for O(1) name lookups
     entities.forEach((entity, index) => {
@@ -329,6 +348,9 @@ class FilterOptimizer {
    * Fast name-based filtering using index
    */
   filterByNameExpression(nameExpr) {
+    if (this.liteMode) {
+      return this._liteFilterByName(nameExpr);
+    }
     const { operator, value } = nameExpr;
     const filterValue = String(value).toLowerCase();
     const matchingIndices = new Set();
@@ -399,11 +421,69 @@ class FilterOptimizer {
   /**
    * Fallback linear filtering for complex operations
    */
-  linearFilterByName(nameExpr, getEntityNameValue = (entity) => entity.name) {
+  linearFilterByName(nameExpr, getEntityNameValue) {
+    const getter = getEntityNameValue || this._nameGetter;
     return this.entities.filter((entity) => {
-      const entityName = getEntityNameValue(entity);
+      const entityName = getter(entity);
       return compareValues(entityName, nameExpr.value, nameExpr.operator);
     });
+  }
+
+  /**
+   * Lite-mode name filter: linear scan that mirrors the index-based
+   * filterByNameExpression semantics (case-insensitive exact match and
+   * wildcard expansion) without allocating a per-entity Map index.
+   */
+  _liteFilterByName(nameExpr) {
+    const { operator, value } = nameExpr;
+    const getter = this._nameGetter;
+
+    if (["<", "<=", ">", ">="].includes(operator)) {
+      return this.linearFilterByName(nameExpr, getter);
+    }
+
+    const isNotEquals = operator === "!=" || operator === "<>";
+    const filterValueLower = String(value).toLowerCase();
+
+    if (filterValueLower.includes("*")) {
+      const regexPattern =
+        "^" +
+        filterValueLower
+          .replace(/[\.\+\?\^\[\]\(\)\{\}\$\-\=\!\|]/g, "\\$&")
+          .replace(/\*/g, ".*?") +
+        "$";
+      let regex;
+      try {
+        regex = new RegExp(regexPattern, "i");
+      } catch (e) {
+        // Mirror the index-based path: invalid regex collapses to an
+        // empty match set, so '=' returns nothing and '!=' returns all.
+        return isNotEquals ? this.entities.slice() : [];
+      }
+      const results = [];
+      for (const entity of this.entities) {
+        const name = getter(entity);
+        if (name == null) {
+          if (isNotEquals) results.push(entity);
+          continue;
+        }
+        const matched = regex.test(String(name));
+        if (matched !== isNotEquals) results.push(entity);
+      }
+      return results;
+    }
+
+    const results = [];
+    for (const entity of this.entities) {
+      const name = getter(entity);
+      if (name == null) {
+        if (isNotEquals) results.push(entity);
+        continue;
+      }
+      const matched = String(name).toLowerCase() === filterValueLower;
+      if (matched !== isNotEquals) results.push(entity);
+    }
+    return results;
   }
 
   /**
@@ -637,6 +717,12 @@ class FilterOptimizer {
    * Cache management
    */
   cacheResult(key, data) {
+    // Lite mode is tuned for very large name-only catalogs; caching a
+    // multi-million-entry result array would re-introduce the heap blow-up
+    // we just eliminated by skipping the name index.
+    if (this.liteMode && Array.isArray(data) && data.length > this.liteCacheMaxResultSize) {
+      return;
+    }
     // Implement LRU cache cleanup if needed
     if (this.filterCache.size >= this.cacheSize) {
       const oldestKey = this.filterCache.keys().next().value;
@@ -664,12 +750,13 @@ class FilterOptimizer {
       cacheSize: this.filterCache.size,
       maxCacheSize: this.cacheSize,
       indexedEntities: this.entities.length,
-      nameIndexSize: this.nameIndex.size,
-      attributeIndices: this.attributeIndices.size,
+      nameIndexSize: this.liteMode ? 0 : this.nameIndex.size,
+      attributeIndices: this.liteMode ? 0 : this.attributeIndices.size,
       lastIndexUpdate: this.lastIndexUpdate,
       twoStepFilteringEnabled: this.enableTwoStepFiltering,
       hasMetadataFetcher: !!this.metadataFetcher,
       maxMetadataFetches: this.maxMetadataFetches,
+      liteMode: this.liteMode,
     };
   }
 }

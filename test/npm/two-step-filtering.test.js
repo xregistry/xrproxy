@@ -232,7 +232,12 @@ describe("NPM Two-Step Filtering", function () {
         const stats = response.data;
 
         expect(stats.packageCache.size).to.be.greaterThan(1000000);
-        expect(stats.filterOptimizer.nameIndexSize).to.be.greaterThan(1000000);
+        // The npm server runs FilterOptimizer in liteMode (skips the
+        // Map-based name index to stay under the 1 GiB container limit),
+        // so the nameIndexSize is 0 by design. What we really want to
+        // assert is that the optimizer knows about the full catalog.
+        expect(stats.filterOptimizer.indexedEntities).to.be.greaterThan(1000000);
+        expect(stats.filterOptimizer.liteMode).to.equal(true);
       } catch (error) {
         if (error.response && error.response.status === 404) {
           console.warn(

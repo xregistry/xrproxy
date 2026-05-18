@@ -135,12 +135,16 @@ export class XRegistryServer {
             });
         }
 
-        // Initialize FilterOptimizer for two-step filtering
+        // Initialize FilterOptimizer for two-step filtering.
+        // liteMode skips building per-entity Map indices over the ~3.76M
+        // npm package names; that index alone costs ~600 MB of heap and
+        // OOMs a 1 GiB container. See shared/filter/index.js for details.
         this.filterOptimizer = new FilterOptimizer({
             cacheSize: 2000,
             maxCacheAge: 600000, // 10 minutes
             enableTwoStepFiltering: true,
-            maxMetadataFetches: 100 // Increased to improve chance of finding metadata matches
+            maxMetadataFetches: 100, // Increased to improve chance of finding metadata matches
+            liteMode: true
         });
 
         // Set metadata fetcher function
@@ -300,15 +304,13 @@ export class XRegistryServer {
 
         // Performance stats endpoint
         this.app.get('/performance/stats', (_req, res) => {
+            const optimizerStats = typeof this.filterOptimizer.getCacheStats === 'function'
+                ? this.filterOptimizer.getCacheStats()
+                : {};
             const stats = {
                 filterOptimizer: {
-                    twoStepFilteringEnabled: this.filterOptimizer.config?.enableTwoStepFiltering !== false,
-                    hasMetadataFetcher: !!this.filterOptimizer.metadataFetcher,
-                    indexedEntities: this.packageNamesCache.length,
-                    nameIndexSize: this.packageNamesCache.length,
-                    maxMetadataFetches: this.filterOptimizer.config?.maxMetadataFetches || 20,
-                    cacheSize: this.filterOptimizer.config?.cacheSize || 2000,
-                    maxCacheAge: this.filterOptimizer.config?.maxCacheAge || 600000
+                    ...optimizerStats,
+                    indexedEntities: optimizerStats.indexedEntities ?? this.packageNamesCache.length
                 },
                 packageCache: {
                     size: this.packageNamesCache.length
