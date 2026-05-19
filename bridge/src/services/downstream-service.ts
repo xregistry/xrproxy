@@ -158,6 +158,7 @@ export class DownstreamService {
      * Check if a server is healthy (basic connectivity check)
      */
     async checkServerHealth(server: DownstreamConfig): Promise<boolean> {
+        const state = this.serverStates.get(server.url);
         try {
             const headers: Record<string, string> = {};
             if (server.apiKey) {
@@ -169,8 +170,12 @@ export class DownstreamService {
                 timeout: SERVER_HEALTH_TIMEOUT
             });
 
+            // Refresh the timestamp so /health responses no longer show a
+            // stale "lastAttempt" from the original activation moment.
+            if (state) state.lastAttempt = Date.now();
             return true;
         } catch (error) {
+            if (state) state.lastAttempt = Date.now();
             return false;
         }
     }
