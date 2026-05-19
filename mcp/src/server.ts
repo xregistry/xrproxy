@@ -106,6 +106,17 @@ export class XRegistryServer {
      * Setup routes
      */
     private setupRoutes(): void {
+        // Health check - mirrors the shape of the other downstreams so the
+        // bridge's per-downstream /health probe gets a 2xx instead of 404.
+        this.app.get('/health', (_req, res) => {
+            res.json({
+                status: 'healthy',
+                timestamp: new Date().toISOString(),
+                version: process.env['npm_package_version'] || '1.0.0',
+                uptime: process.uptime()
+            });
+        });
+
         // Root - Registry entity
         this.app.get('/', async (req, res) => {
             try {
