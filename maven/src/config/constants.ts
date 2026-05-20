@@ -73,24 +73,15 @@ export const RESOURCE_CONFIG = {
 export const MAVEN_REGISTRY = {
     API_BASE_URL: 'https://search.maven.org/solrsearch/select',
     REPO_URL: 'https://repo1.maven.org/maven2',
-    INDEX_URL: 'https://repo.maven.apache.org/maven2/.index/nexus-maven-repository-index.gz',
     TIMEOUT_MS: 30000,
     USER_AGENT: 'xRegistry-Maven-Wrapper/1.0'
 } as const;
 
 /**
- * Maven Index Configuration
+ * Maven Central's Solr `rows` parameter silently falls back to the
+ * default page size if asked for more than 200. Clamp everything to that.
  */
-export const MAVEN_INDEX_CONFIG = {
-    DIR_NAME: 'maven-index-cache',
-    DIR: path.join(__dirname, '../../maven-index-cache'),
-    GZ_FILE: 'nexus-maven-repository-index.gz',
-    LUCENE_DIR_NAME: 'central-lucene-index',
-    GA_LIST_FILE_NAME: 'all-maven-ga.txt',
-    REFRESH_INTERVAL: 24 * 60 * 60 * 1000, // 24 hours
-    MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000, // 7 days
-    INDEXER_CLI_JAR_PATTERN: 'indexer-cli-*.jar'
-} as const;
+export const MAX_SOLR_ROWS = 200;
 
 /**
  * Cache Configuration
@@ -102,15 +93,6 @@ export const CACHE_CONFIG = {
     SEARCH_CACHE_SIZE: 800,
     SEARCH_CACHE_TTL: 600000, // 10 minutes
     MAX_METADATA_FETCHES: 30
-} as const;
-
-/**
- * SQLite Database Configuration
- */
-export const DATABASE_CONFIG = {
-    DEFAULT_OUTPUT_DB: 'maven-packages.db',
-    TEST_DB: 'test-packages.db',
-    TIMEOUT: 30000
 } as const;
 
 /**

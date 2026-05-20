@@ -13,19 +13,33 @@ import {
     XREGISTRY_CONFIG
 } from '../config/constants';
 import { throwEntityNotFound } from '../middleware/xregistry-error-handler';
+import { SearchService } from './search-service';
 
 export interface RegistryServiceOptions {
     baseUrl?: string;
     entityState?: EntityStateManager;
+    searchService?: SearchService;
 }
 
 export class RegistryService {
     private readonly entityState: EntityStateManager;
+    private readonly searchService: SearchService | undefined;
     private model: any; // Loaded from model.json
 
     constructor(options: RegistryServiceOptions = {}) {
         this.entityState = options.entityState || new EntityStateManager();
+        this.searchService = options.searchService;
         this.loadModel();
+    }
+
+    private async getPackagesCount(): Promise<number> {
+        if (!this.searchService) return 0;
+        try {
+            return await this.searchService.getTotalCount();
+        } catch {
+            // Don't fail registry endpoints just because Solr is down.
+            return 0;
+        }
     }
 
     /**
@@ -98,6 +112,7 @@ export class RegistryService {
         const page = parseInt(req.query['page'] as string) || 1;
 
         const groupPath = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
+        const packagesCount = await this.getPackagesCount();
 
         const groups = {
             [GROUP_CONFIG.TYPE]: {
@@ -112,7 +127,7 @@ export class RegistryService {
                     createdat: this.entityState.getCreatedAt(groupPath),
                     modifiedat: this.entityState.getModifiedAt(groupPath),
                     [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                    [`${RESOURCE_CONFIG.TYPE}count`]: 0
+                    [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
                 }
             }
         };
@@ -190,6 +205,7 @@ export class RegistryService {
         }
 
         const groupPath = `/${GROUP_CONFIG.TYPE}/${groupId}`;
+        const packagesCount = await this.getPackagesCount();
 
         const group = {
             xid: groupPath,
@@ -202,7 +218,7 @@ export class RegistryService {
             createdat: this.entityState.getCreatedAt(groupPath),
             modifiedat: this.entityState.getModifiedAt(groupPath),
             [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-            [`${RESOURCE_CONFIG.TYPE}count`]: 0
+            [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
         };
 
         res.json(group);
@@ -241,6 +257,7 @@ export class RegistryService {
     private async getGroupsInline(req: Request): Promise<any> {
         const baseUrl = getBaseUrl(req);
         const groupPath = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
+        const packagesCount = await this.getPackagesCount();
 
         return {
             [GROUP_CONFIG.ID]: {
@@ -254,7 +271,7 @@ export class RegistryService {
                 createdat: this.entityState.getCreatedAt(groupPath),
                 modifiedat: this.entityState.getModifiedAt(groupPath),
                 [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                [`${RESOURCE_CONFIG.TYPE}count`]: 0
+                [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
             }
         };
     }

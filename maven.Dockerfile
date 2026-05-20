@@ -122,7 +122,7 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S xregistry -u 1001
 
 # Create necessary directories and change ownership of the app directory
-RUN mkdir -p /app/logs /app/maven/cache /app/maven/maven-index-cache && \
+RUN mkdir -p /app/logs /app/maven/cache && \
     chown -R xregistry:nodejs /app
 USER xregistry
 

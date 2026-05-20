@@ -221,7 +221,7 @@ export class PackageService {
             isdefault: true,
             metaurl: `${basePath}/meta`,
             versionsurl: `${basePath}/versions`,
-            versionscount: 1, // Would need additional API call to get exact count
+            versionscount: typeof doc.versionCount === 'number' ? doc.versionCount : 1,
             // Maven-specific attributes
             groupId: doc.g,
             artifactId: doc.a,

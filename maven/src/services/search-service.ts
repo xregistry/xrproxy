@@ -1,16 +1,29 @@
 /**
  * Search Service
- * @fileoverview SQLite-based package search for Maven packages
+ * @fileoverview Direct Maven Central Solr Search API client.
+ *
+ * Replaces the old SQLite-backed lookup with a thin Solr proxy. The full
+ * Maven Central index is ~660k coordinates and is hosted by Sonatype
+ * behind https://search.maven.org/solrsearch/select; we have no reason
+ * to re-host it. Responses are deduplicated and cached by `MavenService`
+ * (file-backed, 1h TTL) so repeated queries are local-disk-fast.
+ *
+ * For unit/integration tests, `MAVEN_USE_TEST_INDEX=true` switches the
+ * service to an in-memory fixture (`stub-catalog.ts`) so CI doesn't hit
+ * the network.
  */
 
-import * as path from 'path';
-import * as sqlite3 from 'sqlite3';
-import { MAVEN_INDEX_CONFIG } from '../config/constants';
+import { MAX_SOLR_ROWS } from '../config/constants';
 import { MavenService } from './maven-service';
+import { STUB_CATALOG } from './stub-catalog';
 
 export interface SearchServiceOptions {
     mavenService: MavenService;
-    dbPath?: string;
+    /**
+     * Force the offline stub catalog. Falls back to the
+     * MAVEN_USE_TEST_INDEX env var when unset.
+     */
+    useTestFixture?: boolean;
 }
 
 export interface SearchResult {
@@ -19,248 +32,169 @@ export interface SearchResult {
     latestVersion: string;
     timestamp: number;
     repositoryId: string;
+    versionCount: number;
 }
 
 export interface SearchOptions {
-    limit?: number;
-    offset?: number;
+    /** Free-text query (default core). Empty / undefined => list all. */
     query?: string;
+    /** Maximum rows to return. Hard-capped at MAX_SOLR_ROWS (200). */
+    limit?: number;
+    /** Solr `start` offset. Solr paginates cleanly to end of result set. */
+    offset?: number;
 }
 
+export interface SearchPackagesResult {
+    results: SearchResult[];
+    /** Total matching results across all pages (Solr `numFound`). */
+    totalCount: number;
+}
+
+const TOTAL_COUNT_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 /**
- * Service for searching Maven packages using SQLite index
+ * Service for searching Maven packages via Maven Central's Solr API.
  */
 export class SearchService {
     private readonly mavenService: MavenService;
-    private readonly dbPath: string;
-    private db: sqlite3.Database | null = null;
+    private readonly useTestFixture: boolean;
+    private cachedTotal: { value: number; expiresAt: number } | null = null;
 
     constructor(options: SearchServiceOptions) {
         this.mavenService = options.mavenService;
-        this.dbPath = options.dbPath || path.join(
-            MAVEN_INDEX_CONFIG.DIR,
-            'maven-packages.db'
-        );
+        this.useTestFixture =
+            options.useTestFixture ?? process.env['MAVEN_USE_TEST_INDEX'] === 'true';
     }
 
     /**
-     * Initialize the database
+     * No-op retained so callers that previously initialised SQLite still
+     * compile. Solr-direct mode has no local state to set up.
      */
     async initializeDatabase(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            this.db = new sqlite3.Database(this.dbPath, (err) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-
-                // Create packages table if it doesn't exist
-                // Note: Use snake_case column names to match test database
-                this.db!.run(
-                    `CREATE TABLE IF NOT EXISTS packages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        group_id TEXT NOT NULL,
-                        artifact_id TEXT NOT NULL,
-                        latest_version TEXT,
-                        timestamp INTEGER,
-                        repository_id TEXT,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(group_id, artifact_id)
-                    )`,
-                    (createErr) => {
-                        if (createErr) {
-                            reject(createErr);
-                            return;
-                        }
-
-                        // Create indexes for search
-                        this.db!.run(
-                            `CREATE INDEX IF NOT EXISTS idx_group_id ON packages(group_id)`,
-                            (groupErr) => {
-                                if (groupErr) {
-                                    reject(groupErr);
-                                    return;
-                                }
-                                this.db!.run(
-                                    `CREATE INDEX IF NOT EXISTS idx_artifact_id ON packages(artifact_id)`,
-                                    (artifactErr) => {
-                                        if (artifactErr) {
-                                            reject(artifactErr);
-                                        } else {
-                                            resolve();
-                                        }
-                                    }
-                                );
-                            }
-                        );
-                    }
-                );
-            });
-        });
+        return;
     }
 
     /**
-     * Search packages
+     * No-op for symmetry with the old SQLite-backed close().
      */
-    async searchPackages(options: SearchOptions = {}): Promise<{ results: SearchResult[]; totalCount: number }> {
-        if (!this.db) {
-            await this.initializeDatabase();
+    async close(): Promise<void> {
+        return;
+    }
+
+    /** True when running against the in-memory fixture, not live Solr. */
+    isUsingTestFixture(): boolean {
+        return this.useTestFixture;
+    }
+
+    /**
+     * Translate an xRegistry-style filter pattern into a Solr query. The
+     * route layer already strips quotes; this just handles wildcards and
+     * the bare-term case.
+     */
+    private translateFilterToSolr(pattern: string): string {
+        const trimmed = pattern.trim();
+        if (!trimmed || trimmed === '*' || trimmed === '*:*') {
+            return '*:*';
+        }
+        // Wildcard pattern: try artifactId match first, then groupId.
+        // Solr default core indexes both as analysed text plus an exact
+        // `a` and `g` field, so prefix/contains both work.
+        if (trimmed.includes('*')) {
+            return `(a:${trimmed} OR g:${trimmed})`;
+        }
+        // Bare term: default analyser does the right thing.
+        return trimmed;
+    }
+
+    /**
+     * Search packages. Translates an xRegistry-style query/filter into a
+     * Solr query, fetches up to `limit` rows, and returns the live total.
+     */
+    async searchPackages(options: SearchOptions = {}): Promise<SearchPackagesResult> {
+        const rawLimit = options.limit ?? 50;
+        const limit = Math.max(1, Math.min(MAX_SOLR_ROWS, rawLimit));
+        const offset = Math.max(0, options.offset ?? 0);
+        const query = this.translateFilterToSolr(options.query ?? '*:*');
+
+        if (this.useTestFixture) {
+            return this.searchStub(query, limit, offset);
         }
 
-        const limit = options.limit || 50;
-        const offset = options.offset || 0;
-        const query = options.query || '';
-
-        return new Promise((resolve, reject) => {
-            if (!this.db) {
-                reject(new Error('Database not initialized'));
-                return;
-            }
-
-            let sql = 'SELECT * FROM packages';
-            let countSql = 'SELECT COUNT(*) as count FROM packages';
-            const params: any[] = [];
-
-            // Only add WHERE clause if query is provided and not a wildcard
-            if (query && query !== '*' && query.trim() !== '') {
-                const searchCondition = ' WHERE group_id LIKE ? OR artifact_id LIKE ?';
-                sql += searchCondition;
-                countSql += searchCondition;
-                const searchTerm = `%${query}%`;
-                params.push(searchTerm, searchTerm);
-            }
-
-            // Get total count first
-            this.db.get(countSql, params, (countErr, countRow: any) => {
-                if (countErr) {
-                    reject(countErr);
-                    return;
-                }
-
-                const totalCount = countRow?.count || 0;
-
-                // Get paginated results
-                sql += ' ORDER BY artifact_id LIMIT ? OFFSET ?';
-                const queryParams = [...params, limit, offset];
-
-                this.db!.all(sql, queryParams, (err, rows: any[]) => {
-                    if (err) {
-                        reject(err);
-                        return;
-                    }
-
-                    const results: SearchResult[] = rows.map((row) => ({
-                        groupId: row.group_id,
-                        artifactId: row.artifact_id,
-                        latestVersion: row.latest_version || '1.0.0',
-                        timestamp: row.timestamp || Date.now(),
-                        repositoryId: row.repository_id || 'central'
-                    }));
-
-                    resolve({ results, totalCount });
-                });
-            });
+        const response = await this.mavenService.solrQuery({
+            q: query,
+            rows: limit,
+            start: offset
         });
+
+        const results: SearchResult[] = response.response.docs.map((doc) => ({
+            groupId: doc.g,
+            artifactId: doc.a,
+            latestVersion: doc.latestVersion,
+            timestamp: doc.timestamp,
+            repositoryId: doc.repositoryId || 'central',
+            versionCount: typeof doc.versionCount === 'number' ? doc.versionCount : 0
+        }));
+
+        return {
+            results,
+            totalCount: response.response.numFound
+        };
     }
 
     /**
-     * Add or update package in index
+     * Total number of coordinates in Maven Central. Cached for an hour
+     * because this is metadata, not transactional.
      */
-    async upsertPackage(pkg: SearchResult): Promise<void> {
-        if (!this.db) {
-            await this.initializeDatabase();
+    async getTotalCount(): Promise<number> {
+        if (this.useTestFixture) {
+            return STUB_CATALOG.length;
         }
 
-        return new Promise((resolve, reject) => {
-            if (!this.db) {
-                reject(new Error('Database not initialized'));
-                return;
-            }
-
-            this.db.run(
-                `INSERT OR REPLACE INTO packages (group_id, artifact_id, latest_version, timestamp, repository_id)
-                 VALUES (?, ?, ?, ?, ?)`,
-                [pkg.groupId, pkg.artifactId, pkg.latestVersion, pkg.timestamp, pkg.repositoryId],
-                (err) => {
-                    if (err) {
-                        reject(err);
-                    } else {
-                        resolve();
-                    }
-                }
-            );
-        });
-    }
-
-    /**
-     * Refresh index from Maven Central
-     * Note: This is a simplified version. Full implementation would need to
-     * process Maven Central index files or use their search API extensively.
-     */
-    async refreshIndex(limit: number = 1000): Promise<void> {
-        if (!this.db) {
-            await this.initializeDatabase();
+        const now = Date.now();
+        if (this.cachedTotal && this.cachedTotal.expiresAt > now) {
+            return this.cachedTotal.value;
         }
 
         try {
-            // Search for popular packages (this is a sample approach)
-            const searchResult = await this.mavenService.searchArtifacts('*', 0, limit);
-
-            for (const doc of searchResult.response.docs) {
-                await this.upsertPackage({
-                    groupId: doc.g,
-                    artifactId: doc.a,
-                    latestVersion: doc.latestVersion,
-                    timestamp: doc.timestamp,
-                    repositoryId: doc.repositoryId || 'central'
-                });
-            }
-        } catch (error) {
-            throw new Error(`Failed to refresh index: ${(error as Error).message}`);
+            const response = await this.mavenService.solrQuery({
+                q: '*:*',
+                rows: 0
+            });
+            this.cachedTotal = {
+                value: response.response.numFound,
+                expiresAt: now + TOTAL_COUNT_TTL_MS
+            };
+            return response.response.numFound;
+        } catch {
+            // Graceful degradation: if we have a stale value, use it;
+            // otherwise return 0 so the registry endpoints stay up.
+            return this.cachedTotal?.value ?? 0;
         }
     }
 
-    /**
-     * Get package count
-     */
-    async getPackageCount(): Promise<number> {
-        if (!this.db) {
-            await this.initializeDatabase();
-        }
-
-        return new Promise((resolve, reject) => {
-            if (!this.db) {
-                reject(new Error('Database not initialized'));
-                return;
-            }
-
-            this.db.get('SELECT COUNT(*) as count FROM packages', (err, row: any) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(row?.count || 0);
-                }
-            });
-        });
+    private searchStub(query: string, limit: number, offset: number): SearchPackagesResult {
+        const filtered = this.filterStub(query);
+        return {
+            results: filtered.slice(offset, offset + limit),
+            totalCount: filtered.length
+        };
     }
 
-    /**
-     * Close database connection
-     */
-    async close(): Promise<void> {
-        if (!this.db) {
-            return;
+    private filterStub(query: string): SearchResult[] {
+        if (query === '*:*') {
+            return STUB_CATALOG;
         }
-
-        return new Promise((resolve, reject) => {
-            this.db!.close((err) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    this.db = null;
-                    resolve();
-                }
-            });
-        });
+        const lower = query.toLowerCase();
+        // Strip parenthesised "(a:foo OR g:foo)" form back to a plain term.
+        const fieldQuery = lower.match(/[ag]:([^\s)]+)/);
+        const needle = (fieldQuery?.[1] ?? lower).replace(/\*/g, '');
+        if (!needle) {
+            return STUB_CATALOG;
+        }
+        return STUB_CATALOG.filter(
+            (r) =>
+                r.groupId.toLowerCase().includes(needle) ||
+                r.artifactId.toLowerCase().includes(needle)
+        );
     }
 }

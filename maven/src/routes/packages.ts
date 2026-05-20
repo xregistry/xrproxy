@@ -4,7 +4,7 @@
  */
 
 import { Request, Response, Router } from 'express';
-import { getBaseUrl, PAGINATION } from '../config/constants';
+import { getBaseUrl, MAX_SOLR_ROWS, PAGINATION } from '../config/constants';
 import { asyncHandler } from '../middleware/xregistry-error-handler';
 import { PackageService } from '../services/package-service';
 import { SearchService } from '../services/search-service';
@@ -21,19 +21,6 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
     const router = Router();
     const { packageService, searchService } = options;
 
-    // Helper to match filter
-    const matchesFilter = (value: string, filterPattern: string): boolean => {
-        if (filterPattern.includes('*')) {
-            // Wildcard matching
-            const pattern = filterPattern.replace(/\*/g, '.*');
-            const regex = new RegExp(`^${pattern}$`, 'i');
-            return regex.test(value);
-        } else {
-            // Exact match (case insensitive)
-            return value.toLowerCase() === filterPattern.toLowerCase();
-        }
-    };
-
     /**
      * GET /javaregistries/:groupId/packages - List all packages
      */
@@ -48,14 +35,16 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
 
             // Parse pagination parameters
             const limitParam = req.query['limit'];
-            const limit = limitParam ? parseInt(limitParam as string) : PAGINATION.DEFAULT_PAGE_LIMIT;
+            const requestedLimit = limitParam
+                ? parseInt(limitParam as string)
+                : PAGINATION.DEFAULT_PAGE_LIMIT;
             const offset = parseInt(req.query['offset'] as string) || PAGINATION.DEFAULT_OFFSET;
             const query = req.query['q'] as string;
             const filter = req.query['filter'] as string;
             const sort = req.query['sort'] as string;
 
             // Validate limit parameter
-            if (limitParam !== undefined && (isNaN(limit) || limit <= 0)) {
+            if (limitParam !== undefined && (isNaN(requestedLimit) || requestedLimit <= 0)) {
                 res.status(400).json({
                     type: 'about:blank',
                     title: 'Bad Request',
@@ -66,40 +55,39 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
                 return;
             }
 
-            // Build search query based on filter or q parameter
-            let searchQuery = query || '*';
+            // Maven Central's Solr `rows` is capped at 200; clamp here so
+            // pagination metadata reflects what we actually fetch.
+            const limit = Math.min(requestedLimit, MAX_SOLR_ROWS);
 
-            // If filter provided, extract name pattern
+            // Build the search query from either `q` or `filter=name=…`.
+            let searchQuery = query || '*:*';
+
             if (filter) {
-                const filterMatch = filter.match(/name=(.+)/i);
+                const filterMatch = filter.match(/name\s*=\s*'?([^']+)'?/i);
                 if (filterMatch && filterMatch[1]) {
-                    const filterPattern = filterMatch[1];
-                    // Convert wildcard to search query
-                    searchQuery = filterPattern.replace(/\*/g, '');
+                    // Strip surrounding quotes from xRegistry filter syntax.
+                    searchQuery = filterMatch[1].trim();
                     if (!searchQuery) {
-                        searchQuery = '*';
+                        searchQuery = '*:*';
                     }
                 } else {
-                    // If filter doesn't have name constraint, return empty result
+                    // Unsupported filter shape: return empty rather than guess.
                     res.json({});
                     return;
                 }
             }
 
-            // Get packages from search
             const searchResult = await searchService.searchPackages({
                 query: searchQuery,
-                limit: limit * 2, // Get extra to allow for filtering
+                limit,
                 offset
             });
 
-            let packages: any = {};
-            let packageList: any[] = [];
-
-            for (const result of searchResult.results) {
+            const packages: Record<string, any> = {};
+            const packageList = searchResult.results.map((result) => {
                 const packageId = `${result.groupId}:${result.artifactId}`;
                 const packagePath = `${baseUrl}/javaregistries/${groupId}/packages/${packageId}`;
-                const pkg = {
+                return {
                     xid: `/javaregistries/${groupId}/packages/${packageId}`,
                     self: packagePath,
                     name: result.artifactId,
@@ -108,87 +96,85 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
                     createdat: new Date(result.timestamp).toISOString(),
                     modifiedat: new Date(result.timestamp).toISOString(),
                     versionsurl: `${packagePath}/versions`,
-                    versionscount: 1,
+                    versionscount: result.versionCount || 1,
                     groupId: result.groupId,
                     artifactId: result.artifactId,
                     latestVersion: result.latestVersion
                 };
+            });
 
-                packageList.push(pkg);
-            }
-
-            // Apply additional filtering if needed
-            if (filter) {
-                const filterMatch = filter.match(/name=(.+)/i);
-                if (filterMatch && filterMatch[1]) {
-                    const filterPattern = filterMatch[1];
-                    packageList = packageList.filter(pkg =>
-                        matchesFilter(pkg.name, filterPattern) || matchesFilter(pkg.packageid, filterPattern)
-                    );
-                }
-            }
-
-            // Apply sorting
+            // Apply sort to the current page only. Solr's own sort options
+            // aren't reliable across shards for lexicographic order, so we
+            // honour the client's `sort=field=asc|desc` request best-effort
+            // on what we already fetched.
             if (sort) {
                 const sortParts = sort.split('=');
                 if (sortParts.length === 2 && sortParts[0] && sortParts[1]) {
                     const sortField = sortParts[0];
                     const sortOrder = sortParts[1].toLowerCase();
                     packageList.sort((a, b) => {
-                        const aValue = (a as any)[sortField] || a.name;
-                        const bValue = (b as any)[sortField] || b.name;
-                        const comparison = String(aValue).localeCompare(String(bValue), undefined, { sensitivity: 'base' });
+                        const aValue = (a as any)[sortField] ?? a.name;
+                        const bValue = (b as any)[sortField] ?? b.name;
+                        const comparison = String(aValue).localeCompare(
+                            String(bValue),
+                            undefined,
+                            { sensitivity: 'base' }
+                        );
                         return sortOrder === 'desc' ? -comparison : comparison;
+                    });
+                } else if (sortParts.length === 1 && sortParts[0]) {
+                    // Allow `?sort=name` shorthand (ascending).
+                    const sortField = sortParts[0];
+                    packageList.sort((a, b) => {
+                        const aValue = (a as any)[sortField] ?? a.name;
+                        const bValue = (b as any)[sortField] ?? b.name;
+                        return String(aValue).localeCompare(
+                            String(bValue),
+                            undefined,
+                            { sensitivity: 'base' }
+                        );
                     });
                 }
             }
 
-            // Apply pagination after filtering/sorting
-            const totalCount = packageList.length;
-            const paginatedList = packageList.slice(offset, offset + limit);
-
-            // Convert to object format
-            for (const pkg of paginatedList) {
+            for (const pkg of packageList) {
                 packages[pkg.packageid] = pkg;
             }
 
-            // Add pagination Link header
+            // Build pagination Link headers from Solr's authoritative count.
+            const totalCount = searchResult.totalCount;
             if (totalCount > 0) {
                 const linkHeaders: string[] = [];
                 const queryParams = new URLSearchParams(req.query as Record<string, string>);
 
-                // First link
                 if (offset > 0) {
                     queryParams.set('offset', '0');
                     queryParams.set('limit', limit.toString());
-                    linkHeaders.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="first"`);
-                }
+                    linkHeaders.push(
+                        `<${baseUrl}${req.path}?${queryParams.toString()}>; rel="first"`
+                    );
 
-                // Previous link
-                if (offset > 0) {
                     const prevOffset = Math.max(0, offset - limit);
                     queryParams.set('offset', prevOffset.toString());
-                    queryParams.set('limit', limit.toString());
-                    linkHeaders.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="prev"`);
+                    linkHeaders.push(
+                        `<${baseUrl}${req.path}?${queryParams.toString()}>; rel="prev"`
+                    );
                 }
 
-                // Next link
                 if (offset + limit < totalCount) {
-                    const nextOffset = offset + limit;
-                    queryParams.set('offset', nextOffset.toString());
+                    queryParams.set('offset', (offset + limit).toString());
                     queryParams.set('limit', limit.toString());
-                    linkHeaders.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="next"`);
-                }
+                    linkHeaders.push(
+                        `<${baseUrl}${req.path}?${queryParams.toString()}>; rel="next"`
+                    );
 
-                // Last link
-                if (offset + limit < totalCount) {
                     const lastOffset = Math.floor((totalCount - 1) / limit) * limit;
                     queryParams.set('offset', lastOffset.toString());
-                    queryParams.set('limit', limit.toString());
-                    linkHeaders.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="last"`);
+                    linkHeaders.push(
+                        `<${baseUrl}${req.path}?${queryParams.toString()}>; rel="last"`
+                    );
                 }
 
-                // Add count and per-page metadata
                 linkHeaders.push(`count="${totalCount}"`);
                 linkHeaders.push(`per-page="${limit}"`);
 

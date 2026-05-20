@@ -4,8 +4,6 @@
  */
 
 import express, { Express, NextFunction, Request, Response } from 'express';
-import * as fs from 'fs';
-import * as path from 'path';
 import { CACHE_CONFIG, MAVEN_REGISTRY, SERVER_CONFIG } from './config/constants';
 import { corsMiddleware } from './middleware/cors';
 import { createLoggingMiddleware, createSimpleLogger, Logger } from './middleware/logging';
@@ -66,45 +64,19 @@ export class MavenXRegistryServer {
             cacheDir: CACHE_CONFIG.CACHE_DIR
         });
 
-        this.registryService = new RegistryService({ entityState: this.entityState });
+        // SearchService is a thin Solr-Search client. The optional offline
+        // stub catalog is selected via the MAVEN_USE_TEST_INDEX env var.
+        this.searchService = new SearchService({ mavenService: this.mavenService });
+
+        this.registryService = new RegistryService({
+            entityState: this.entityState,
+            searchService: this.searchService
+        });
 
         this.packageService = new PackageService({
             mavenService: this.mavenService,
             entityState: this.entityState
         });
-
-        // Check for database in multiple locations (for tests and production)
-        const searchServiceOptions: any = {
-            mavenService: this.mavenService
-        };
-
-        // Try these paths in order:
-        // 1. Maven root directory (for production)
-        // 2. From dist directory upward (for production builds)
-        // 3. Current working directory (for tests run from different locations)
-        const possiblePaths = [
-            path.join(__dirname, '../../../maven-packages.db'),  // From dist/maven/src to maven root
-            path.join(__dirname, '..', 'maven-packages.db'),     // ../maven-packages.db from dist
-            path.join(process.cwd(), 'maven', 'maven-packages.db'), // For tests from root
-            path.join(process.cwd(), 'maven-packages.db')        // ./maven-packages.db from cwd
-        ];
-
-        let dbFound = false;
-        for (const dbPath of possiblePaths) {
-            if (fs.existsSync(dbPath)) {
-                console.log(`[INFO] Found database at: ${dbPath}`);
-                searchServiceOptions.dbPath = dbPath;
-                dbFound = true;
-                break;
-            }
-        }
-
-        if (!dbFound) {
-            console.log(`[WARN] No database found in any of these paths:`);
-            possiblePaths.forEach(p => console.log(`  - ${p}`));
-        }
-
-        this.searchService = new SearchService(searchServiceOptions);
 
         // Setup middleware and routes
         this.setupMiddleware();
@@ -227,18 +199,15 @@ export class MavenXRegistryServer {
      */
     async start(): Promise<void> {
         try {
-            // Initialize search database
-            this.logger.info('Initializing search database...');
-            await this.searchService.initializeDatabase();
-            this.logger.info('Search database initialized');
-
-            // Start HTTP server
+            // Start HTTP server. SearchService is now Solr-direct, no DB
+            // initialization needed before accepting requests.
             return new Promise((resolve, reject) => {
                 this.server = this.app.listen(this.options.port, this.options.host, () => {
                     this.logger.info(`Maven xRegistry server started`, {
                         host: this.options.host,
                         port: this.options.port,
-                        url: `http://${this.options.host}:${this.options.port}`
+                        url: `http://${this.options.host}:${this.options.port}`,
+                        mode: this.searchService.isUsingTestFixture() ? 'stub' : 'solr'
                     });
                     resolve();
                 });
@@ -271,18 +240,8 @@ export class MavenXRegistryServer {
                     reject(err);
                     return;
                 }
-
-                // Close search service database
-                try {
-                    await this.searchService.close();
-                    this.logger.info('Maven xRegistry server stopped');
-                    resolve();
-                } catch (closeError) {
-                    this.logger.error('Error closing search service', {
-                        error: (closeError as Error).message
-                    });
-                    reject(closeError);
-                }
+                this.logger.info('Maven xRegistry server stopped');
+                resolve();
             });
         });
     }

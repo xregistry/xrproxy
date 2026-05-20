@@ -83,6 +83,22 @@ export class MavenService {
     }
 
     /**
+     * Execute an arbitrary Solr query against Maven Central's search endpoint
+     * and return the raw response. Cached for the configured TTL.
+     */
+    async solrQuery(params: Record<string, string | number>): Promise<MavenSearchResponse> {
+        const search = new URLSearchParams();
+        for (const [k, v] of Object.entries(params)) {
+            search.set(k, String(v));
+        }
+        if (!search.has('wt')) {
+            search.set('wt', 'json');
+        }
+        const url = `${this.apiBaseUrl}?${search.toString()}`;
+        return this.cachedGet<MavenSearchResponse>(url);
+    }
+
+    /**
      * Search by coordinates
      */
     async searchByCoordinates(groupId: string, artifactId: string): Promise<MavenSearchResponse> {
