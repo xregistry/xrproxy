@@ -17,15 +17,8 @@ maven/
 │   ├── services/            # Business logic (Maven, Registry, Package, Search)
 │   ├── types/               # TypeScript type definitions
 │   └── server.ts            # Main server entry point
-├── index/                   # Index building utilities (legacy)
-│   ├── build-index-sqlite.js  # Docker-based comprehensive indexing
-│   ├── build-index.js         # Legacy flat-file indexing
-│   ├── package-search.js      # SQLite search interface
-│   └── README.md              # Index utilities documentation
 ├── dist/                    # Compiled JavaScript output
-├── cache/                   # HTTP response cache
-├── maven-index-cache/       # Maven Central index files (if using Docker indexing)
-└── maven-packages.db        # SQLite package search database
+└── cache/                   # HTTP response cache (Solr + POM responses)
 
 ```
 
@@ -99,18 +92,29 @@ Example: `org.junit.jupiter:junit-jupiter-api`
 
 ## Search Implementation
 
-The server uses a **simplified SQLite-based search** that populates on-demand from Maven Central Search API.
+The server is a thin proxy in front of Maven Central's Solr Search API at
+`https://search.maven.org/solrsearch/select`.
 
-### Current Approach (Simple)
-- No Docker dependency
-- Fast startup
-- Indexes packages as they're searched
-- Limited to ~1000 packages initially
+- **No local index.** Maven Central already hosts the catalog (~660k
+  `groupId:artifactId` pairs); we have no reason to re-host it.
+- **Per-request cost** is one Solr round-trip (≈200–400 ms typical,
+  ≈1.5 s at deep pagination). The 1-hour file cache in `MavenService`
+  collapses repeated queries to ~10 ms.
+- **`packagescount`** is `numFound` from `q=*:*&rows=0`, cached for an
+  hour.
+- **Solr's `rows` parameter is hard-capped at 200** by Maven Central
+  (anything higher silently falls back to the default 20). Listings
+  clamp to 200 per request.
+- **No SQLite dependency.** The legacy `sqlite3` / `maven-packages.db`
+  combination was removed; it shipped a 7-row hand-seeded fixture that
+  masqueraded as the catalog.
 
-### Comprehensive Indexing (Legacy)
-For production deployments requiring full package enumeration, see `index/README.md` for Docker-based comprehensive indexing utilities.
+### Stub mode for tests
 
-**Trade-off:** Current implementation prioritizes simplicity over completeness. For full Maven Central coverage, consider integrating the comprehensive indexing approach documented in the `index/` folder.
+Set `MAVEN_USE_TEST_INDEX=true` to switch `SearchService` to an
+in-memory 10-row fixture (`src/services/stub-catalog.ts`). The full
+route surface stays the same, but no network calls are made. This is
+what `test/maven/stub-mode.test.js` uses.
 
 ## Configuration
 
@@ -155,11 +159,11 @@ Package and version operations:
 - Get version details with POM data
 
 ### SearchService
-SQLite-based package search:
-- Initialize database and schema
-- Search packages with FTS
-- Upsert packages from search results
-- Pagination and filtering
+Thin Maven Central Solr-API client:
+- Translates xRegistry-style queries (`?q=foo`, `?filter=name=foo*`)
+  into Solr queries (`q=foo`, `q=(a:foo* OR g:foo*)`).
+- Caches `numFound` for `packagescount` (1h TTL).
+- In-memory stub mode for tests via `MAVEN_USE_TEST_INDEX=true`.
 
 ## Maven Central Integration
 
@@ -296,9 +300,9 @@ src/
 - Inspect `maven-service.ts` HTTP agent configuration
 
 ### Search not returning results
-- Check SQLite database exists: `maven-packages.db`
-- Verify database permissions
-- Try rebuilding: `rm maven-packages.db && npm start`
+- Verify network reachability to `search.maven.org`
+- For tests, set `MAVEN_USE_TEST_INDEX=true` to use the in-memory stub
+- Clear the response cache: `rm -rf cache/`
 
 ### Cache issues
 - Clear cache: `rm -rf cache/`
@@ -317,17 +321,15 @@ src/
 - Cache hit rate: ~70-80% for repeated queries
 
 **Database:**
-- SQLite queries: < 10ms
-- Search with FTS: < 50ms
-- Initial database creation: < 1s
+- Solr `numFound` calls: ~130 ms (cached 1h)
+- File-cached responses: < 10 ms
 
 ## Future Enhancements
 
 ### High Priority
-1. Integrate comprehensive Docker-based indexing (see `index/README.md`)
-2. Add proper test suite (Jest)
-3. Implement rate limiting
-4. Add metrics/observability
+1. Add proper test suite (Jest)
+2. Implement client-side rate limiting toward search.maven.org
+3. Add metrics/observability
 
 ### Medium Priority
 1. Support for Maven snapshots
@@ -356,7 +358,4 @@ See main repository LICENSE file.
 
 ## See Also
 
-- `index/README.md` - Comprehensive indexing utilities
 - `../XREGISTRY_CONFORMANCE_COMPARISON.md` - Compliance details
-- `../tmp/MAVEN-TEST-RESULTS.md` - Endpoint test results
-- `../tmp/MAVEN-INDEX-INTEGRATION.md` - Migration notes
