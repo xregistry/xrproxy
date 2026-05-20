@@ -197,11 +197,15 @@ export function createViewerStaticMiddleware(options: ViewerStaticOptions): expr
             // `path.extname` flags any URL segment containing a dot as a "file" — but
             // resource IDs like `Newtonsoft.Json` legitimately contain dots and need
             // the SPA fallback, not a static-file lookup. Only treat the request as a
-            // static asset when the extension matches a known asset suffix.
+            // static asset when the extension matches a known binary/code asset
+            // suffix that Angular's build emits. `.json` / `.html` / `.xml` are
+            // deliberately omitted because resource IDs commonly end that way; the
+            // one well-known JSON file the viewer requests (`/viewer/config.json`)
+            // is intercepted earlier in this middleware.
             const STATIC_ASSET_EXTS = new Set([
-                '.js', '.css', '.html', '.svg', '.ico', '.png', '.jpg', '.jpeg',
-                '.gif', '.webp', '.woff', '.woff2', '.ttf', '.eot', '.map',
-                '.json', '.txt', '.xml', '.wasm'
+                '.js', '.mjs', '.css', '.svg', '.ico', '.png', '.jpg', '.jpeg',
+                '.gif', '.webp', '.avif', '.woff', '.woff2', '.ttf', '.otf',
+                '.eot', '.map', '.wasm', '.webmanifest'
             ]);
             const ext = path.extname(req.url).toLowerCase();
             if (options.indexFallback && (!ext || !STATIC_ASSET_EXTS.has(ext))) {
