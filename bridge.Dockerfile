@@ -1,5 +1,5 @@
   # Use official Node.js 23 Alpine image
-FROM node:25-alpine AS builder
+FROM node:26-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -21,7 +21,7 @@ WORKDIR /app/bridge
 RUN npm run build
 
 # Production stage
-FROM node:25-alpine AS production
+FROM node:26-alpine AS production
 
 # Install diagnostic tools for troubleshooting and bash for restart script
 RUN apk add --no-cache \
