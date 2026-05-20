@@ -245,6 +245,41 @@ export class XRegistryServer {
             }
         });
 
+        // Specific server /meta — Resource meta sub-entity per core spec
+        // §"Design: JSON Serialization". The previous implementation
+        // advertised neither metaurl nor an actual /meta route, so any
+        // client that walked metaurl would have hit the bridge's 404.
+        this.app.get('/mcpproviders/:providerId/servers/:serverId/meta', async (req, res) => {
+            try {
+                const { providerId, serverId } = req.params;
+                const server = await this.getServerWithVersions(req, providerId, serverId, false);
+                if (!server) {
+                    res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Server not found' });
+                    return;
+                }
+
+                const baseUrl = getBaseUrl(req);
+                const resourcePath = `/mcpproviders/${providerId}/servers/${serverId}`;
+                const metaPath = `${resourcePath}/meta`;
+                const defaultVersionId = (server as any).versionid;
+
+                res.json({
+                    serverid: serverId,
+                    xid: metaPath,
+                    self: `${baseUrl}${metaPath}`,
+                    epoch: 1,
+                    createdat: (server as any).createdat || new Date().toISOString(),
+                    modifiedat: (server as any).modifiedat || new Date().toISOString(),
+                    readonly: true,
+                    defaultversionid: defaultVersionId,
+                    defaultversionurl: `${baseUrl}${resourcePath}/versions/${defaultVersionId}`,
+                    defaultversionsticky: false
+                });
+            } catch (error) {
+                this.handleError(res, error);
+            }
+        });
+
         // Specific server version
         this.app.get('/mcpproviders/:providerId/servers/:serverId/versions/:versionId', async (req, res) => {
             try {
@@ -643,7 +678,8 @@ export class XRegistryServer {
             const result: any = {
                 ...serverMeta,
                 versionsurl: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions`,
-                versionscount: matchingServers.length
+                versionscount: matchingServers.length,
+                metaurl: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/meta`
             };
 
             if (inlineVersions) {

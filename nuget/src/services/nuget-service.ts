@@ -427,18 +427,28 @@ export class NuGetService {
     /**
      * Convert NuGet catalog entry to xRegistry VersionMetadata
      */
-    convertToVersionMetadata(entry: NuGetCatalogEntry): VersionMetadata {
+    convertToVersionMetadata(entry: NuGetCatalogEntry, baseUrl?: string): VersionMetadata {
         const dependencies = this.extractDependencies(entry.dependencyGroups || []);
         const versionPath = `/dotnetregistries/nuget.org/packages/${entry.id}/versions/${entry.version}`;
+        // `self` MUST point at this xRegistry server's own URL, not at the
+        // upstream NuGet registration document. Per core spec §"`self`
+        // Attribute" the API view requires an absolute URL to the entity
+        // here. baseUrl is propagated from the route handler; we fall back
+        // to a relative URL when called outside a request context so the
+        // attribute is at least pointing at the right path.
+        const selfUrl = baseUrl ? `${baseUrl}${versionPath}` : versionPath;
 
         const metadata: VersionMetadata = {
             versionid: entry.version,
             packageid: entry.id,
             isdefault: false,  // Will be set by caller if this is the latest version
-            ancestor: '',      // Will be set by caller if version history is known
+            // Per core spec §"`ancestor` Attribute", root version's ancestor
+            // is its own versionid. Caller overrides for non-root versions
+            // once the chronological lineage is known.
+            ancestor: entry.version,
             contenttype: 'application/zip',  // NuGet packages are .nupkg files (ZIP format)
             xid: versionPath,
-            self: `https://api.nuget.org/v3/registration5-semver1/${entry.id.toLowerCase()}/${entry.version.toLowerCase()}.json`,
+            self: selfUrl,
             name: entry.title || entry.id,
             description: entry.description || entry.summary || '',
             epoch: this.entityState.getEpoch(versionPath),
@@ -555,19 +565,40 @@ export class NuGetService {
     /**
      * Get specific version metadata
      */
-    async getVersionMetadata(packageName: string, version: string): Promise<VersionMetadata | null> {
+    async getVersionMetadata(packageName: string, version: string, baseUrl?: string): Promise<VersionMetadata | null> {
         try {
             const entries = await this.fetchNuGetPackageRegistration(packageName);
-            const entry = entries.find((e: NuGetCatalogEntry) => e.version === version);
-
-            if (!entry) {
+            const sorted = this.sortEntriesByPublishTime(entries);
+            const idx = sorted.findIndex((e: NuGetCatalogEntry) => e.version === version);
+            if (idx < 0) {
                 return null;
             }
 
-            return this.convertToVersionMetadata(entry);
+            const entry = sorted[idx]!;
+            const metadata = this.convertToVersionMetadata(entry, baseUrl);
+
+            // Per core spec §"`ancestor` Attribute" the previous published
+            // version is the ancestor; root version's ancestor is itself.
+            if (idx > 0) {
+                metadata['ancestor'] = sorted[idx - 1]!.version;
+            }
+            return metadata;
         } catch (error) {
             console.error(`Failed to fetch version metadata for ${packageName}@${version}:`, error);
             return null;
         }
+    }
+
+    /**
+     * Sort catalog entries by their `published` timestamp ascending. The
+     * NuGet registration index orders pages by version range, not by
+     * publish time, so we have to do it ourselves to compute lineage.
+     */
+    private sortEntriesByPublishTime(entries: NuGetCatalogEntry[]): NuGetCatalogEntry[] {
+        return [...entries].sort((a, b) => {
+            const ta = a.published ? Date.parse(a.published) : 0;
+            const tb = b.published ? Date.parse(b.published) : 0;
+            return ta - tb;
+        });
     }
 }

@@ -203,7 +203,8 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
     );
 
     /**
-     * GET /javaregistries/:groupId/packages/:packageId/meta - Get package metadata
+     * GET /javaregistries/:groupId/packages/:packageId/meta -
+     * Resource meta sub-entity per core spec §"Design: JSON Serialization".
      */
     router.get(
         '/javaregistries/:groupId/packages/:packageId/meta',
@@ -215,14 +216,19 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
             const baseUrl = getBaseUrl(req);
 
             const pkg = await packageService.getPackage(groupId, packageId, baseUrl);
+            const metaPath = `/javaregistries/${groupId}/packages/${packageId}/meta`;
 
-            // Return minimal metadata
             res.json({
-                xid: pkg.xid,
-                self: pkg.self,
+                packageid: packageId,
+                xid: metaPath,
+                self: `${baseUrl}${metaPath}`,
                 epoch: pkg.epoch,
                 createdat: pkg.createdat,
-                modifiedat: pkg.modifiedat
+                modifiedat: pkg.modifiedat,
+                readonly: true,
+                defaultversionid: (pkg as any).versionid || (pkg as any).latestVersion,
+                defaultversionurl: `${baseUrl}/javaregistries/${groupId}/packages/${packageId}/versions/${(pkg as any).versionid || (pkg as any).latestVersion}`,
+                defaultversionsticky: false
             });
         })
     );
@@ -273,31 +279,12 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
         })
     );
 
-    /**
-     * GET /javaregistries/:groupId/packages/:packageId/versions/:version/meta - Get version metadata
-     */
-    router.get(
-        '/javaregistries/:groupId/packages/:packageId/versions/:version/meta',
-        asyncHandler(async (req: Request, res: Response) => {
-            const { groupId, packageId, version } = req.params;
-            if (!groupId || !packageId || !version) {
-                throw new Error('groupId, packageId, and version are required');
-            }
-            const baseUrl = getBaseUrl(req);
-
-            const versionData = await packageService.getVersion(groupId, packageId, version, baseUrl);
-
-            // Return minimal metadata
-            res.json({
-                xid: versionData.xid,
-                self: versionData.self,
-                versionid: versionData.versionid,
-                epoch: versionData.epoch,
-                createdat: versionData.createdat,
-                modifiedat: versionData.modifiedat
-            });
-        })
-    );
+    // Note: /versions/:version/meta is not in xRegistry core spec.
+    // Per §"`xid` Attribute", `xid` paths terminate with either /meta
+    // (Resource meta sub-entity) or /versions/<VID>, not both. The
+    // /versions/:v endpoint already returns the Version's metadata view
+    // (this resource type sets hasdocument:false, so there is no separate
+    // $details suffix).
 
     return router;
 }
