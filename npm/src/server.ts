@@ -21,6 +21,22 @@ import { normalizePackageId } from './utils/package-utils';
 // @ts-ignore - JavaScript module without TypeScript declarations
 import { FilterOptimizer } from '../../shared/filter/index.js';
 
+/**
+ * Strip a matched pair of surrounding single or double quotes from an
+ * xRegistry filter value. Per core spec §"Filter Flag" the value
+ * following `=` MAY be quoted; the route layer was leaking the quote
+ * characters into the search term, so e.g. `filter=name='react'`
+ * searched for the literal string `'react'` and returned zero hits.
+ */
+function stripFilterQuotes(value: string): string {
+    if (value.length >= 2 &&
+        ((value.startsWith("'") && value.endsWith("'")) ||
+         (value.startsWith('"') && value.endsWith('"')))) {
+        return value.slice(1, -1);
+    }
+    return value;
+}
+
 // Simple console logger
 class SimpleLogger {
     info(message: string, data?: any) {
@@ -333,7 +349,11 @@ export class XRegistryServer {
                     createdat: this.entityState.getCreatedAt(groupPath),
                     modifiedat: this.entityState.getModifiedAt(groupPath),
                     packagesurl: `${baseUrl}${groupPath}/packages`,
-                    packagescount: 2000000 // Approximate count
+                    // Per core spec §"Registry Collections" `{plural}count`
+                    // is the actual size of the collection. Use the package-
+                    // names cache count once loaded; fall back to 0 while
+                    // it's still warming so we don't lie with a constant.
+                    packagescount: this.packageNamesCache.length
                 }
             };
             res.json(noderegistries);
@@ -358,7 +378,7 @@ export class XRegistryServer {
                 createdat: this.entityState.getCreatedAt(groupPath),
                 modifiedat: this.entityState.getModifiedAt(groupPath),
                 packagesurl: `${baseUrl}${groupPath}/packages`,
-                packagescount: 2000000 // Approximate count
+                packagescount: this.packageNamesCache.length
             };
             res.json(registry);
         });
@@ -1039,12 +1059,12 @@ export class XRegistryServer {
             if (part.includes('!=')) {
                 const [field, value] = part.split('!=');
                 if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '!=', value: value.trim() });
+                    expressions.push({ field: field.trim(), operator: '!=', value: stripFilterQuotes(value.trim()) });
                 }
             } else if (part.includes('=')) {
                 const [field, value] = part.split('=');
                 if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '=', value: value.trim() });
+                    expressions.push({ field: field.trim(), operator: '=', value: stripFilterQuotes(value.trim()) });
                 }
             }
         }
