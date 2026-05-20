@@ -218,9 +218,9 @@ describe("MCP Docker Integration Tests", function () {
       const response = await loggedAxiosGet(`${baseUrl}/model`);
 
       expect(response.status).to.equal(200);
-      expect(response.data).to.have.property("model");
-      expect(response.data.model).to.have.property("groups");
-      expect(response.data.model.groups).to.have.property("mcpproviders");
+      // Per xRegistry core spec, /model returns the model document directly.
+      expect(response.data).to.have.property("groups");
+      expect(response.data.groups).to.have.property("mcpproviders");
     });
   });
 

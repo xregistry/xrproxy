@@ -31,7 +31,7 @@ export interface ServerMetadata {
     isdefault: boolean;
     
     // MCP-specific attributes from server.json schema
-    $schema?: string;
+    schemaurl?: string;
     version?: string;
     websiteUrl?: string;
     icons?: any[];

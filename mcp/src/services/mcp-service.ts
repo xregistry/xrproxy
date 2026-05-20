@@ -377,7 +377,7 @@ export class MCPService {
             createdat: publishedAt,
             modifiedat: updatedAt,
             isdefault: isLatest,
-            $schema: server.$schema,
+            schemaurl: server.$schema,
             version: server.version,
             websiteUrl: server.websiteUrl,
             icons: server.icons,
