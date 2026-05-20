@@ -569,7 +569,7 @@ export class XRegistryServer {
                 const baseUrl = getBaseUrl(req);
                 const normalizedPackageName = normalizePackageId(packageName);
                 const packagePath = `/noderegistries/${registryId}/packages/${packageName}`;
-                const defaultVersion = metadata['dist-tags']?.latest || Object.keys(metadata.versions || {})[0] || '0.0.0';
+                const defaultVersion = metadata.distTags?.['latest'] || Object.keys(metadata.versions || {})[0] || '0.0.0';
 
                 // Count total versions
                 const versionsCount = Object.keys(metadata.versions || {}).length;
@@ -632,7 +632,7 @@ export class XRegistryServer {
                 const baseUrl = getBaseUrl(req);
                 const resourcePath = `/noderegistries/${registryId}/packages/${packageName}`;
                 const metaPath = `${resourcePath}/meta`;
-                const defaultVersion = metadata['dist-tags']?.latest || Object.keys(metadata.versions || {})[0] || '0.0.0';
+                const defaultVersion = metadata.distTags?.['latest'] || Object.keys(metadata.versions || {})[0] || '0.0.0';
 
                 const metaInfo = {
                     packageid: normalizePackageId(packageName),
@@ -685,7 +685,7 @@ export class XRegistryServer {
 
                 // Get full package metadata to find default version
                 const packageMetadata = await this.npmService.getPackageMetadata(packageName);
-                const defaultVersion = packageMetadata?.['dist-tags']?.latest;
+                const defaultVersion = packageMetadata?.distTags?.['latest'];
                 const isDefaultVersion = version === defaultVersion;
 
                 // Compute the version's ancestor: the chronologically
@@ -751,6 +751,7 @@ export class XRegistryServer {
 
                 const baseUrl = getBaseUrl(req);
                 const versionsObj: any = {};
+                const defaultVersion = metadata.distTags?.['latest'];
 
                 // Get version keys and limit them
                 let versionKeys = Object.keys(metadata.versions).slice(0, limit);
@@ -770,10 +771,13 @@ export class XRegistryServer {
                     const versionData = metadata.versions ? (metadata.versions as any)[versionId] : null;
                     versionsObj[versionId] = {
                         versionid: versionId,
+                        packageid: normalizePackageId(packageName),
                         xid: `/noderegistries/npmjs.org/packages/${packageName}/versions/${versionId}`,
                         self: `${baseUrl}/noderegistries/npmjs.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(versionId)}`,
                         name: versionId,
                         epoch: 1,
+                        isdefault: defaultVersion ? versionId === defaultVersion : false,
+                        ancestor: this.computeAncestor(metadata, versionId),
                         createdat: (metadata.time && metadata.time[versionId]) ? metadata.time[versionId] : new Date().toISOString(),
                         modifiedat: (metadata.time && metadata.time[versionId]) ? metadata.time[versionId] : new Date().toISOString(),
                         description: (versionData && versionData['description']) ? versionData['description'] : (metadata['description'] || ''),
@@ -921,7 +925,7 @@ export class XRegistryServer {
             }
 
             // Extract metadata for filtering
-            const latestVersion = packageData['dist-tags']?.latest ||
+            const latestVersion = packageData.distTags?.['latest'] ||
                 Object.keys(packageData.versions || {})[0];
             const versionData: any = packageData.versions?.[latestVersion] || {};
 

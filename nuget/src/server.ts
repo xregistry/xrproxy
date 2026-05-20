@@ -455,7 +455,7 @@ export class XRegistryServer {
                 // Get versions information
                 const versions = metadata.versions || {};
                 const versionsList = Object.keys(versions);
-                const latestVersion = metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
+                const latestVersion = metadata.distTags?.['latest'] || metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
 
                 const packageInfo = {
                     name: packageName,
@@ -470,17 +470,17 @@ export class XRegistryServer {
                     // per core spec, not at the upstream registration index.
                     metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
                     epoch: this.entityState.getEpoch(resourcePath),
-                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(resourcePath),
-                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(resourcePath),
+                    createdat: metadata.time?.[latestVersion] || metadata.time?.['created'] || this.entityState.getCreatedAt(resourcePath),
+                    modifiedat: metadata.time?.[latestVersion] || metadata.time?.['modified'] || this.entityState.getModifiedAt(resourcePath),
                     description: metadata['description'] || '',
                     homepage: metadata.homepage || '',
                     repository: metadata.repository || {},
                     keywords: metadata.keywords || [],
                     license: metadata.license || '',
                     author: metadata.author || {},
-                    maintainers: metadata.maintainers || [],
-                    'dist-tags': metadata['dist-tags'] || {},
-                    versions: metadata.versions || {}
+                    maintainers: metadata.maintainers || []
+                    // versions intentionally not inlined; clients must request
+                    // ?inline=versions or fetch the /versions collection.
                 };
 
                 res.json(packageInfo);
@@ -517,7 +517,7 @@ export class XRegistryServer {
 
                 const versions = metadata.versions || {};
                 const versionsList = Object.keys(versions);
-                const latestVersion = metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
+                const latestVersion = metadata.distTags?.['latest'] || metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
 
                 res.json({
                     packageid: packageName,
@@ -534,6 +534,44 @@ export class XRegistryServer {
             } catch (error) {
                 this.logger.error('Failed to retrieve package meta', { error });
                 res.status(500).json({ error: 'Failed to retrieve package metadata' });
+            }
+        });
+
+        // GET /dotnetregistries/:registryId/packages/:packageName/versions —
+        // Versions collection per core spec §"Registry Collections":
+        // flat map keyed by versionid. Earlier the route was absent and
+        // viewers hit a 404.
+        this.app.get('/dotnetregistries/:registryId/packages/:packageName/versions', async (req, res) => {
+            try {
+                const registryId = req.params['registryId'];
+                const packageName = req.params['packageName'];
+
+                if (registryId !== 'nuget.org') {
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
+                    return;
+                }
+
+                const metadata = await this.NuGetService.getPackageMetadata(packageName);
+                if (!metadata || !metadata.versions) {
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Package not found`, req.originalUrl, `No package with that id`);
+                    return;
+                }
+
+                const baseUrl = getBaseUrl(req);
+                const defaultVersion = metadata.distTags?.['latest'];
+                const out: Record<string, any> = {};
+                for (const [vid, v] of Object.entries(metadata.versions)) {
+                    out[vid] = {
+                        ...(v as any),
+                        self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(vid)}`,
+                        isdefault: vid === defaultVersion
+                    };
+                }
+
+                res.json(out);
+            } catch (error) {
+                this.logger.error('Failed to retrieve versions', { error });
+                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve versions`, req.originalUrl);
             }
         });
 
@@ -556,10 +594,17 @@ export class XRegistryServer {
                     return;
                 }
 
+                // Resolve default version so we can set isdefault correctly
+                // on individual version reads (previously hardcoded false in
+                // convertToVersionMetadata).
+                const pkgMeta = await this.NuGetService.getPackageMetadata(packageName);
+                const defaultVersion = pkgMeta?.distTags?.['latest'];
+
                 const versionInfo = {
                     ...versionMetadata,
                     xid: `/dotnetregistries/nuget.org/packages/${packageName}/versions/${versionId}`,
-                    self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(versionId)}`
+                    self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(versionId)}`,
+                    isdefault: defaultVersion ? versionId === defaultVersion : false
                 };
 
                 res.json(versionInfo);

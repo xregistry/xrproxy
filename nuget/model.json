@@ -8,6 +8,7 @@
         "packages": {
           "singular": "package",
           "description": "NuGet packages",
+          "hasdocument": false,
           "attributes": {
             "name": {
               "type": "string",
