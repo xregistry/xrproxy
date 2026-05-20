@@ -20,6 +20,44 @@ import { NuGetService } from './services/nuget-service';
 // @ts-ignore - JavaScript module without TypeScript declarations
 import { FilterOptimizer } from '../../shared/filter/index.js';
 
+/**
+ * Strip a matched pair of surrounding single or double quotes from an
+ * xRegistry filter value. Per core spec §"Filter Flag" the value
+ * following `=` MAY be quoted; the route layer was leaking the quote
+ * characters into the search term.
+ */
+function stripFilterQuotes(value: string): string {
+    if (value.length >= 2 &&
+        ((value.startsWith("'") && value.endsWith("'")) ||
+         (value.startsWith('"') && value.endsWith('"')))) {
+        return value.slice(1, -1);
+    }
+    return value;
+}
+
+/**
+ * Emit an RFC 9457 / xRegistry-style problem-details response. Per core
+ * spec §"Error Processing" the body is a JSON object with `type`, `title`,
+ * `status`, `instance`, and optional `detail`/`subject`/`args` fields,
+ * served with content-type application/problem+json.
+ */
+function sendProblem(
+    res: express.Response,
+    status: number,
+    typeAnchor: string,
+    title: string,
+    instance: string,
+    detail?: string
+): void {
+    res.status(status).type('application/problem+json').json({
+        type: `https://github.com/xregistry/spec/blob/main/core/${typeAnchor}`,
+        title,
+        status,
+        ...(detail ? { detail } : {}),
+        instance
+    });
+}
+
 // Simple console logger
 class SimpleLogger {
     info(message: string, data?: any) {
@@ -210,7 +248,7 @@ export class XRegistryServer {
                 res.set('xRegistry-Version', '1.0-rc2');
                 res.json(registryInfo);
             } catch (error) {
-                res.status(500).json({ error: 'Failed to retrieve registry information' });
+                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve registry information`, req.originalUrl);
             }
         });
 
@@ -271,7 +309,7 @@ export class XRegistryServer {
                     createdat: this.entityState.getCreatedAt(groupPath),
                     modifiedat: this.entityState.getModifiedAt(groupPath),
                     packagesurl: `${baseUrl}/dotnetregistries/nuget.org/packages`,
-                    packagescount: 2000000 // Approximate count
+                    packagescount: this.packageNamesCache.length
                 }
             };
             res.json(dotnetregistries);
@@ -281,7 +319,7 @@ export class XRegistryServer {
         this.app.get('/dotnetregistries/:registryId', (req, res) => {
             const registryId = req.params['registryId'];
             if (registryId !== 'nuget.org') {
-                res.status(404).json({ error: 'Registry not found' });
+                sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
                 return;
             }
 
@@ -296,7 +334,7 @@ export class XRegistryServer {
                 createdat: this.entityState.getCreatedAt(groupPath),
                 modifiedat: this.entityState.getModifiedAt(groupPath),
                 packagesurl: `${baseUrl}/dotnetregistries/nuget.org/packages`,
-                packagescount: 2000000 // Approximate count
+                packagescount: this.packageNamesCache.length
             };
             res.json(registry);
         });
@@ -306,7 +344,7 @@ export class XRegistryServer {
             try {
                 const registryId = req.params['registryId'];
                 if (registryId !== 'nuget.org') {
-                    res.status(404).json({ error: 'Registry not found' });
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
                     return;
                 }
 
@@ -390,7 +428,7 @@ export class XRegistryServer {
                 res.json(packages);
             } catch (error) {
                 this.logger.error('Failed to retrieve packages', { error });
-                res.status(500).json({ error: 'Failed to retrieve packages' });
+                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve packages`, req.originalUrl);
             }
         });
 
@@ -401,13 +439,13 @@ export class XRegistryServer {
                 const packageName = req.params['packageName'];
 
                 if (registryId !== 'nuget.org') {
-                    res.status(404).json({ error: 'Registry not found' });
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
                     return;
                 }
 
                 const metadata = await this.NuGetService.getPackageMetadata(packageName);
                 if (!metadata) {
-                    res.status(404).json({ error: 'Package not found' });
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Package not found`, req.originalUrl, `No package with that id`);
                     return;
                 }
 
@@ -448,7 +486,7 @@ export class XRegistryServer {
                 res.json(packageInfo);
             } catch (error) {
                 this.logger.error('Failed to retrieve package', { error });
-                res.status(500).json({ error: 'Failed to retrieve package metadata' });
+                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve package metadata`, req.originalUrl);
             }
         });
 
@@ -507,14 +545,14 @@ export class XRegistryServer {
                 const versionId = req.params['versionId'];
 
                 if (registryId !== 'nuget.org') {
-                    res.status(404).json({ error: 'Registry not found' });
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
                     return;
                 }
 
                 const baseUrl = getBaseUrl(req);
                 const versionMetadata = await this.NuGetService.getVersionMetadata(packageName, versionId, baseUrl);
                 if (!versionMetadata) {
-                    res.status(404).json({ error: 'Version not found' });
+                    sendProblem(res, 404, 'spec.md#unknown_id', `Version not found`, req.originalUrl, `No version with that id`);
                     return;
                 }
 
@@ -527,16 +565,20 @@ export class XRegistryServer {
                 res.json(versionInfo);
             } catch (error) {
                 this.logger.error('Failed to retrieve version', { error });
-                res.status(500).json({ error: 'Failed to retrieve version metadata' });
+                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve version metadata`, req.originalUrl);
             }
         });
 
-        // 404 handler
+        // 404 handler — emit RFC 9457 problem-details per core spec
+        // §"Error Processing". Earlier code returned a custom
+        // {error,message,timestamp} blob that didn't follow the spec.
         this.app.use('*', (req, res) => {
-            res.status(404).json({
-                error: 'Not Found',
-                message: `Route ${req.method} ${req.originalUrl} not found`,
-                timestamp: new Date().toISOString()
+            res.status(404).type('application/problem+json').json({
+                type: 'https://github.com/xregistry/spec/blob/main/http.md#api_not_found',
+                title: `The specified path (${req.originalUrl}) is not supported.`,
+                status: 404,
+                detail: `No xRegistry route matches ${req.method} ${req.originalUrl}.`,
+                instance: req.originalUrl
             });
         });
     }
@@ -602,12 +644,12 @@ export class XRegistryServer {
             if (part.includes('!=')) {
                 const [field, value] = part.split('!=');
                 if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '!=', value: value.trim() });
+                    expressions.push({ field: field.trim(), operator: '!=', value: stripFilterQuotes(value.trim()) });
                 }
             } else if (part.includes('=')) {
                 const [field, value] = part.split('=');
                 if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '=', value: value.trim() });
+                    expressions.push({ field: field.trim(), operator: '=', value: stripFilterQuotes(value.trim()) });
                 }
             }
         }

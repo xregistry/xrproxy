@@ -68,10 +68,18 @@ export function createPackageRoutes(
 
             // Apply filtering if provided
             if (filter) {
-                // Parse filter (format: "name=*azure*")
+                // Parse filter (format: "name=*azure*" or "name='azure'").
+                // Per core spec §"Filter Flag" the value may be quoted with
+                // single or double quotes; strip them so the literal value
+                // is what's matched.
                 const filterMatch = filter.match(/name=(.+)/i);
                 if (filterMatch) {
-                    const filterPattern = filterMatch[1];
+                    let filterPattern = filterMatch[1] || '';
+                    if (filterPattern.length >= 2 &&
+                        ((filterPattern.startsWith("'") && filterPattern.endsWith("'")) ||
+                         (filterPattern.startsWith('"') && filterPattern.endsWith('"')))) {
+                        filterPattern = filterPattern.slice(1, -1);
+                    }
                     allPackages = allPackages.filter(pkg => matchesFilter(pkg.name, filterPattern));
                 } else {
                     // If filter doesn't have name constraint, return empty set
