@@ -281,13 +281,17 @@ export class RegistryService {
      * Get capabilities in flat xRegistry 1.0-rc2 format
      */
     private getCapabilitiesObject(): any {
+        // Per core spec §"Design: JSON Serialization". `apis` is the list of
+        // optional endpoints implemented (not a wire-format identifier);
+        // `flags` carries the supported query-parameter feature names;
+        // `mutable` is an array of mutable areas (empty = read-only).
         return {
             apis: ['/capabilities', '/model', '/export'],
-            filter: true,
-            sort: true,
-            doc: true,
-            mutable: false,
+            flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+            formats: ['xRegistry-json/1.0-rc2'],
+            mutable: [],
             pagination: true,
+            specversions: ['1.0-rc2']
         };
     }
 

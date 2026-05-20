@@ -21,10 +21,24 @@ export class ModelService {
     }
 
     /**
-     * Get the consolidated capabilities
+     * Get the consolidated capabilities.
+     *
+     * The bridge's externally-visible capabilities are about the bridge's
+     * own API, not a union of downstream implementation choices. Return a
+     * spec-conformant capabilities object per xRegistry core spec
+     * §"Design: JSON Serialization" rather than the historical shallow
+     * merge of downstream responses (which inherited the wrong
+     * `mutable:bool` and ad-hoc `filter/sort/doc` top-level flags).
      */
     getConsolidatedCapabilities(): ConsolidatedCapabilities {
-        return this.consolidatedCapabilities;
+        return {
+            apis: ['/capabilities', '/model', '/export'],
+            flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+            formats: ['xRegistry-json/1.0-rc2'],
+            mutable: [],
+            pagination: true,
+            specversions: ['1.0-rc2']
+        } as ConsolidatedCapabilities;
     }
 
     /**

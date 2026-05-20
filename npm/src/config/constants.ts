@@ -43,8 +43,8 @@ export function getBaseUrl(req: Request): string {
 
 export const REGISTRY_CONFIG = {
     ID: 'npm-wrapper',
-    SPEC_VERSION: '1.0-rc1',
-    SCHEMA_VERSION: 'xRegistry-json/1.0-rc1',
+    SPEC_VERSION: '1.0-rc2',
+    SCHEMA_VERSION: 'xRegistry-json/1.0-rc2',
 } as const;
 
 export const GROUP_CONFIG = {

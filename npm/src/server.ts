@@ -280,10 +280,17 @@ export class XRegistryServer {
 
         // Capabilities endpoint
         this.app.get('/capabilities', (_req, res) => {
+            // Per core spec §"Design: JSON Serialization", capabilities is an
+            // object with named arrays for `apis`/`flags`/`formats`/`mutable`
+            // and a `specversions` array. The top-level booleans `filter`,
+            // `sort`, `doc` that earlier revisions of this code emitted are
+            // not in the spec; their semantic role is to be entries in
+            // `flags`. `mutable` is an array of mutable areas, not a bool.
             const capabilities = {
                 apis: ['/capabilities', '/model', '/export'],
-                flags: ['inline', 'filter', 'sort', 'epoch', 'noreadonly', 'schema', 'doc'],
-                mutable: false,
+                flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+                formats: ['xRegistry-json/1.0-rc2'],
+                mutable: [],
                 pagination: true,
                 specversions: ['1.0-rc2']
             };
