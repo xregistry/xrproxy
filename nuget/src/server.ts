@@ -216,13 +216,14 @@ export class XRegistryServer {
 
         // Capabilities endpoint
         this.app.get('/capabilities', (_req, res) => {
+            // Per core spec §"Design: JSON Serialization".
             const capabilities = {
                 apis: ['/capabilities', '/model', '/export'],
-                filter: true,
-                sort: true,
-                doc: true,
-                mutable: false,
-                pagination: true
+                flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+                formats: ['xRegistry-json/1.0-rc2'],
+                mutable: [],
+                pagination: true,
+                specversions: ['1.0-rc2']
             };
             res.json(capabilities);
         });

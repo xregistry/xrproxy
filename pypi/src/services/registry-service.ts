@@ -41,16 +41,18 @@ export class RegistryService {
     }
 
     /**
-     * Get capabilities (flat structure per xRegistry spec)
+     * Get capabilities (per xRegistry core spec §"Design: JSON Serialization").
+     * `mutable` is an array of mutable areas, not a boolean. `filter`/`sort`/
+     * `doc` belong inside `flags`, not as top-level booleans.
      */
     getCapabilities(): any {
         return {
             apis: ['/capabilities', '/model', '/export'],
-            filter: true,
-            sort: true,
-            doc: true,
-            mutable: false,
+            flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+            formats: ['xRegistry-json/1.0-rc2'],
+            mutable: [],
             pagination: true,
+            specversions: ['1.0-rc2']
         };
     }
 

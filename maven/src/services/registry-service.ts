@@ -228,13 +228,16 @@ export class RegistryService {
      * Get capabilities
      */
     async getCapabilities(_req: Request, res: Response): Promise<void> {
+        // Per core spec §"Design: JSON Serialization". `mutable` is an array
+        // listing what is mutable (empty for read-only proxies); flag names
+        // belong inside `flags`, not as top-level booleans.
         res.json({
             apis: ['/capabilities', '/model', '/export'],
-            filter: true,
-            sort: true,
-            doc: true,
-            mutable: false,
-            pagination: true
+            flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+            formats: ['xRegistry-json/1.0-rc2'],
+            mutable: [],
+            pagination: true,
+            specversions: ['1.0-rc2']
         });
     }
 

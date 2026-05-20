@@ -145,12 +145,17 @@ export class XRegistryServer {
         // Capabilities endpoint
         this.app.get('/capabilities', (req, res) => {
             try {
+                // Per core spec §"Design: JSON Serialization": `apis` is the
+                // list of optional endpoints we implement (not a wire-format
+                // identifier), `mutable` is an array of mutable areas, and
+                // feature flag names belong inside `flags`.
                 res.json({
-                    specversions: ['1.0-rc2'],
+                    apis: ['/capabilities', '/model', '/export'],
+                    flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+                    formats: ['xRegistry-json/1.0-rc2'],
+                    mutable: [],
                     pagination: true,
-                    mutable: false,
-                    flags: [],
-                    apis: ['xRegistry-json']
+                    specversions: ['1.0-rc2']
                 });
             } catch (error) {
                 this.handleError(res, error);

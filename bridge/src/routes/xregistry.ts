@@ -23,7 +23,7 @@ export function createXRegistryRoutes(
         try {
             // Handle query parameters
             const inline = req.query.inline as string;
-            const specversion = (req.query.specversion as string) || '1.0';
+            const specversion = (req.query.specversion as string) || '1.0-rc2';
 
             // Get the actual base URL from the request (with API path prefix)
             const apiBaseUrl = getApiBaseUrl(req);
@@ -38,10 +38,13 @@ export function createXRegistryRoutes(
             });
 
             // Check if requested specversion is supported
-            if (specversion !== '1.0' && specversion !== '1.0-rc1') {
+            if (specversion !== '1.0-rc2' && specversion !== '1.0-rc1' && specversion !== '1.0') {
                 return res.status(400).json({
-                    error: 'unsupported_specversion',
-                    message: `Specversion '${specversion}' is not supported. Supported versions: 1.0, 1.0-rc1`
+                    type: 'https://github.com/xregistry/spec/blob/main/core/spec.md#bad_flag',
+                    title: `The specified specversion (${specversion}) is not supported.`,
+                    status: 400,
+                    detail: 'Supported versions: 1.0-rc2 (preferred), 1.0-rc1, 1.0',
+                    subject: req.originalUrl
                 });
             }
 
