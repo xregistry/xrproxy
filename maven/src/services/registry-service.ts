@@ -114,37 +114,39 @@ export class RegistryService {
         const groupPath = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
         const packagesCount = await this.getPackagesCount();
 
-        const groups = {
-            [GROUP_CONFIG.TYPE]: {
-                [GROUP_CONFIG.ID]: {
-                    xid: groupPath,
-                    self: `${baseUrl}${groupPath}`,
-                    javaregistryid: GROUP_CONFIG.ID,
-                    name: 'Maven Central',
-                    description: 'Maven Central Repository',
-                    docs: 'https://maven.apache.org/',
-                    epoch: this.entityState.getEpoch(groupPath),
-                    createdat: this.entityState.getCreatedAt(groupPath),
-                    modifiedat: this.entityState.getModifiedAt(groupPath),
-                    [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                    [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
-                }
+        // Per xRegistry core spec §"Registry Collections", GET /{groupType}
+        // returns the collection map keyed directly by <singular>id. The
+        // earlier shape wrapped the map under an outer {javaregistries: ...}
+        // key, which the viewer interprets as a group whose id IS the
+        // plural type name -- causing it to navigate to
+        // /javaregistries/javaregistries/packages instead of
+        // /javaregistries/maven-central/packages.
+        const groups: Record<string, any> = {
+            [GROUP_CONFIG.ID]: {
+                xid: groupPath,
+                self: `${baseUrl}${groupPath}`,
+                javaregistryid: GROUP_CONFIG.ID,
+                name: 'Maven Central',
+                description: 'Maven Central Repository',
+                docs: 'https://maven.apache.org/',
+                epoch: this.entityState.getEpoch(groupPath),
+                createdat: this.entityState.getCreatedAt(groupPath),
+                modifiedat: this.entityState.getModifiedAt(groupPath),
+                [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
+                [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
             }
         };
 
         // Apply pagination if pagesize is set
-        const allGroupKeys = Object.keys(groups[GROUP_CONFIG.TYPE]);
+        const allGroupKeys = Object.keys(groups);
         if (pagesize) {
             const startIndex = (page - 1) * pagesize;
             const endIndex = startIndex + pagesize;
             const paginatedKeys = allGroupKeys.slice(startIndex, endIndex);
 
-            const paginatedGroups: any = {
-                [GROUP_CONFIG.TYPE]: {}
-            };
-
+            const paginatedGroups: Record<string, any> = {};
             paginatedKeys.forEach(key => {
-                paginatedGroups[GROUP_CONFIG.TYPE][key] = (groups[GROUP_CONFIG.TYPE] as any)[key];
+                paginatedGroups[key] = groups[key];
             });
 
             // Add Link header for pagination
