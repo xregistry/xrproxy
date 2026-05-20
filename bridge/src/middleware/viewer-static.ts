@@ -4,6 +4,56 @@ import fs from 'fs';
 import { XRegistryLogger } from '../../../shared/logging/logger';
 import { getApiBaseUrl } from '../config/constants';
 
+/**
+ * Tracking-debris query parameters that should be stripped from inbound
+ * viewer URLs. Outlook in particular concatenates `&SLSync=Y` directly
+ * into the path (producing `/viewer/&SLSync=Y`), breaking SPA routing;
+ * various marketing/analytics products do the same with their own keys.
+ *
+ * The xregistry/viewer submodule has this same logic in its standalone
+ * `server.js` (see xregistry/viewer#18). The composite deployment in
+ * this repo serves the viewer via the bridge's static middleware
+ * instead of the standalone server, so the strip has to live here too.
+ */
+const TRACKING_QUERY_PARAMS = new Set([
+    'slsync',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+    'fbclid', 'gclid', 'msclkid', 'mc_cid', 'mc_eid', 'igshid', 'oly_anon_id',
+    '_hsenc', '_hsmi'
+]);
+
+/**
+ * Strip `&KEY=VALUE` fragments accidentally concatenated into the URL
+ * path and remove known tracking query parameters. Returns the cleaned
+ * URL (path + optional query string) or `null` if nothing needed
+ * cleaning.
+ */
+function cleanViewerUrl(req: express.Request): string | null {
+    const originalPath = req.path;
+    const cleanedPath = originalPath.replace(/&[A-Za-z0-9_.-]+=[^/?#&]*/g, '');
+
+    const cleanedQuery: Record<string, string> = {};
+    let queryMutated = false;
+    for (const [k, v] of Object.entries(req.query || {})) {
+        if (TRACKING_QUERY_PARAMS.has(k.toLowerCase())) {
+            queryMutated = true;
+            continue;
+        }
+        if (typeof v === 'string') {
+            cleanedQuery[k] = v;
+        } else if (Array.isArray(v) && v.every((entry) => typeof entry === 'string')) {
+            cleanedQuery[k] = (v as string[]).join(',');
+        }
+    }
+
+    if (cleanedPath === originalPath && !queryMutated) {
+        return null;
+    }
+
+    const qs = new URLSearchParams(cleanedQuery).toString();
+    return (cleanedPath || '/') + (qs ? `?${qs}` : '');
+}
+
 export interface ViewerStaticOptions {
     enabled: boolean;
     viewerPath?: string;
@@ -82,6 +132,24 @@ export function createViewerStaticMiddleware(options: ViewerStaticOptions): expr
     // Return middleware that handles /viewer/* routes (except API)
     return (req, res, next) => {
         if (req.path.startsWith('/viewer')) {
+            // Strip Outlook Safe Links debris and tracking query params
+            // before any other processing. Mirrors xregistry/viewer#18,
+            // ported into the composite bridge deployment which serves
+            // the viewer SPA directly rather than via the standalone
+            // viewer's express server.
+            if (req.method === 'GET' || req.method === 'HEAD') {
+                const cleanedUrl = cleanViewerUrl(req);
+                if (cleanedUrl !== null) {
+                    if (logger) {
+                        logger.info('Stripped tracking debris from viewer URL', {
+                            originalUrl: req.originalUrl,
+                            cleanedUrl
+                        });
+                    }
+                    return res.redirect(302, cleanedUrl);
+                }
+            }
+
             // Skip static serving for API routes
             if (req.path.startsWith('/viewer/api/')) {
                 return next();
