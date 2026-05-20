@@ -49,6 +49,10 @@ export class XRegistryServer {
     // In-memory cache for grouped servers with TTL
     private cachedGroupedServers: Map<string, MCPServerResponse[]> | null = null;
     private cacheTimestamp: number = 0;
+    // In-flight refresh promise. Used both for de-duplicating concurrent
+    // misses and for stale-while-revalidate so a refresh never blocks the
+    // request that triggered it once we have any cached data.
+    private inflightRefresh: Promise<Map<string, MCPServerResponse[]>> | null = null;
 
     constructor(options: ServerOptions = {}) {
         this.options = {
@@ -282,24 +286,73 @@ export class XRegistryServer {
     }
 
     /**
-     * Get cached grouped servers with TTL
+     * Get cached grouped servers with TTL and stale-while-revalidate.
+     *
+     * - Fresh hit: return the cache immediately.
+     * - Stale hit: return the stale cache immediately and kick off a
+     *   background refresh.
+     * - Cold miss: wait for the first fetch (no choice; clients need
+     *   data).
+     *
+     * Concurrent callers share the same in-flight refresh promise so we
+     * never duplicate work against the upstream registry.
      */
     private async getCachedGroupedServers(): Promise<Map<string, MCPServerResponse[]>> {
         const now = Date.now();
         const ttl = this.options.cacheTtl;
+        const haveCache = this.cachedGroupedServers !== null;
+        const isStale = haveCache && now - this.cacheTimestamp >= ttl;
 
-        // Return cached if still valid
-        if (this.cachedGroupedServers && (now - this.cacheTimestamp) < ttl) {
-            return this.cachedGroupedServers;
+        if (haveCache && !isStale) {
+            return this.cachedGroupedServers!;
         }
 
-        // Fetch and cache
-        this.logger.info('Cache miss or expired, fetching all servers');
-        const serverList = await this.mcpService.getAllServers();
-        this.cachedGroupedServers = this.mcpService.groupServersByProvider(serverList.servers);
-        this.cacheTimestamp = now;
+        if (haveCache && isStale) {
+            // Serve stale, refresh in background.
+            this.refreshGroupedServersInBackground();
+            return this.cachedGroupedServers!;
+        }
 
-        return this.cachedGroupedServers;
+        // Cold miss: must wait. De-duplicate concurrent waiters.
+        return this.refreshGroupedServersInBackground();
+    }
+
+    /**
+     * Run (or reuse) a background refresh of the grouped-servers cache.
+     * Returns the promise so callers can await it on a cold miss.
+     */
+    private refreshGroupedServersInBackground(): Promise<Map<string, MCPServerResponse[]>> {
+        if (this.inflightRefresh) {
+            return this.inflightRefresh;
+        }
+
+        this.logger.info('Refreshing grouped servers cache');
+        const startedAt = Date.now();
+        this.inflightRefresh = (async () => {
+            try {
+                const serverList = await this.mcpService.getAllServers();
+                const grouped = this.mcpService.groupServersByProvider(serverList.servers);
+                this.cachedGroupedServers = grouped;
+                this.cacheTimestamp = Date.now();
+                this.logger.info('Grouped servers cache refreshed', {
+                    providers: grouped.size,
+                    durationMs: Date.now() - startedAt
+                });
+                return grouped;
+            } catch (error) {
+                this.logger.error('Failed to refresh grouped servers cache', {
+                    error: error instanceof Error ? error.message : String(error)
+                });
+                throw error;
+            } finally {
+                this.inflightRefresh = null;
+            }
+        })();
+
+        // Swallow rejection on the background path so unhandled-rejection
+        // logging doesn't fire when no caller is awaiting.
+        this.inflightRefresh.catch(() => undefined);
+        return this.inflightRefresh;
     }
 
     /**
@@ -752,6 +805,14 @@ export class XRegistryServer {
         return new Promise((resolve) => {
             this.server = this.app.listen(this.options.port, this.options.host, () => {
                 this.logger.info(`MCP xRegistry server listening on ${this.options.host}:${this.options.port}`);
+                // Begin warming the catalog cache as soon as the listener
+                // is up. We don't await it: the HTTP server is already
+                // ready to accept /health and other no-catalog routes.
+                // The first /mcpproviders... request that arrives before
+                // the warmup completes will still get a real (blocking)
+                // wait via the shared inflightRefresh promise; after the
+                // warmup completes everything is hot.
+                this.refreshGroupedServersInBackground();
                 resolve();
             });
         });
