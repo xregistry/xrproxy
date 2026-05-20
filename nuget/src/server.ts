@@ -129,12 +129,18 @@ export class XRegistryServer {
             });
         }
 
-        // Initialize FilterOptimizer for two-step filtering
+        // Initialize FilterOptimizer for two-step filtering.
+        // liteMode skips building per-entity Map indices over the ~452k
+        // NuGet package-name catalog; that index costs ~70 MB heap for
+        // negligible benefit since wildcard queries already linear-scan
+        // and direct package lookups go through a different path. See
+        // shared/filter/index.js for details.
         this.filterOptimizer = new FilterOptimizer({
             cacheSize: 2000,
             maxCacheAge: 600000, // 10 minutes
             enableTwoStepFiltering: true,
-            maxMetadataFetches: 100
+            maxMetadataFetches: 100,
+            liteMode: true
         });
 
         // Set metadata fetcher function
@@ -229,15 +235,13 @@ export class XRegistryServer {
 
         // Performance stats endpoint
         this.app.get('/performance/stats', (_req, res) => {
+            const optimizerStats = typeof this.filterOptimizer.getCacheStats === 'function'
+                ? this.filterOptimizer.getCacheStats()
+                : {};
             const stats = {
                 filterOptimizer: {
-                    twoStepFilteringEnabled: this.filterOptimizer.config?.enableTwoStepFiltering !== false,
-                    hasMetadataFetcher: !!this.filterOptimizer.metadataFetcher,
-                    indexedEntities: this.packageNamesCache.length,
-                    nameIndexSize: this.packageNamesCache.length,
-                    maxMetadataFetches: this.filterOptimizer.config?.maxMetadataFetches || 100,
-                    cacheSize: this.filterOptimizer.config?.cacheSize || 2000,
-                    maxCacheAge: this.filterOptimizer.config?.maxCacheAge || 600000
+                    ...optimizerStats,
+                    indexedEntities: optimizerStats.indexedEntities ?? this.packageNamesCache.length
                 },
                 packageCache: {
                     size: this.packageNamesCache.length
