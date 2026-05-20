@@ -588,7 +588,11 @@ export class XRegistryServer {
             }
         });
 
-        // Package /meta endpoint - returns minimal metadata only
+        // Package /meta endpoint — Resource meta sub-entity per core spec
+        // §"Design: JSON Serialization" (the `meta` object). The earlier
+        // implementation returned a stripped copy of the Resource itself,
+        // which omitted the required `defaultversionid`/`defaultversionurl`
+        // and used the Resource's own xid/self rather than the /meta path.
         this.app.get('/noderegistries/:registryId/packages/:packageName/meta', async (req, res) => {
             try {
                 const registryId = req.params['registryId'];
@@ -606,26 +610,21 @@ export class XRegistryServer {
                 }
 
                 const baseUrl = getBaseUrl(req);
-                const packagePath = `/noderegistries/${registryId}/packages/${packageName}`;
+                const resourcePath = `/noderegistries/${registryId}/packages/${packageName}`;
+                const metaPath = `${resourcePath}/meta`;
                 const defaultVersion = metadata['dist-tags']?.latest || Object.keys(metadata.versions || {})[0] || '0.0.0';
-                const versionsCount = Object.keys(metadata.versions || {}).length;
 
-                // Return only Meta entity attributes (no version-specific data)
                 const metaInfo = {
-                    xid: packagePath,
-                    self: `${baseUrl}${packagePath}`,
-                    name: packageName,
                     packageid: normalizePackageId(packageName),
-                    epoch: this.entityState.getEpoch(packagePath),
-                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(packagePath),
-                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(packagePath),
-
-                    // Meta-specific attributes (from xRegistry spec)
-                    versionid: defaultVersion,
-                    isdefault: true,
-                    metaurl: `${baseUrl}${packagePath}/meta`,
-                    versionsurl: `${baseUrl}${packagePath}/versions`,
-                    versionscount: versionsCount
+                    xid: metaPath,
+                    self: `${baseUrl}${metaPath}`,
+                    epoch: this.entityState.getEpoch(metaPath),
+                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(metaPath),
+                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(metaPath),
+                    readonly: true,
+                    defaultversionid: defaultVersion,
+                    defaultversionurl: `${baseUrl}${resourcePath}/versions/${defaultVersion}`,
+                    defaultversionsticky: false
                 };
 
                 res.json(metaInfo);
@@ -636,55 +635,12 @@ export class XRegistryServer {
         });
 
         // Version metadata endpoint (most specific route - must come first)
-        this.app.get('/noderegistries/:registryId/packages/:packageName/versions/:version/meta', async (req, res) => {
-            try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-                const version = req.params['version'];
-
-                if (registryId !== 'npmjs.org') {
-                    res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry ${registryId} does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const versionData = await this.npmService.getVersionMetadata(packageName, version);
-                if (!versionData) {
-                    res.status(404).json(createProblemDetails(404, 'Version not found', `Version ${version} of package ${packageName} does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const versionPath = `/noderegistries/${registryId}/packages/${packageName}/versions/${version}`;
-
-                // Get full package metadata to find default version and ancestor
-                const packageMetadata = await this.npmService.getPackageMetadata(packageName);
-                const defaultVersion = packageMetadata?.['dist-tags']?.latest;
-                const isDefaultVersion = version === defaultVersion;
-
-                // Find ancestor version (previous version in time)
-                const allVersions = Object.keys(packageMetadata?.versions || {});
-                const versionIndex = allVersions.indexOf(version);
-                const ancestor = versionIndex > 0 ? allVersions[versionIndex - 1] : version;
-
-                // Return minimal metadata only
-                const response = {
-                    xid: versionPath,
-                    self: `${baseUrl}${versionPath}`,
-                    versionid: versionData.versionid,
-                    packageid: normalizePackageId(packageName),
-                    epoch: this.entityState.getEpoch(versionPath),
-                    createdat: versionData.createdat || this.entityState.getCreatedAt(versionPath),
-                    modifiedat: versionData.modifiedat || this.entityState.getModifiedAt(versionPath),
-                    isdefault: isDefaultVersion,
-                    ancestor: ancestor
-                };
-
-                res.json(response);
-            } catch (error) {
-                this.logger.error('Failed to retrieve version metadata', { error });
-                res.status(500).json({ error: 'Failed to retrieve version metadata' });
-            }
-        });
+        // Note: /versions/{versionId}/meta is intentionally not implemented.
+        // Per core spec §"`xid` Attribute", `xid` paths terminate with
+        // either `/meta` (resource meta sub-entity) or `/versions/<VID>`
+        // (a Version), not both. The Version endpoint at /versions/:v
+        // already returns its metadata view (this resource type sets
+        // hasdocument:false, so there is no separate $details suffix).
 
         // Individual package version endpoint
         this.app.get('/noderegistries/:registryId/packages/:packageName/versions/:version', async (req, res) => {
@@ -712,10 +668,13 @@ export class XRegistryServer {
                 const defaultVersion = packageMetadata?.['dist-tags']?.latest;
                 const isDefaultVersion = version === defaultVersion;
 
-                // Find ancestor version (previous version in time)
-                const allVersions = Object.keys(packageMetadata?.versions || {});
-                const versionIndex = allVersions.indexOf(version);
-                const ancestor = versionIndex > 0 ? allVersions[versionIndex - 1] : version;
+                // Compute the version's ancestor: the chronologically
+                // previous published version. npm's registry response
+                // exposes per-version publish times under `time`; ordering
+                // there is authoritative (`Object.keys(versions)` order
+                // varies and is unreliable). For the root version the
+                // ancestor is itself per core spec §"`ancestor` Attribute".
+                const ancestor = this.computeAncestor(packageMetadata, version);
 
                 // Build xRegistry-compliant version response
                 const response = {
@@ -980,6 +939,33 @@ export class XRegistryServer {
                 name: packageName
             };
         }
+    }
+
+    /**
+     * Compute the chronologically previous published version for a given
+     * package version. Per xRegistry core spec §"`ancestor` Attribute",
+     * a Version's `ancestor` MUST be the `versionid` of its predecessor
+     * in the lineage; for the root version it MUST be its own `versionid`.
+     *
+     * npm exposes per-version publish timestamps under `metadata.time`
+     * (an object with `created`, `modified`, and one entry per version
+     * string). Sort versions by that timestamp and walk back one step.
+     * Falls back to self when no ancestor can be identified.
+     */
+    private computeAncestor(packageMetadata: any, version: string): string {
+        const time: Record<string, string> = packageMetadata?.time || {};
+        const versions = Object.keys(packageMetadata?.versions || {})
+            .filter((v) => typeof time[v] === 'string')
+            .sort((a, b) => Date.parse(time[a]!) - Date.parse(time[b]!));
+
+        if (versions.length === 0) {
+            return version;
+        }
+        const idx = versions.indexOf(version);
+        if (idx <= 0) {
+            return version; // root version's ancestor is itself
+        }
+        return versions[idx - 1] || version;
     }
 
     /**

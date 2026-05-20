@@ -209,10 +209,13 @@ export class PackageService {
         const resourcePath = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}`;
 
         return {
+            packageid: packageId,
             xid: resourcePath,
             self: basePath,
             name: doc.a,
-            description: doc.a, // Maven search doesn't provide description
+            // Maven Solr default-core does not expose a description field.
+            // Omitting rather than mirroring the artifactId (which is what
+            // the earlier code did and was actively misleading).
             epoch: this.entityState.getEpoch(resourcePath),
             createdat: this.entityState.getCreatedAt(resourcePath),
             modifiedat: this.entityState.getModifiedAt(resourcePath),

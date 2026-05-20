@@ -335,7 +335,7 @@ export class XRegistryServer {
                                     isdefault: true,
                                     versionscount: 1,
                                     versionsurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions`,
-                                    metaurl: `https://api.nuget.org/v3/registration5-semver1/${packageName.toLowerCase()}/index.json`,
+                                    metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
                                     epoch: this.entityState.getEpoch(resourcePath),
                                     createdat: pkg.date || this.entityState.getCreatedAt(resourcePath),
                                     modifiedat: pkg.date || this.entityState.getModifiedAt(resourcePath),
@@ -363,7 +363,7 @@ export class XRegistryServer {
                                     isdefault: true,
                                     versionscount: 1,
                                     versionsurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions`,
-                                    metaurl: `https://api.nuget.org/v3/registration5-semver1/${packageName.toLowerCase()}/index.json`,
+                                    metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
                                     epoch: this.entityState.getEpoch(resourcePath),
                                     createdat: this.entityState.getCreatedAt(resourcePath),
                                     modifiedat: this.entityState.getModifiedAt(resourcePath),
@@ -428,7 +428,9 @@ export class XRegistryServer {
                     isdefault: true,
                     versionscount: versionsList.length,
                     versionsurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions`,
-                    metaurl: `https://api.nuget.org/v3/registration5-semver1/${packageName.toLowerCase()}/index.json`,
+                    // `metaurl` MUST point at this server's own /meta endpoint
+                    // per core spec, not at the upstream registration index.
+                    metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
                     epoch: this.entityState.getEpoch(resourcePath),
                     createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(resourcePath),
                     modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(resourcePath),
@@ -450,6 +452,53 @@ export class XRegistryServer {
             }
         });
 
+        // GET /dotnetregistries/:registryId/packages/:packageName/meta -
+        // Resource meta sub-entity per core spec §"Design: JSON Serialization".
+        // Previously absent: the resource advertised metaurl pointing to
+        // api.nuget.org (off-domain contract leak) and any direct GET against
+        // /meta returned the bridge's 404.
+        this.app.get('/dotnetregistries/:registryId/packages/:packageName/meta', async (req, res) => {
+            try {
+                const registryId = req.params['registryId'];
+                const packageName = req.params['packageName'];
+
+                if (registryId !== 'nuget.org') {
+                    res.status(404).json({ error: 'Registry not found' });
+                    return;
+                }
+
+                const metadata = await this.NuGetService.getPackageMetadata(packageName);
+                if (!metadata) {
+                    res.status(404).json({ error: 'Package not found' });
+                    return;
+                }
+
+                const baseUrl = getBaseUrl(req);
+                const resourcePath = `/dotnetregistries/nuget.org/packages/${packageName}`;
+                const metaPath = `${resourcePath}/meta`;
+
+                const versions = metadata.versions || {};
+                const versionsList = Object.keys(versions);
+                const latestVersion = metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
+
+                res.json({
+                    packageid: packageName,
+                    xid: metaPath,
+                    self: `${baseUrl}${metaPath}`,
+                    epoch: this.entityState.getEpoch(metaPath),
+                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(metaPath),
+                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(metaPath),
+                    readonly: true,
+                    defaultversionid: latestVersion,
+                    defaultversionurl: `${baseUrl}${resourcePath}/versions/${encodeURIComponent(latestVersion)}`,
+                    defaultversionsticky: false
+                });
+            } catch (error) {
+                this.logger.error('Failed to retrieve package meta', { error });
+                res.status(500).json({ error: 'Failed to retrieve package metadata' });
+            }
+        });
+
         // GET /dotnetregistries/:registryId/packages/:packageName/versions/:versionId
         this.app.get('/dotnetregistries/:registryId/packages/:packageName/versions/:versionId', async (req, res) => {
             try {
@@ -462,13 +511,13 @@ export class XRegistryServer {
                     return;
                 }
 
-                const versionMetadata = await this.NuGetService.getVersionMetadata(packageName, versionId);
+                const baseUrl = getBaseUrl(req);
+                const versionMetadata = await this.NuGetService.getVersionMetadata(packageName, versionId, baseUrl);
                 if (!versionMetadata) {
                     res.status(404).json({ error: 'Version not found' });
                     return;
                 }
 
-                const baseUrl = getBaseUrl(req);
                 const versionInfo = {
                     ...versionMetadata,
                     xid: `/dotnetregistries/nuget.org/packages/${packageName}/versions/${versionId}`,
