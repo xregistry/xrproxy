@@ -8,6 +8,7 @@
         "packages": {
           "singular": "package",
           "description": "Maven packages (artifacts)",
+          "hasdocument": false,
           "attributes": {
             "name": {
               "type": "string",

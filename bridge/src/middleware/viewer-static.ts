@@ -192,9 +192,19 @@ export function createViewerStaticMiddleware(options: ViewerStaticOptions): expr
             
             // Remove /viewer prefix for static file serving
             req.url = req.url.replace(/^\/viewer/, '');
-            
-            // For Angular routing, serve index.html for non-file requests (SPA fallback)
-            if (options.indexFallback && !path.extname(req.url)) {
+
+            // For Angular routing, serve index.html for non-file requests (SPA fallback).
+            // `path.extname` flags any URL segment containing a dot as a "file" — but
+            // resource IDs like `Newtonsoft.Json` legitimately contain dots and need
+            // the SPA fallback, not a static-file lookup. Only treat the request as a
+            // static asset when the extension matches a known asset suffix.
+            const STATIC_ASSET_EXTS = new Set([
+                '.js', '.css', '.html', '.svg', '.ico', '.png', '.jpg', '.jpeg',
+                '.gif', '.webp', '.woff', '.woff2', '.ttf', '.eot', '.map',
+                '.json', '.txt', '.xml', '.wasm'
+            ]);
+            const ext = path.extname(req.url).toLowerCase();
+            if (options.indexFallback && (!ext || !STATIC_ASSET_EXTS.has(ext))) {
                 req.url = '/index.html';
             }
             

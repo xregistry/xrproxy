@@ -254,11 +254,7 @@ export function createPackageRoutes(options: PackageRoutesOptions): Router {
                 offset
             });
 
-            res.json({
-                versions: result.versions,
-                count: Object.keys(result.versions).length,
-                total: result.totalCount
-            });
+            res.json(result.versions);
         })
     );
 

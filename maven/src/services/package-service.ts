@@ -117,7 +117,23 @@ export class PackageService {
             );
         }
 
-        return this.buildPackageMetadata(firstDoc, groupId, baseUrl);
+        // Solr's `latestVersion` / `versionCount` fields lag behind the
+        // maven-metadata.xml that drives `fetchArtifactVersions`. Use the
+        // authoritative list so the Resource agrees with /versions on the
+        // chosen default and the total count. Falls back to Solr fields
+        // if the live fetch is empty.
+        let liveVersions: string[] = [];
+        try {
+            liveVersions = await this.mavenService.fetchArtifactVersions(mavenGroupId, artifactId);
+        } catch {
+            // ignore — fall back to Solr-only metadata
+        }
+
+        const enrichedDoc = liveVersions.length > 0
+            ? { ...firstDoc, latestVersion: liveVersions[liveVersions.length - 1] ?? firstDoc.latestVersion, versionCount: liveVersions.length }
+            : firstDoc;
+
+        return this.buildPackageMetadata(enrichedDoc, groupId, baseUrl);
     }
 
     /**
