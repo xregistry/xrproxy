@@ -93,55 +93,86 @@ export function createXRegistryRoutes(
                 }
             }
 
-            // Handle inline parameters
+            // Handle inline parameters per core spec §"Inline Flag".
+            //
+            //   - inline=*           => inline every nested collection but
+            //                          NOT model/modelsource/capabilities
+            //   - inline=model       => embed the consolidated model
+            //   - inline=capabilities=> embed the capabilities object
+            //   - inline=<plural>    => inline a single group's collection
+            //   - inline=<plural>.*  => deep inline; we forward the
+            //                          remainder of the path to the downstream
+            //                          so it can apply the same flag locally
+            //
+            // The previous implementation only matched literal `model`,
+            // `capabilities`, and `<plural>` entries, silently dropping
+            // `*` and any nested path. Fixed here.
             if (inline) {
-                const inlineRequests = inline.split(',').map(s => s.trim());
+                const inlineRequests = inline.split(',').map(s => s.trim()).filter(Boolean);
+                const wantsAll = inlineRequests.includes('*');
+                const wantsModel = inlineRequests.includes('model') || inlineRequests.includes('model,*');
+                const wantsCapabilities = inlineRequests.includes('capabilities');
 
-                if (inlineRequests.includes('model')) {
+                if (wantsModel) {
                     registryResponse.model = consolidatedModel;
                 }
-
-                if (inlineRequests.includes('capabilities')) {
+                if (wantsCapabilities) {
                     registryResponse.capabilities = consolidatedCapabilities;
                 }
 
-                // Handle inline group collections
+                // Walk each declared group and decide whether the client asked
+                // for it directly (`?inline=noderegistries`), via `*`, or via
+                // a nested path (`?inline=noderegistries.packages`).
                 for (const groupType of groups) {
                     const plural = consolidatedModel.groups?.[groupType]?.plural || groupType;
-                    if (inlineRequests.includes(plural)) {
-                        const backendServer = groupTypeToBackend[groupType];
+                    const nestedPath = inlineRequests.find(p => p === plural || p.startsWith(`${plural}.`));
+                    const shouldInline = wantsAll || !!nestedPath;
+                    if (!shouldInline) continue;
 
-                        if (backendServer) {
-                            try {
-                                const headers: Record<string, string> = {};
-                                if (backendServer.apiKey) {
-                                    headers['Authorization'] = `Bearer ${backendServer.apiKey}`;
-                                }
+                    const backendServer = groupTypeToBackend[groupType];
+                    if (!backendServer) {
+                        registryResponse[plural] = {};
+                        continue;
+                    }
 
-                                const groupResponse = await axios.get(`${backendServer.url}/${groupType}`, {
-                                    headers,
-                                    timeout: 5000
-                                });
-
-                                registryResponse[plural] = groupResponse.data;
-
-                                logger.debug('Inlined group collection', {
-                                    groupType,
-                                    plural,
-                                    backendUrl: backendServer.url
-                                });
-                            } catch (error) {
-                                logger.error('Failed to fetch group collection for inlining', {
-                                    groupType,
-                                    plural,
-                                    backendUrl: backendServer.url,
-                                    error: error instanceof Error ? error.message : String(error)
-                                });
-                                registryResponse[plural] = {};
-                            }
-                        } else {
-                            registryResponse[plural] = {};
+                    try {
+                        const headers: Record<string, string> = {};
+                        if (backendServer.apiKey) {
+                            headers['Authorization'] = `Bearer ${backendServer.apiKey}`;
                         }
+
+                        // Build the downstream request. For nested paths we
+                        // strip the leading group component and forward the
+                        // remainder as the downstream's own `inline` flag so
+                        // packages/versions get materialised at source.
+                        let downstreamUrl = `${backendServer.url}/${groupType}`;
+                        if (nestedPath && nestedPath !== plural) {
+                            const remainder = nestedPath.substring(plural.length + 1);
+                            downstreamUrl += `?inline=${encodeURIComponent(remainder)}`;
+                        } else if (wantsAll && !nestedPath) {
+                            // Top-level `*` cascades down per spec.
+                            downstreamUrl += `?inline=*`;
+                        }
+
+                        const groupResponse = await axios.get(downstreamUrl, {
+                            headers,
+                            timeout: 30000
+                        });
+                        registryResponse[plural] = groupResponse.data;
+
+                        logger.debug('Inlined group collection', {
+                            groupType,
+                            plural,
+                            downstreamUrl
+                        });
+                    } catch (error) {
+                        logger.error('Failed to fetch group collection for inlining', {
+                            groupType,
+                            plural,
+                            backendUrl: backendServer.url,
+                            error: error instanceof Error ? error.message : String(error)
+                        });
+                        registryResponse[plural] = {};
                     }
                 }
             }
@@ -153,10 +184,21 @@ export function createXRegistryRoutes(
                 stack: error instanceof Error ? error.stack : undefined
             });
             return res.status(500).json({
-                error: 'Internal Server Error',
-                message: 'An unexpected error occurred'
+                type: 'https://github.com/xregistry/spec/blob/main/core/spec.md#server_error',
+                title: 'Internal Server Error',
+                status: 500,
+                detail: 'An unexpected error occurred while building the registry root response.',
+                instance: req.originalUrl
             });
         }
+    });
+
+    // Export endpoint - shorthand for inlining everything plus model and
+    // capabilities. Per core spec §"Inline Flag", `*` alone excludes those
+    // three, so the canonical export URL adds them explicitly.
+    router.get('/export', (req: Request, res: Response) => {
+        const apiBaseUrl = getApiBaseUrl(req);
+        return res.redirect(302, `${apiBaseUrl}/?inline=*,model,capabilities`);
     });
 
     // Model endpoint
