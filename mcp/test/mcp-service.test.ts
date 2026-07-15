@@ -132,6 +132,29 @@ describe('MCPService', () => {
       expect(httpGetMock).toHaveBeenCalledTimes(1);
     });
 
+    it('uses filesystem-safe cache filenames', async () => {
+      service = new MCPService({
+        baseUrl: 'http://host.docker.internal:39611',
+        cacheDir,
+        cacheTtl: 5000,
+      });
+      httpGetMock.mockResolvedValue({
+        status: 200,
+        data: versionsResponse,
+        headers: {},
+      });
+
+      await expect(service.getAllServers()).resolves.toEqual({
+        servers: versionsResponse.servers,
+        metadata: {
+          count: versionsResponse.servers.length,
+          nextCursor: undefined,
+        },
+      });
+
+      expect(fs.readdirSync(cacheDir, { withFileTypes: true }).every((entry) => entry.isFile())).toBe(true);
+    });
+
     it('resolves a server detail directly from its xRegistry ID', async () => {
       const versionsSpy = jest.spyOn(service, 'getServerVersions').mockResolvedValue(versionsResponse);
       const catalogSpy = jest.spyOn(service, 'getAllServers');

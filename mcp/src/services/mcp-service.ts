@@ -95,7 +95,7 @@ export class MCPService {
      * Cached HTTP GET with ETag support
      */
     private async cachedGet<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
-        const cacheFile = path.join(this.cacheDir, Buffer.from(url).toString('base64'));
+        const cacheFile = path.join(this.cacheDir, Buffer.from(url).toString('base64url'));
         let etag: string | null = null;
         let cachedData: T | null = null;
 
