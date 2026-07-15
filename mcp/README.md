@@ -22,6 +22,7 @@ The wrapper treats the official MCP Registry as an upstream dependency:
 - Successful responses are served from the local cache for the configured cache TTL.
 - Expired catalog data remains available while one background refresh runs.
 - Concurrent requests share the same catalog refresh instead of starting duplicate scans.
+- Non-inline registry metadata stays available during initial catalog warm-up; `mcpproviderscount` is temporarily zero until the refresh completes.
 - Server detail and version requests resolve directly and do not require downloading the complete catalog.
 - If an upstream revalidation times out, the last successful cached response is returned.
 

@@ -423,9 +423,10 @@ export class XRegistryServer {
             registry.mcpproviders = providers as any;
             registry.mcpproviderscount = Object.keys(providers).length;
         } else {
-            // Use cached grouped servers for count
-            const grouped = await this.getCachedGroupedServers();
-            registry.mcpproviderscount = grouped.size;
+            // Keep registry metadata available while the catalog warms in the
+            // background. A count of zero is transient until the first
+            // successful refresh completes.
+            registry.mcpproviderscount = this.cachedGroupedServers?.size ?? 0;
         }
 
         return registry;
