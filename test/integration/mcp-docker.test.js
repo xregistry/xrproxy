@@ -48,7 +48,8 @@ describe("MCP Docker Integration Tests", function () {
     } catch (error) {
       if (error.response) {
         console.log(
-          `❌ Response: ${error.response.status} ${error.response.statusText} for ${url}`
+          `❌ Response: ${error.response.status} ${error.response.statusText} for ${url}`,
+          error.response.data
         );
       } else {
         console.log(`💥 Network error for ${url}: ${error.message}`);
@@ -211,6 +212,8 @@ describe("MCP Docker Integration Tests", function () {
         `-p ${serverPort}:3600 ` +
         `-e PORT=3600 ` +
         `-e NODE_ENV=production ` +
+        `-e NO_PROXY=host.docker.internal,localhost,127.0.0.1 ` +
+        `-e no_proxy=host.docker.internal,localhost,127.0.0.1 ` +
         `-e XREGISTRY_MCP_REGISTRY_URL=http://host.docker.internal:${mockRegistryPort} ` +
         `mcp-test-image:latest`
     );
