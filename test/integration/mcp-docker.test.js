@@ -1,6 +1,7 @@
 const { expect } = require("chai");
 const axios = require("axios");
 const { exec } = require("child_process");
+const http = require("http");
 const path = require("path");
 const { promisify } = require("util");
 
@@ -13,6 +14,25 @@ describe("MCP Docker Integration Tests", function () {
   let serverPort;
   let baseUrl;
   let containerRunning = false;
+  let mockRegistry;
+  let mockRegistryPort;
+
+  const mockServers = [
+    {
+      server: {
+        name: "example.com/alpha",
+        version: "1.0.0",
+        description: "Alpha test server",
+      },
+    },
+    {
+      server: {
+        name: "example.net/beta",
+        version: "2.0.0",
+        description: "Beta test server",
+      },
+    },
+  ];
 
   const getRandomPort = () =>
     Math.floor(Math.random() * (65535 - 49152) + 49152);
@@ -28,7 +48,8 @@ describe("MCP Docker Integration Tests", function () {
     } catch (error) {
       if (error.response) {
         console.log(
-          `❌ Response: ${error.response.status} ${error.response.statusText} for ${url}`
+          `❌ Response: ${error.response.status} ${error.response.statusText} for ${url}`,
+          error.response.data
         );
       } else {
         console.log(`💥 Network error for ${url}: ${error.message}`);
@@ -104,6 +125,62 @@ describe("MCP Docker Integration Tests", function () {
     }
   };
 
+  const startMockRegistry = async () => {
+    mockRegistry = http.createServer((req, res) => {
+      const url = new URL(req.url, "http://localhost");
+      const versionsMatch = decodeURIComponent(url.pathname).match(
+        /^\/v0\/servers\/(.+)\/versions(?:\/(.+))?$/
+      );
+
+      res.setHeader("Content-Type", "application/json");
+
+      if (url.pathname === "/v0/servers") {
+        res.end(
+          JSON.stringify({
+            servers: mockServers,
+            metadata: { count: mockServers.length },
+          })
+        );
+        return;
+      }
+
+      if (versionsMatch) {
+        const serverName = versionsMatch[1];
+        const version = versionsMatch[2];
+        const matchingServers = mockServers.filter(
+          (item) => item.server.name === serverName
+        );
+
+        if (matchingServers.length === 0) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: "not found" }));
+          return;
+        }
+
+        if (version) {
+          res.end(JSON.stringify(matchingServers[0]));
+          return;
+        }
+
+        res.end(
+          JSON.stringify({
+            servers: matchingServers,
+            metadata: { count: matchingServers.length },
+          })
+        );
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+
+    await new Promise((resolve) =>
+      mockRegistry.listen(0, "0.0.0.0", resolve)
+    );
+    mockRegistryPort = mockRegistry.address().port;
+  };
+
   before(async function () {
     this.timeout(180000); // 3 minutes for build
 
@@ -113,9 +190,11 @@ describe("MCP Docker Integration Tests", function () {
     )}`;
     serverPort = getRandomPort();
     baseUrl = `http://localhost:${serverPort}`;
+    await startMockRegistry();
 
     console.log(`Using container name: ${containerName}`);
     console.log(`Using port: ${serverPort}`);
+    console.log(`Using mock MCP Registry port: ${mockRegistryPort}`);
 
     // Build the MCP Docker image
     const rootPath = path.resolve(__dirname, "../../");
@@ -129,9 +208,13 @@ describe("MCP Docker Integration Tests", function () {
     // Run the Docker container
     console.log("Starting MCP Docker container...");
     await executeCommand(
-      `docker run -d --name ${containerName} -p ${serverPort}:3600 ` +
+      `docker run -d --name ${containerName} --add-host=host.docker.internal:host-gateway ` +
+        `-p ${serverPort}:3600 ` +
         `-e PORT=3600 ` +
         `-e NODE_ENV=production ` +
+        `-e NO_PROXY=host.docker.internal,localhost,127.0.0.1 ` +
+        `-e no_proxy=host.docker.internal,localhost,127.0.0.1 ` +
+        `-e XREGISTRY_MCP_REGISTRY_URL=http://host.docker.internal:${mockRegistryPort} ` +
         `mcp-test-image:latest`
     );
 
@@ -192,6 +275,12 @@ describe("MCP Docker Integration Tests", function () {
       console.log("Test image cleanup completed");
     } catch (error) {
       console.error("Error cleaning up test image:", error.message);
+    }
+
+    if (mockRegistry) {
+      await new Promise((resolve, reject) =>
+        mockRegistry.close((error) => (error ? reject(error) : resolve()))
+      );
     }
   });
 

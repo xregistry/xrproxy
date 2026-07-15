@@ -1,6 +1,6 @@
 {
   "production": {
-    "subscriptionId": "87dc3419-ee4f-4833-8e15-d25cc10df733",
+    "subscriptionId": "041abda7-3870-4275-ae24-6bf4c5300523",
     "resourceGroupName": "xregistry-package-registries",
     "location": "West Europe",
     "environment": "prod",

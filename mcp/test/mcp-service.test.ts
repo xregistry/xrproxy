@@ -4,6 +4,9 @@
 
 import { MCPService } from '../src/services/mcp-service';
 import axios from 'axios';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // Mock axios
 jest.mock('axios');
@@ -11,25 +14,32 @@ const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 describe('MCPService', () => {
   let service: MCPService;
+  let httpGetMock: jest.Mock;
+  let cacheDir: string;
 
   beforeEach(() => {
     // Reset mocks before each test
     jest.clearAllMocks();
-    
-    // Create service instance with test config
-    service = new MCPService({
-      baseUrl: 'https://test-registry.example.com',
-      cacheTtl: 5000,
-    });
 
-    // Mock axios.create to return mocked instance
-    mockedAxios.create = jest.fn().mockReturnValue({
-      get: jest.fn(),
+    httpGetMock = jest.fn();
+    mockedAxios.create.mockReturnValue({
+      get: httpGetMock,
       interceptors: {
         request: { use: jest.fn() },
         response: { use: jest.fn() },
       },
+    } as any);
+
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-service-test-'));
+    service = new MCPService({
+      baseUrl: 'https://test-registry.example.com',
+      cacheDir,
+      cacheTtl: 5000,
     });
+  });
+
+  afterEach(() => {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
   });
 
   describe('sanitizeId', () => {
@@ -93,6 +103,68 @@ describe('MCPService', () => {
     it('should handle empty server list', () => {
       const result = service.groupServersByProvider([]);
       expect(result.size).toBe(0);
+    });
+  });
+
+  describe('upstream caching and resolution', () => {
+    const versionsResponse = {
+      servers: [
+        {
+          server: {
+            name: 'ac.inference.sh/mcp',
+            version: '1.0.1',
+          },
+        },
+      ],
+      metadata: { count: 1 },
+    } as any;
+
+    it('serves a fresh cached response without revalidating upstream', async () => {
+      httpGetMock.mockResolvedValue({
+        status: 200,
+        data: versionsResponse,
+        headers: { etag: '"versions-1"' },
+      });
+
+      await expect(service.getServerVersions('ac.inference.sh/mcp')).resolves.toEqual(versionsResponse);
+      await expect(service.getServerVersions('ac.inference.sh/mcp')).resolves.toEqual(versionsResponse);
+
+      expect(httpGetMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses filesystem-safe cache filenames', async () => {
+      service = new MCPService({
+        baseUrl: 'http://host.docker.internal:39611',
+        cacheDir,
+        cacheTtl: 5000,
+      });
+      httpGetMock.mockResolvedValue({
+        status: 200,
+        data: versionsResponse,
+        headers: {},
+      });
+
+      await expect(service.getAllServers()).resolves.toEqual({
+        servers: versionsResponse.servers,
+        metadata: {
+          count: versionsResponse.servers.length,
+          nextCursor: undefined,
+        },
+      });
+
+      expect(fs.readdirSync(cacheDir, { withFileTypes: true }).every((entry) => entry.isFile())).toBe(true);
+    });
+
+    it('resolves a server detail directly from its xRegistry ID', async () => {
+      const versionsSpy = jest.spyOn(service, 'getServerVersions').mockResolvedValue(versionsResponse);
+      const catalogSpy = jest.spyOn(service, 'getAllServers');
+
+      await expect(
+        service.resolveServerVersions('ac.inference.sh', 'ac.inference.sh_mcp')
+      ).resolves.toEqual(versionsResponse);
+
+      expect(versionsSpy).toHaveBeenCalledWith('ac.inference.sh/mcp');
+      expect(catalogSpy).not.toHaveBeenCalled();
     });
   });
 
