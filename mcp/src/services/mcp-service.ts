@@ -34,6 +34,7 @@ export interface MCPServiceConfig {
 export class MCPService {
     private httpClient: AxiosInstance;
     private cacheDir: string;
+    private cacheTtl: number;
     private baseUrl: string;
     private serverNamesCache: string[] = [];
     private lastFetchTime: number = 0;
@@ -41,6 +42,7 @@ export class MCPService {
     constructor(config: MCPServiceConfig = {}) {
         this.baseUrl = config.baseUrl || MCP_REGISTRY.BASE_URL;
         this.cacheDir = config.cacheDir || CACHE_CONFIG.CACHE_DIR;
+        this.cacheTtl = config.cacheTtl ?? CACHE_CONFIG.CACHE_TTL_MS;
 
         this.httpClient = axios.create({
             timeout: config.timeout || MCP_REGISTRY.TIMEOUT_MS,
@@ -103,6 +105,10 @@ export class MCPService {
                 const cached: CachedResponse<T> = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
                 etag = cached.etag;
                 cachedData = cached.data;
+
+                if (Date.now() - cached.timestamp < this.cacheTtl) {
+                    return cached.data;
+                }
             } catch (error) {
                 // Invalid cache file, ignore
             }
@@ -129,7 +135,11 @@ export class MCPService {
                 fs.writeFileSync(cacheFile, JSON.stringify(cacheData));
                 return response.data;
             } else if (response.status === 304 && cachedData) {
-                // Not modified, return cached data
+                fs.writeFileSync(cacheFile, JSON.stringify({
+                    etag,
+                    data: cachedData,
+                    timestamp: Date.now(),
+                } satisfies CachedResponse<T>));
                 return cachedData;
             } else if (response.status >= 400) {
                 if (cachedData) {
@@ -248,7 +258,7 @@ export class MCPService {
             
             return await this.cachedGet<MCPServerResponse>(url);
         } catch (error) {
-            if (axios.isAxiosError(error) && error.response?.status === 404) {
+            if (this.isNotFoundError(error)) {
                 return null;
             }
             throw error;
@@ -265,11 +275,64 @@ export class MCPService {
             
             return await this.cachedGet<MCPServerListResponse>(url);
         } catch (error) {
-            if (axios.isAxiosError(error) && error.response?.status === 404) {
+            if (this.isNotFoundError(error)) {
                 return null;
             }
             throw error;
         }
+    }
+
+    /**
+     * Resolve an xRegistry server ID to its upstream MCP server and versions.
+     * This avoids loading the complete MCP catalog for resource detail requests.
+     */
+    async resolveServerVersions(providerId: string, serverId: string): Promise<MCPServerListResponse | null> {
+        const sanitizedProvider = this.sanitizeId(providerId);
+        const providerPrefix = `${sanitizedProvider}_`;
+        const candidates = new Set<string>();
+
+        if (serverId.startsWith(providerPrefix)) {
+            candidates.add(`${providerId}/${serverId.substring(providerPrefix.length)}`);
+        }
+        candidates.add(`${providerId}/${serverId}`);
+
+        for (const candidate of candidates) {
+            const response = await this.getServerVersions(candidate);
+            if (this.containsServer(response, providerId, serverId)) {
+                return response;
+            }
+        }
+
+        const searchResponse = await this.getAllServers({
+            limit: 100,
+            search: providerId
+        });
+        const matchingServer = searchResponse.servers.find(response =>
+            this.extractProviderId(response.server.name) === providerId &&
+            this.sanitizeId(response.server.name) === serverId
+        );
+
+        if (!matchingServer) {
+            return null;
+        }
+
+        return this.getServerVersions(matchingServer.server.name);
+    }
+
+    private containsServer(
+        response: MCPServerListResponse | null,
+        providerId: string,
+        serverId: string
+    ): boolean {
+        return response?.servers?.some(server =>
+            this.extractProviderId(server.server.name) === providerId &&
+            this.sanitizeId(server.server.name) === serverId
+        ) ?? false;
+    }
+
+    private isNotFoundError(error: unknown): boolean {
+        return (axios.isAxiosError(error) && error.response?.status === 404) ||
+            (error instanceof Error && error.message.startsWith('HTTP 404:'));
     }
 
     /**

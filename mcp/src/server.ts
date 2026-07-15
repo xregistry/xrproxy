@@ -644,31 +644,10 @@ export class XRegistryServer {
      * Get server with versions support
      */
     private async getServerWithVersions(req: express.Request, providerId: string, serverId: string, inlineVersions: boolean): Promise<any | null> {
-        // Find the server in cached grouped servers by matching sanitized ID
-        const grouped = await this.getCachedGroupedServers();
         const baseUrl = getBaseUrl(req);
 
-        if (!grouped.has(providerId)) {
-            return null;
-        }
-
-        const serversForProvider = grouped.get(providerId)!;
-
-        // Find the server whose sanitized name matches the serverId
-        const matchingServer = serversForProvider.find(server => {
-            const sanitizedId = this.mcpService.sanitizeId(server.server.name);
-            return sanitizedId === serverId;
-        });
-
-        if (!matchingServer) {
-            return null;
-        }
-
-        // Now use the original server name to fetch all versions
-        const serverName = matchingServer.server.name;
-
         try {
-            const versionsResponse = await this.mcpService.getServerVersions(serverName);
+            const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
             if (!versionsResponse || !versionsResponse.servers || versionsResponse.servers.length === 0) {
                 return null;
             }
@@ -704,7 +683,7 @@ export class XRegistryServer {
 
             return result;
         } catch (error) {
-            this.logger.error(`Failed to fetch versions for server ${serverName}`, error);
+            this.logger.error(`Failed to fetch versions for server ${providerId}/${serverId}`, error);
             return null;
         }
     }
@@ -713,31 +692,10 @@ export class XRegistryServer {
      * Get specific server version
      */
     private async getServerVersion(req: express.Request, providerId: string, serverId: string, versionId: string): Promise<ServerMetadata | null> {
-        // Find the server in cached grouped servers by matching sanitized ID
-        const grouped = await this.getCachedGroupedServers();
         const baseUrl = getBaseUrl(req);
 
-        if (!grouped.has(providerId)) {
-            return null;
-        }
-
-        const serversForProvider = grouped.get(providerId)!;
-
-        // Find the server whose sanitized name matches the serverId
-        const matchingServer = serversForProvider.find(server => {
-            const sanitizedId = this.mcpService.sanitizeId(server.server.name);
-            return sanitizedId === serverId;
-        });
-
-        if (!matchingServer) {
-            return null;
-        }
-
-        // Use the original server name to fetch all versions
-        const serverName = matchingServer.server.name;
-
         try {
-            const versionsResponse = await this.mcpService.getServerVersions(serverName);
+            const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
             if (!versionsResponse || !versionsResponse.servers) {
                 return null;
             }
@@ -756,7 +714,7 @@ export class XRegistryServer {
 
             return null;
         } catch (error) {
-            this.logger.error(`Failed to fetch version ${versionId} for server ${serverName}`, error);
+            this.logger.error(`Failed to fetch version ${versionId} for server ${providerId}/${serverId}`, error);
             return null;
         }
     }
@@ -765,31 +723,10 @@ export class XRegistryServer {
      * Get server versions list - returns enumerated versions
      */
     private async getServerVersionsList(req: express.Request, providerId: string, serverId: string, inline?: string): Promise<any | null> {
-        // Find the server in cached grouped servers by matching sanitized ID
-        const grouped = await this.getCachedGroupedServers();
         const baseUrl = getBaseUrl(req);
 
-        if (!grouped.has(providerId)) {
-            return null;
-        }
-
-        const serversForProvider = grouped.get(providerId)!;
-
-        // Find the server whose sanitized name matches the serverId
-        const matchingServer = serversForProvider.find(server => {
-            const sanitizedId = this.mcpService.sanitizeId(server.server.name);
-            return sanitizedId === serverId;
-        });
-
-        if (!matchingServer) {
-            return null;
-        }
-
-        // Use the original server name to fetch all versions
-        const serverName = matchingServer.server.name;
-
         try {
-            const versionsResponse = await this.mcpService.getServerVersions(serverName);
+            const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
             if (!versionsResponse || !versionsResponse.servers || versionsResponse.servers.length === 0) {
                 return null;
             }
@@ -810,7 +747,7 @@ export class XRegistryServer {
 
             return versions;
         } catch (error) {
-            this.logger.error(`Failed to fetch versions list for server ${serverName}`, error);
+            this.logger.error(`Failed to fetch versions list for server ${providerId}/${serverId}`, error);
             return null;
         }
     }

@@ -15,6 +15,18 @@ This service provides an xRegistry API interface to the MCP official registry at
 - **Filtering & Search**: Advanced filtering on server attributes
 - **Caching**: Intelligent caching for improved performance
 
+## Upstream resilience
+
+The wrapper treats the official MCP Registry as an upstream dependency:
+
+- Successful responses are served from the local cache for the configured cache TTL.
+- Expired catalog data remains available while one background refresh runs.
+- Concurrent requests share the same catalog refresh instead of starting duplicate scans.
+- Server detail and version requests resolve directly and do not require downloading the complete catalog.
+- If an upstream revalidation times out, the last successful cached response is returned.
+
+These behaviors prevent transient upstream latency from making existing MCP servers appear unresolved.
+
 ## Installation
 
 ```bash
