@@ -10,7 +10,7 @@
     and cleans up afterwards.
 
 .PARAMETER Service
-    Specific service to test (maven, nuget, pypi, oci, npm, mcp). If not specified, all services are tested.
+    Specific active proxy service from config/services.json. If not specified, all active proxies are tested.
 
 .PARAMETER Parallel
     Whether to run tests in parallel. Default is false for better resource management.
@@ -29,7 +29,6 @@
 #>
 
 param(
-    [ValidateSet("maven", "nuget", "pypi", "oci", "npm", "mcp")]
     [string]$Service,
     
     [switch]$Parallel
@@ -127,8 +126,15 @@ function Invoke-ServiceTest {
 # Main execution
 try {
     Test-Prerequisites
-    
-    $services = if ($Service) { @($Service) } else { @("maven", "nuget", "pypi", "oci", "npm") }
+
+    $activeServices = @(node scripts/service-manifest.mjs list --status active --role proxy --format lines)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read config/services.json"
+    }
+    if ($Service -and $Service -notin $activeServices) {
+        throw "Invalid or inactive proxy service: $Service"
+    }
+    $services = if ($Service) { @($Service) } else { $activeServices }
     $totalStartTime = Get-Date
     
     Write-Host "Will test the following services: $($services -join ', ')" -ForegroundColor Cyan
@@ -177,11 +183,21 @@ finally {
     Write-Host "`nPerforming cleanup..." -ForegroundColor Yellow
     
     # Stop and remove any test containers that might be running
-    $testContainers = docker ps -a --filter "name=maven-test-" --filter "name=nuget-test-" --filter "name=pypi-test-" --filter "name=oci-test-" --filter "name=npm-test-" -q
-    if ($testContainers) {
-        Write-Host "Cleaning up test containers..." -ForegroundColor Gray
-        docker stop $testContainers 2>$null
-        docker rm $testContainers 2>$null
+    $cleanupServices = @(node scripts/service-manifest.mjs list --status active --role proxy --format lines)
+    if ($LASTEXITCODE -ne 0 -or $cleanupServices.Count -eq 0) {
+        Write-Warning "Unable to discover active services; skipping container cleanup"
+    }
+    else {
+        $containerFilters = @()
+        foreach ($svc in $cleanupServices) {
+            $containerFilters += @("--filter", "name=$svc-test-")
+        }
+        $testContainers = docker ps -a @containerFilters -q
+        if ($testContainers) {
+            Write-Host "Cleaning up test containers..." -ForegroundColor Gray
+            docker stop $testContainers 2>$null
+            docker rm $testContainers 2>$null
+        }
     }
     
     # Remove test images
