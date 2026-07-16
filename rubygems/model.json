@@ -1,0 +1,59 @@
+{
+  "specversion": "1.0-rc2",
+  "registryid": "rubygems-wrapper",
+  "description": "The xRegistry model for the RubyGems wrapper, describing the structure and metadata for Ruby gem registries and packages.",
+  "groups": {
+    "rubyregistries": {
+      "description": "A group representing a Ruby gem registry provider (e.g., rubygems.org).",
+      "plural": "rubyregistries",
+      "singular": "rubyregistry",
+      "resources": {
+        "packages": {
+          "description": "A Ruby gem in the registry, including its metadata and available versions.",
+          "plural": "packages",
+          "singular": "package",
+          "hasdocument": false,
+          "attributes": {
+            "name": { "type": "string", "description": "The canonical name of the Ruby gem." },
+            "info": { "type": "string", "description": "Short description of the gem." },
+            "version": { "type": "string", "description": "Latest stable version string." },
+            "authors": { "type": "string", "description": "Comma-separated list of authors." },
+            "licenses": { "type": "array", "item": { "type": "string" }, "description": "SPDX license identifiers." },
+            "homepage_uri": { "type": "string", "description": "Homepage URL." },
+            "source_code_uri": { "type": "string", "description": "Source code repository URL." },
+            "changelog_uri": { "type": "string", "description": "Changelog URL." },
+            "documentation_uri": { "type": "string", "description": "Documentation URL." },
+            "bug_tracker_uri": { "type": "string", "description": "Bug tracker URL." },
+            "gem_uri": { "type": "string", "description": "Direct download URL for the latest gem." },
+            "project_uri": { "type": "string", "description": "RubyGems project page URL." },
+            "downloads": { "type": "integer", "description": "Total download count across all versions." },
+            "version_downloads": { "type": "integer", "description": "Download count for the latest version." },
+            "platform": { "type": "string", "description": "Build platform of the latest version." },
+            "sha": { "type": "string", "description": "SHA-256 checksum of the latest gem file." },
+            "dependencies": { "type": "object", "description": "Runtime and development dependencies keyed by type." }
+          },
+          "resources": {
+            "versions": {
+              "description": "Published builds of a Ruby gem, one per unique version+platform combination.",
+              "plural": "versions",
+              "singular": "version",
+              "hasdocument": false,
+              "attributes": {
+                "number": { "type": "string", "description": "Raw version string as published to RubyGems." },
+                "platform": { "type": "string", "description": "Build platform (e.g. ruby, x86_64-linux, arm64-darwin)." },
+                "prerelease": { "type": "boolean", "description": "True if this is a pre-release version." },
+                "created_at": { "type": "timestamp", "description": "ISO 8601 timestamp when this version was published." },
+                "downloads_count": { "type": "integer", "description": "Download count for this specific version+platform." },
+                "gem_uri": { "type": "string", "description": "Direct download URL for this gem file." },
+                "sha": { "type": "string", "description": "SHA-256 checksum of this gem file." },
+                "dependencies": { "type": "object", "description": "Dependencies declared for this version." },
+                "yanked": { "type": "boolean", "description": "True if this version has been yanked from RubyGems." }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

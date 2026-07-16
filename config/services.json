@@ -8,7 +8,9 @@
       "status": "active",
       "directory": "npm",
       "port": 3100,
-      "groupTypes": ["noderegistries"],
+      "groupTypes": [
+        "noderegistries"
+      ],
       "environment": {
         "PORT": "3100",
         "HOST": "0.0.0.0"
@@ -36,7 +38,9 @@
       "status": "active",
       "directory": "pypi",
       "port": 3000,
-      "groupTypes": ["pythonregistries"],
+      "groupTypes": [
+        "pythonregistries"
+      ],
       "environment": {
         "PORT": "3000",
         "HOST": "0.0.0.0"
@@ -64,7 +68,9 @@
       "status": "active",
       "directory": "maven",
       "port": 3300,
-      "groupTypes": ["javaregistries"],
+      "groupTypes": [
+        "javaregistries"
+      ],
       "environment": {
         "PORT": "3300",
         "HOST": "0.0.0.0"
@@ -92,7 +98,9 @@
       "status": "active",
       "directory": "nuget",
       "port": 3200,
-      "groupTypes": ["dotnetregistries"],
+      "groupTypes": [
+        "dotnetregistries"
+      ],
       "environment": {
         "PORT": "3200",
         "HOST": "0.0.0.0"
@@ -120,7 +128,9 @@
       "status": "active",
       "directory": "oci",
       "port": 3400,
-      "groupTypes": ["containerregistries"],
+      "groupTypes": [
+        "containerregistries"
+      ],
       "environment": {
         "PORT": "3400",
         "HOST": "0.0.0.0"
@@ -148,7 +158,9 @@
       "status": "active",
       "directory": "mcp",
       "port": 3600,
-      "groupTypes": ["mcpproviders"],
+      "groupTypes": [
+        "mcpproviders"
+      ],
       "environment": {
         "XREGISTRY_MCP_PORT": "3600",
         "XREGISTRY_MCP_HOST": "0.0.0.0"
@@ -208,7 +220,9 @@
       "status": "active",
       "directory": "crates",
       "port": 3700,
-      "groupTypes": ["rustregistries"],
+      "groupTypes": [
+        "rustregistries"
+      ],
       "environment": {
         "PORT": "3700",
         "HOST": "0.0.0.0",
@@ -238,16 +252,39 @@
       "status": "planned",
       "directory": "terraform",
       "port": 3800,
-      "groupTypes": ["terraformregistries"]
+      "groupTypes": [
+        "terraformregistries"
+      ]
     },
     {
       "id": "rubygems",
       "name": "RubyGems Registry",
       "role": "proxy",
-      "status": "planned",
+      "status": "active",
       "directory": "rubygems",
       "port": 4000,
-      "groupTypes": ["rubyregistries"]
+      "groupTypes": [
+        "rubyregistries"
+      ],
+      "environment": {
+        "PORT": "4000",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "rubygems",
+          "name": "xregistry-rubygems-bridge",
+          "dockerfile": "rubygems.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/rubygems-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
     },
     {
       "id": "packagist",
@@ -256,7 +293,9 @@
       "status": "planned",
       "directory": "packagist",
       "port": 4100,
-      "groupTypes": ["phpregistries"]
+      "groupTypes": [
+        "phpregistries"
+      ]
     },
     {
       "id": "pubdev",
@@ -265,7 +304,9 @@
       "status": "planned",
       "directory": "pubdev",
       "port": 4200,
-      "groupTypes": ["dartregistries"]
+      "groupTypes": [
+        "dartregistries"
+      ]
     },
     {
       "id": "huggingface",
@@ -274,7 +315,9 @@
       "status": "active",
       "directory": "huggingface",
       "port": 4300,
-      "groupTypes": ["huggingfaceregistries"],
+      "groupTypes": [
+        "huggingfaceregistries"
+      ],
       "environment": {
         "PORT": "4300",
         "HOST": "0.0.0.0"
@@ -302,7 +345,9 @@
       "status": "active",
       "directory": "gomod",
       "port": 3900,
-      "groupTypes": ["goregistries"],
+      "groupTypes": [
+        "goregistries"
+      ],
       "environment": {
         "PORT": "3900",
         "HOST": "0.0.0.0"

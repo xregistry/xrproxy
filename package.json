@@ -45,7 +45,7 @@
     "test": "npm run test:standalone",
     "test:all": "npm run test:standalone && npm run test:docker",
     "test:standalone": "npm run test:servers && npm run test:integration && npm run test:npm && npm run test:npm:basic && npm run test:npm:angular",
-    "test:servers": "npm run test:npm:server && npm run test:pypi:server && npm run test:maven:server && npm run test:nuget:server && npm run test:oci:server && npm run test:mcp:server && npm run test:crates:server",
+    "test:servers": "npm run test:npm:server && npm run test:pypi:server && npm run test:maven:server && npm run test:nuget:server && npm run test:oci:server && npm run test:mcp:server && npm run test:crates:server && npm run test:rubygems:server",
     "test:npm:server": "npm run build:npm && cd test && npm run test:npm",
     "test:pypi:server": "npm run build:pypi && cd test && npm run test:pypi",
     "test:maven:server": "npm run build:maven && cd test && npm run test:maven",
@@ -74,9 +74,10 @@
     "docker:test": "bash test-docker.sh",
     "docker:compose": "docker-compose up unified",
     "docker:compose:dev": "docker-compose up pypi npm",
-    "start:huggingface": "cd huggingface && npm start",
     "start:gomod": "cd gomod && npm start",
-    "test:huggingface:server": "npm run build:huggingface && cd test && npm run test:huggingface"
+    "build:rubygems": "node scripts/service-manifest.mjs run build --service rubygems",
+    "start:rubygems": "cd rubygems && npm start",
+    "test:rubygems:server": "npm run build:rubygems && cd rubygems && npm test"
   },
   "keywords": [
     "xregistry",
