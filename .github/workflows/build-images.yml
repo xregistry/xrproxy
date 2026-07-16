@@ -16,6 +16,7 @@ on:
       - "huggingface/**"
       - "gomod/**"
       - "rubygems/**"
+      - "packagist/**"
       - "viewer/**"
       - "shared/**"
       - "config/services.json"

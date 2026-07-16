@@ -372,6 +372,37 @@ services:
       minReplicas: 1
       maxReplicas: 3
       targetCPUUtilizationPercentage: 75
+  packagist:
+    enabled: true
+    role: proxy
+    directory: packagist
+    image:
+      repository: xregistry-packagist-bridge
+      tag: ""
+      digest: ""
+    port: 4100
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4100"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/packagist/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
   huggingface:
     enabled: true
     role: proxy

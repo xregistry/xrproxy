@@ -290,12 +290,31 @@
       "id": "packagist",
       "name": "Packagist Registry",
       "role": "proxy",
-      "status": "planned",
+      "status": "active",
       "directory": "packagist",
       "port": 4100,
       "groupTypes": [
-        "phpregistries"
-      ]
+        "composerregistries"
+      ],
+      "environment": {
+        "PORT": "4100",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "packagist",
+          "name": "xregistry-packagist-bridge",
+          "dockerfile": "packagist.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/packagist-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
     },
     {
       "id": "pubdev",

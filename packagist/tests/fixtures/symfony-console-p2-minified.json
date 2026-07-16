@@ -1,0 +1,37 @@
+{
+  "minified": "composer/2.0",
+  "packages": {
+    "symfony/console": [
+      {
+        "name": "symfony/console",
+        "description": "Eases the creation of beautiful and testable command line interfaces",
+        "keywords": ["cli", "command-line", "console", "terminal"],
+        "homepage": "https://symfony.com",
+        "version": "v7.1.0",
+        "version_normalized": "7.1.0.0",
+        "license": ["MIT"],
+        "authors": [{ "name": "Fabien Potencier", "email": "fabien@symfony.com" }],
+        "source": { "url": "https://github.com/symfony/console.git", "type": "git", "reference": "ab6c37de4e4e9d70a4f097a62ca4b3d860d9b7fb" },
+        "dist": { "url": "https://api.github.com/repos/symfony/console/zipball/ab6c37de4e4e9d70a4f097a62ca4b3d860d9b7fb", "type": "zip", "shasum": "", "reference": "ab6c37de4e4e9d70a4f097a62ca4b3d860d9b7fb" },
+        "type": "library",
+        "time": "2024-05-31T14:49:03+00:00",
+        "require": { "php": ">=8.2" }
+      },
+      {
+        "version": "v7.0.0",
+        "version_normalized": "7.0.0.0",
+        "source": { "url": "https://github.com/symfony/console.git", "type": "git", "reference": "cafebabe1234567890abcdef1234567890abcdef" },
+        "dist": { "url": "https://api.github.com/repos/symfony/console/zipball/cafebabe1234567890abcdef1234567890abcdef", "type": "zip", "shasum": "", "reference": "cafebabe1234567890abcdef1234567890abcdef" },
+        "time": "2024-01-15T00:00:00+00:00",
+        "require": { "php": ">=8.2" }
+      },
+      {
+        "version": "dev-main",
+        "version_normalized": "dev-main",
+        "source": { "url": "https://github.com/symfony/console.git", "type": "git", "reference": "deadbeef1234567890abcdef1234567890abcdef" },
+        "dist": { "url": "https://api.github.com/repos/symfony/console/zipball/deadbeef1234567890abcdef1234567890abcdef", "type": "zip", "shasum": "", "reference": "deadbeef1234567890abcdef1234567890abcdef" },
+        "time": "2024-07-01T00:00:00+00:00"
+      }
+    ]
+  }
+}

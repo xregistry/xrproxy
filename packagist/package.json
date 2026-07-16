@@ -1,0 +1,53 @@
+{
+  "name": "xregistry-packagist-wrapper",
+  "version": "1.0.0",
+  "description": "xRegistry wrapper for Packagist/Composer packages",
+  "main": "dist/packagist/src/server.js",
+  "types": "dist/packagist/src/server.d.ts",
+  "scripts": {
+    "build": "tsc && npm run copy:shared",
+    "copy:shared": "node -e \"require('fs').cpSync('../shared/filter', 'dist/shared/filter', { recursive: true })\"",
+    "build:watch": "tsc --watch",
+    "start": "node dist/packagist/src/server.js",
+    "start:dev": "ts-node src/server.ts",
+    "start:watch": "ts-node --watch src/server.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "clean": "rimraf dist",
+    "prebuild": "npm run clean",
+    "prestart": "npm run build"
+  },
+  "dependencies": {
+    "@xregistry/registry-core": "file:../shared/registry-core",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jest": "^29.5.8",
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "eslint": "^8.54.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.11",
+    "rimraf": "^5.0.5",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.1",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "xregistry",
+    "packagist",
+    "composer",
+    "php",
+    "package-registry",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT"
+}

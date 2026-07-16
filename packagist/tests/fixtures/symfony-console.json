@@ -1,0 +1,83 @@
+{
+  "package": {
+    "name": "symfony/console",
+    "description": "Eases the creation of beautiful and testable command line interfaces",
+    "time": "2011-02-06T09:06:13+00:00",
+    "maintainers": [
+      { "name": "fabpot", "avatar_url": "https://www.gravatar.com/avatar/a80c2e0f2e0a8b10b42e6e4ab63ac1e0?d=identicon" }
+    ],
+    "versions": {
+      "v7.1.0": {
+        "name": "symfony/console",
+        "description": "Eases the creation of beautiful and testable command line interfaces",
+        "keywords": ["cli", "command-line", "console", "terminal"],
+        "homepage": "https://symfony.com",
+        "version": "v7.1.0",
+        "version_normalized": "7.1.0.0",
+        "license": ["MIT"],
+        "authors": [
+          { "name": "Fabien Potencier", "email": "fabien@symfony.com" }
+        ],
+        "source": {
+          "url": "https://github.com/symfony/console.git",
+          "type": "git",
+          "reference": "ab6c37de4e4e9d70a4f097a62ca4b3d860d9b7fb"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/symfony/console/zipball/ab6c37de4e4e9d70a4f097a62ca4b3d860d9b7fb",
+          "type": "zip",
+          "shasum": "",
+          "reference": "ab6c37de4e4e9d70a4f097a62ca4b3d860d9b7fb"
+        },
+        "type": "library",
+        "time": "2024-05-31T14:49:03+00:00",
+        "autoload": {
+          "psr-4": { "Symfony\\Component\\Console\\": "" }
+        },
+        "require": {
+          "php": ">=8.2",
+          "symfony/service-contracts": "^2.5|^3"
+        },
+        "require-dev": {
+          "phpunit/phpunit": "^11.0"
+        }
+      },
+      "dev-main": {
+        "name": "symfony/console",
+        "description": "Eases the creation of beautiful and testable command line interfaces",
+        "keywords": ["cli", "command-line", "console", "terminal"],
+        "homepage": "https://symfony.com",
+        "version": "dev-main",
+        "version_normalized": "dev-main",
+        "license": ["MIT"],
+        "authors": [
+          { "name": "Fabien Potencier", "email": "fabien@symfony.com" }
+        ],
+        "source": {
+          "url": "https://github.com/symfony/console.git",
+          "type": "git",
+          "reference": "deadbeef1234567890abcdef1234567890abcdef"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/symfony/console/zipball/deadbeef1234567890abcdef1234567890abcdef",
+          "type": "zip",
+          "shasum": "",
+          "reference": "deadbeef1234567890abcdef1234567890abcdef"
+        },
+        "type": "library",
+        "time": "2024-07-01T00:00:00+00:00",
+        "require": {
+          "php": ">=8.2"
+        }
+      }
+    },
+    "type": "library",
+    "repository": "https://github.com/symfony/console",
+    "downloads": {
+      "total": 450000000,
+      "monthly": 12000000,
+      "daily": 400000
+    },
+    "favers": 2500
+  }
+}
