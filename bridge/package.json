@@ -8,6 +8,7 @@
     "prebuild": "npm run clean",
     "build": "tsc && npm run copy:shared",
     "copy:shared": "node -e \"require('fs').cpSync('../shared/filter', 'dist/shared/filter', { recursive: true })\"",
+    "test": "npm run build && node --test test/*.test.js",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "watch": "tsc --watch"

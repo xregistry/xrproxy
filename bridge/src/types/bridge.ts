@@ -26,6 +26,7 @@ export interface ServerState {
     lastAttempt: number;
     model?: any;
     capabilities?: any;
+    rootResponse?: any;
     error?: string;
     consecutiveFailures?: number;
 }
@@ -54,6 +55,11 @@ export interface ConsolidatedCapabilities {
     [key: string]: any;
 }
 
+export interface GroupCollision {
+    groupType: string;
+    servers: string[];
+}
+
 /**
  * Health check result for a downstream server
  */
@@ -70,12 +76,13 @@ export interface DownstreamHealth {
  * Overall bridge health status
  */
 export interface BridgeHealth {
-    status: 'healthy' | 'unhealthy';
+    status: 'healthy' | 'degraded' | 'unhealthy';
     timestamp: string;
     activeServers: number;
     totalServers: number;
     downstreams: DownstreamHealth[];
     consolidatedGroups: string[];
+    groupCollisions: GroupCollision[];
     retryInterval: number;
 }
 
@@ -87,6 +94,7 @@ export interface BridgeStatus {
     servers: ServerStatus[];
     consolidatedModel: ConsolidatedModel;
     groupMappings: Record<string, string>;
+    groupCollisions: GroupCollision[];
     configuration: BridgeConfiguration;
 }
 

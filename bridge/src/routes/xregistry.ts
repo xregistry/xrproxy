@@ -10,6 +10,13 @@ import { DownstreamService } from '../services/downstream-service';
 import { HealthService } from '../services/health-service';
 import { ModelService } from '../services/model-service';
 
+function exactNonNegativeCount(value: unknown): number | undefined {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+        return undefined;
+    }
+    return value;
+}
+
 export function createXRegistryRoutes(
     modelService: ModelService,
     healthService: HealthService,
@@ -63,7 +70,7 @@ export function createXRegistryRoutes(
                 xid: '/',
                 epoch: BRIDGE_EPOCH,
                 name: 'xRegistry Bridge',
-                description: 'Unified xRegistry bridge for multiple package registry backends',
+                description: 'Unified xRegistry bridge for multiple registry backends',
                 createdat: BRIDGE_STARTUP_TIME,
                 modifiedat: now
             };
@@ -73,23 +80,13 @@ export function createXRegistryRoutes(
                 const plural = consolidatedModel.groups?.[groupType]?.plural || groupType;
                 registryResponse[`${plural}url`] = `${apiBaseUrl}/${groupType}`;
 
-                // Get count from the server state that holds this registry
+                // Counts are optional. Only forward exact, bounded counts from
+                // the downstream root; absence or estimates remain unknown.
                 const backendServer = groupTypeToBackend[groupType];
                 const serverState = backendServer ? serverStates.get(backendServer.url) : undefined;
-
-                // Default to 1 for known registry types
-                let defaultCount = 0;
-                if (['javaregistries', 'dotnetregistries', 'noderegistries', 'pythonregistries', 'containerregistries'].includes(groupType)) {
-                    defaultCount = 1;
-                }
-
-                if (serverState?.isActive && serverState.model?.groups?.[groupType]?.plural) {
-                    const serverPlural = serverState.model.groups[groupType].plural;
-                    const countKey = `${serverPlural}count`;
-                    const serverCount = serverState.model[countKey] !== undefined ? serverState.model[countKey] : 0;
-                    registryResponse[`${plural}count`] = serverCount > 0 ? serverCount : defaultCount;
-                } else {
-                    registryResponse[`${plural}count`] = defaultCount;
+                const count = exactNonNegativeCount(serverState?.rootResponse?.[`${plural}count`]);
+                if (count !== undefined) {
+                    registryResponse[`${plural}count`] = count;
                 }
             }
 
@@ -121,8 +118,7 @@ export function createXRegistryRoutes(
                 }
 
                 // Walk each declared group and decide whether the client asked
-                // for it directly (`?inline=noderegistries`), via `*`, or via
-                // a nested path (`?inline=noderegistries.packages`).
+                // for it directly, via `*`, or via a nested inline path.
                 for (const groupType of groups) {
                     const plural = consolidatedModel.groups?.[groupType]?.plural || groupType;
                     const nestedPath = inlineRequests.find(p => p === plural || p.startsWith(`${plural}.`));
@@ -173,6 +169,7 @@ export function createXRegistryRoutes(
                             error: error instanceof Error ? error.message : String(error)
                         });
                         registryResponse[plural] = {};
+                        res.append('Warning', `199 xregistry-bridge "Unable to inline ${plural}"`);
                     }
                 }
             }
