@@ -51,6 +51,7 @@ jobs:
     outputs:
       docker-tests: ${{ steps.matrix.outputs.docker-tests }}
       images: ${{ steps.matrix.outputs.images }}
+      build: ${{ steps.matrix.outputs.build }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -67,6 +68,7 @@ jobs:
         run: |
           echo "docker-tests=$(node scripts/service-manifest.mjs matrix docker-tests)" >> "$GITHUB_OUTPUT"
           echo "images=$(node scripts/service-manifest.mjs matrix images)" >> "$GITHUB_OUTPUT"
+          echo "build=$(node scripts/service-manifest.mjs matrix build)" >> "$GITHUB_OUTPUT"
 
   unit-tests:
     name: Unit & Integration Tests
@@ -200,6 +202,45 @@ jobs:
           load: true
       - run: docker images xregistry-${{ matrix.image }}:test
 
+  # TypeScript compilation per service, derived from the manifest build matrix.
+  # Catches compile errors before the heavier Docker build phase.
+  ts-build:
+    name: TypeScript build (${{ matrix.service }})
+    needs: service-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.service-matrix.outputs.build) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install root dependencies
+        run: npm ci
+      - name: Build ${{ matrix.service }}
+        run: npm run build:${{ matrix.service }}
+
+  # Dedicated drift-check job so a values.yaml or workflow-path gap surfaces as
+  # a clearly labelled failure distinct from manifest validation.
+  manifest-drift:
+    name: CI artifact drift check
+    needs: service-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run ci:drift:check
+      - run: npm run test:ci-drift
+
   checkin-validation-complete:
     name: Checkin Validation Complete
     runs-on: ubuntu-latest
@@ -207,6 +248,8 @@ jobs:
       - service-matrix
       - unit-tests
       - registry-core
+      - ts-build
+      - manifest-drift
       - docker-integration-tests
       - bridge-integration-tests
       - code-quality
@@ -218,14 +261,36 @@ jobs:
           SERVICE_MATRIX: ${{ needs.service-matrix.result }}
           UNIT_TESTS: ${{ needs.unit-tests.result }}
           REGISTRY_CORE: ${{ needs.registry-core.result }}
+          TS_BUILD: ${{ needs.ts-build.result }}
+          MANIFEST_DRIFT: ${{ needs.manifest-drift.result }}
           DOCKER_TESTS: ${{ needs.docker-integration-tests.result }}
           BRIDGE_TESTS: ${{ needs.bridge-integration-tests.result }}
           CODE_QUALITY: ${{ needs.code-quality.result }}
           DOCKERFILES: ${{ needs.dockerfile-validation.result }}
         run: |
-          for result in "$SERVICE_MATRIX" "$UNIT_TESTS" "$REGISTRY_CORE" "$DOCKER_TESTS" "$BRIDGE_TESTS" "$CODE_QUALITY" "$DOCKERFILES"; do
+          echo "Job results:"
+          echo "  service-matrix:          $SERVICE_MATRIX"
+          echo "  unit-tests:              $UNIT_TESTS"
+          echo "  registry-core:           $REGISTRY_CORE"
+          echo "  ts-build:                $TS_BUILD"
+          echo "  manifest-drift:          $MANIFEST_DRIFT"
+          echo "  docker-integration-tests:$DOCKER_TESTS"
+          echo "  bridge-integration-tests:$BRIDGE_TESTS"
+          echo "  code-quality:            $CODE_QUALITY"
+          echo "  dockerfile-validation:   $DOCKERFILES"
+          for result in \
+            "$SERVICE_MATRIX" \
+            "$UNIT_TESTS" \
+            "$REGISTRY_CORE" \
+            "$TS_BUILD" \
+            "$MANIFEST_DRIFT" \
+            "$DOCKER_TESTS" \
+            "$BRIDGE_TESTS" \
+            "$CODE_QUALITY" \
+            "$DOCKERFILES"; do
             if [[ "$result" != "success" ]]; then
-              echo "One or more validation jobs failed or were skipped"
+              echo "❌ One or more validation jobs did not succeed (result: $result)"
               exit 1
             fi
           done
+          echo "✅ All validation checks passed"

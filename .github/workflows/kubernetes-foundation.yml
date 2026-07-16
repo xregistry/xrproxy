@@ -32,16 +32,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
+
       - uses: azure/setup-helm@v4
         with:
           version: v3.17.3
+
+      # Manifest drift check: generated values.yaml must match services.json.
       - run: npm run helm:services:check
       - run: npm run test:helm-services
+
+      # Strict lint: catches type mismatches against values.schema.json.
       - run: helm lint charts/xrproxy --strict
+
+      # Baseline render — used as a reference by subsequent checks.
       - run: helm template xrproxy charts/xrproxy --namespace xrproxy > rendered.yaml
+
+      - name: Verify rendered Deployment count equals active-service count
+        run: |
+          active_count=$(node scripts/service-manifest.mjs list --status active --format lines | wc -l)
+          rendered_deploys=$(grep -c '^kind: Deployment$' rendered.yaml || true)
+          test "$rendered_deploys" -eq "$active_count" || {
+            echo "Expected $active_count Deployments but rendered.yaml has $rendered_deploys"
+            exit 1
+          }
+
       - name: Verify long release names keep service resources unique
         run: |
           release=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -51,6 +69,7 @@ jobs:
               sort -u |
               wc -l
           )" -eq 4
+
       - name: Render optional Gateway API resources
         run: |
           helm template xrproxy charts/xrproxy \
@@ -62,18 +81,46 @@ jobs:
             --set-json 'gateway.httpRoute.hostnames=["packages.example.com"]' \
             > rendered-gateway.yaml
 
+      # Provider-overlay validation: render each overlay values file found under
+      # charts/xrproxy/ci/.  No-op when the directory or files are absent.
+      - name: Render provider overlays (if any)
+        run: |
+          overlay_dir="charts/xrproxy/ci"
+          if [ -d "$overlay_dir" ]; then
+            shopt -s nullglob
+            overlays=("$overlay_dir"/*.yaml "$overlay_dir"/*.yml)
+            if [ "${#overlays[@]}" -gt 0 ]; then
+              for overlay in "${overlays[@]}"; do
+                name=$(basename "$overlay" | sed 's/\.[^.]*$//')
+                echo "==> Rendering overlay: $overlay"
+                helm template "xrproxy-$name" charts/xrproxy \
+                  --namespace xrproxy \
+                  --values "$overlay" \
+                  > "rendered-$name.yaml"
+                echo "    Rendered $(grep -c '^kind:' "rendered-$name.yaml") resources"
+              done
+            else
+              echo "No overlay files in $overlay_dir — skipping provider overlay renders"
+            fi
+          else
+            echo "No charts/xrproxy/ci/ directory — skipping provider overlay renders"
+          fi
+
   kind-api-smoke:
     name: kind API smoke
     needs: helm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
       - uses: azure/setup-helm@v4
         with:
           version: v3.17.3
+
       - uses: helm/kind-action@v1
         with:
           cluster_name: xrproxy
+
       - name: Build bridge with readiness endpoint
         run: |
           docker build \
@@ -83,7 +130,8 @@ jobs:
           kind load docker-image \
             ghcr.io/xregistry/xrproxy/xregistry-bridge:chart-test \
             --name xrproxy
-      - name: Install chart into kind
+
+      - name: Install chart into kind and verify readiness
         run: |
           helm install xrproxy charts/xrproxy \
             --namespace xrproxy \
@@ -91,12 +139,18 @@ jobs:
             --set services.bridge.image.tag=chart-test \
             --wait \
             --timeout 10m
+
           for deployment in $(kubectl -n xrproxy get deployments -o name); do
             kubectl -n xrproxy rollout status "$deployment" --timeout=30s
           done
-          test "$(kubectl -n xrproxy get deployments -o name | wc -l)" -eq 7
-          test "$(kubectl -n xrproxy get services -o name | wc -l)" -eq 7
+
+          # Assert every active manifest service has a Deployment and a Service.
+          active_count=$(node scripts/service-manifest.mjs list --status active --format lines | wc -l)
+          test "$(kubectl -n xrproxy get deployments -o name | wc -l)" -eq "$active_count"
+          test "$(kubectl -n xrproxy get services    -o name | wc -l)" -eq "$active_count"
+
           kubectl -n xrproxy get configmap xrproxy-xrproxy-downstreams
+
           kubectl -n xrproxy run bridge-smoke \
             --image=curlimages/curl:8.16.0 \
             --restart=Never \
