@@ -2,11 +2,9 @@
 
 const { expect } = require('chai');
 const axios = require('axios');
-const { exec, promisify: pify } = require('util');
+const { exec } = require('child_process');
 const path = require('path');
 
-const execPromise = pify(require('util').promisify)(exec);
-// Fall back to built-in promisify
 const execAsync = (...args) => new Promise((resolve, reject) => {
     exec(...args, (err, stdout, stderr) => {
         if (err) reject(Object.assign(err, { stdout, stderr }));
