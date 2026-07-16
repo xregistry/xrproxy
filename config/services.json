@@ -24,6 +24,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "500m",
         "memory": "1Gi"
       }
@@ -51,6 +52,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "250m",
         "memory": "512Mi"
       }
@@ -78,6 +80,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "250m",
         "memory": "512Mi"
       }
@@ -105,6 +108,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "250m",
         "memory": "512Mi"
       }
@@ -132,6 +136,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "250m",
         "memory": "512Mi"
       }
@@ -159,6 +164,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "250m",
         "memory": "512Mi"
       }
@@ -190,6 +196,7 @@
       "deployment": {
         "replicas": 1,
         "healthPath": "/health",
+        "readinessPath": "/ready",
         "cpu": "250m",
         "memory": "512Mi"
       }

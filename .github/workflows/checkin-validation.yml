@@ -13,6 +13,7 @@ on:
       - "mcp/**"
       - "shared/**"
       - "config/**"
+      - "charts/**"
       - "scripts/**"
       - "test/**"
       - "*.Dockerfile"
@@ -31,6 +32,7 @@ on:
       - "mcp/**"
       - "shared/**"
       - "config/**"
+      - "charts/**"
       - "scripts/**"
       - "test/**"
       - "*.Dockerfile"
@@ -58,6 +60,8 @@ jobs:
       - run: npm ci
       - run: npm run services:validate
       - run: npm run test:manifest
+      - run: npm run helm:services:check
+      - run: npm run test:helm-services
       - id: matrix
         run: |
           echo "docker-tests=$(node scripts/service-manifest.mjs matrix docker-tests)" >> "$GITHUB_OUTPUT"

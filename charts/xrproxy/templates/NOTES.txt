@@ -1,0 +1,5 @@
+The xrproxy bridge is available inside the cluster at:
+
+  http://{{ include "xrproxy.serviceName" (dict "root" . "id" "bridge") }}:{{ (index .Values.services "bridge").port }}
+
+Gateway API resources are {{ ternary "enabled" "disabled" .Values.gateway.enabled }}.

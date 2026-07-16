@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "repositoryPrefix", "tag", "pullPolicy", "pullSecrets"],
+      "properties": {
+        "registry": { "type": "string", "minLength": 1 },
+        "repositoryPrefix": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] },
+        "pullSecrets": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              {
+                "type": "object",
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "minLength": 1 } }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create", "name", "annotations"],
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podSecurityContext": { "type": "object" },
+    "containerSecurityContext": { "type": "object" },
+    "probes": {
+      "type": "object",
+      "required": ["startup", "readiness", "liveness"],
+      "additionalProperties": false,
+      "properties": {
+        "startup": { "$ref": "#/definitions/probe" },
+        "readiness": { "$ref": "#/definitions/probe" },
+        "liveness": { "$ref": "#/definitions/probe" }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "sizeLimit"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "sizeLimit": { "type": "string" }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "minAvailable"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "gateway": {
+      "type": "object",
+      "required": ["enabled", "create", "className", "listener", "parentRef", "httpRoute"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "create": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "listener": { "type": "object" },
+        "parentRef": { "type": "object" },
+        "httpRoute": { "type": "object" }
+      }
+    },
+    "certificate": {
+      "type": "object",
+      "required": ["enabled", "issuerRef", "secretName", "dnsNames"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "issuerRef": { "type": "object" },
+        "secretName": { "type": "string" },
+        "dnsNames": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "services": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/definitions/service" }
+    }
+  },
+  "required": ["image", "serviceAccount", "probes", "cache", "pdb", "networkPolicy", "gateway", "certificate", "services"],
+  "definitions": {
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initialDelaySeconds", "periodSeconds", "timeoutSeconds", "failureThreshold"],
+      "properties": {
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "role", "directory", "image", "port", "healthPath", "readinessPath", "replicas", "environment", "resources", "cache", "autoscaling"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "role": { "enum": ["proxy", "bridge"] },
+        "directory": { "type": "string", "minLength": 1 },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "digest"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^(|sha256:[a-f0-9]{64})$" }
+          }
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "healthPath": { "type": "string", "pattern": "^/" },
+        "readinessPath": { "type": "string", "pattern": "^/" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "environment": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
+        "resources": { "type": "object" },
+        "cache": {
+          "type": "object",
+          "required": ["enabled", "mountPath", "sizeLimit"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mountPath": { "type": "string", "pattern": "^/" },
+            "sizeLimit": { "type": "string" }
+          }
+        },
+        "autoscaling": {
+          "type": "object",
+          "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1 },
+            "maxReplicas": { "type": "integer", "minimum": 1 },
+            "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        }
+      }
+    }
+  }
+}

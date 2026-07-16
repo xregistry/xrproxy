@@ -1,0 +1,311 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ghcr.io
+  repositoryPrefix: xregistry/xrproxy
+  tag: latest
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+probes:
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 60
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+
+cache:
+  enabled: true
+  sizeLimit: 2Gi
+
+pdb:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+
+gateway:
+  enabled: false
+  create: false
+  className: ""
+  annotations: {}
+  listener:
+    name: http
+    protocol: HTTP
+    port: null
+    hostname: ""
+    tls:
+      enabled: false
+      certificateSecretName: ""
+  parentRef:
+    name: ""
+    namespace: ""
+    sectionName: ""
+  httpRoute:
+    annotations: {}
+    hostnames: []
+
+certificate:
+  enabled: false
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+    group: cert-manager.io
+  secretName: ""
+  dnsNames: []
+
+# BEGIN GENERATED SERVICES - run: npm run helm:services:generate
+services:
+  npm:
+    enabled: true
+    role: proxy
+    directory: npm
+    image:
+      repository: xregistry-npm-bridge
+      tag: ""
+      digest: ""
+    port: 3100
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3100"
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    cache:
+      enabled: true
+      mountPath: /app/npm/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+  pypi:
+    enabled: true
+    role: proxy
+    directory: pypi
+    image:
+      repository: xregistry-pypi-bridge
+      tag: ""
+      digest: ""
+    port: 3000
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3000"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/pypi/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+  maven:
+    enabled: true
+    role: proxy
+    directory: maven
+    image:
+      repository: xregistry-maven-bridge
+      tag: ""
+      digest: ""
+    port: 3300
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3300"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/maven/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+  nuget:
+    enabled: true
+    role: proxy
+    directory: nuget
+    image:
+      repository: xregistry-nuget-bridge
+      tag: ""
+      digest: ""
+    port: 3200
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3200"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/nuget/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+  oci:
+    enabled: true
+    role: proxy
+    directory: oci
+    image:
+      repository: xregistry-oci-bridge
+      tag: ""
+      digest: ""
+    port: 3400
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3400"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/oci/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+  mcp:
+    enabled: true
+    role: proxy
+    directory: mcp
+    image:
+      repository: xregistry-mcp-bridge
+      tag: ""
+      digest: ""
+    port: 3600
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      XREGISTRY_MCP_HOST: "0.0.0.0"
+      XREGISTRY_MCP_PORT: "3600"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/mcp/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+  bridge:
+    enabled: true
+    role: bridge
+    directory: bridge
+    image:
+      repository: xregistry-bridge
+      tag: ""
+      digest: ""
+    port: 8080
+    healthPath: /health
+    readinessPath: /ready
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
+# END GENERATED SERVICES

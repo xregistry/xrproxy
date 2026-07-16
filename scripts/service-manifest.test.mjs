@@ -45,3 +45,10 @@ test('image and Docker test matrices are derived from active services', () => {
     ['npm', 'pypi', 'maven', 'nuget', 'oci', 'mcp']
   );
 });
+
+test('bridge readiness is stricter than liveness', () => {
+  const manifest = validateManifest(loadManifest());
+  const bridge = manifest.services.find(service => service.id === 'bridge');
+  assert.equal(bridge.deployment.healthPath, '/health');
+  assert.equal(bridge.deployment.readinessPath, '/ready');
+});
