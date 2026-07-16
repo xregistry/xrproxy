@@ -1,0 +1,34 @@
+{
+  "name": "xregistry-pubdev-wrapper",
+  "version": "1.0.0",
+  "description": "xRegistry API wrapper for pub.dev (Dart/Flutter package registry)",
+  "main": "dist/pubdev/src/server.js",
+  "scripts": {
+    "clean": "rimraf dist",
+    "prebuild": "npm run clean",
+    "build": "tsc",
+    "start": "node dist/pubdev/src/server.js",
+    "dev": "nodemon --watch src --ext ts --exec \"npm run build && npm start\"",
+    "type-check": "tsc --noEmit",
+    "test": "node --test dist/pubdev/tests/**/*.test.js",
+    "test:unit": "node --test dist/pubdev/tests/unit/**/*.test.js",
+    "test:contract": "node --test dist/pubdev/tests/contract/**/*.test.js",
+    "prebuild:test": "npm run build"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@xregistry/registry-core": "file:../shared/registry-core",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.1",
+    "nodemon": "^3.1.11",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
