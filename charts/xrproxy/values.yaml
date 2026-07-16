@@ -372,4 +372,35 @@ services:
       minReplicas: 1
       maxReplicas: 3
       targetCPUUtilizationPercentage: 75
+  gomod:
+    enabled: true
+    role: proxy
+    directory: gomod
+    image:
+      repository: xregistry-gomod-proxy
+      tag: ""
+      digest: ""
+    port: 3900
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3900"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/gomod/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
 # END GENERATED SERVICES
