@@ -18,6 +18,11 @@ NC='\033[0m' # No Color
 SERVICE=""
 PARALLEL=false
 
+# Resolve the repository before any manifest-dependent argument validation.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$ROOT_DIR"
+
 # Helper functions
 log_info() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
@@ -51,7 +56,7 @@ Docker Integration Tests for xRegistry Package Registry Services
 Usage: $0 [OPTIONS]
 
 Options:
-    -s, --service SERVICE    Specific service to test (maven, nuget, pypi, oci, npm, mcp)
+    -s, --service SERVICE    Specific active proxy service from config/services.json
     -p, --parallel          Run tests in parallel (default: false)
     -h, --help              Show this help message
 
@@ -69,8 +74,8 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -s|--service)
             SERVICE="$2"
-            if [[ ! "$SERVICE" =~ ^(maven|nuget|pypi|oci|npm|mcp)$ ]]; then
-                log_error "Invalid service: $SERVICE. Valid options: maven, nuget, pypi, oci, npm, mcp"
+            if ! node scripts/service-manifest.mjs list --status active --role proxy --format lines | grep -Fxq "$SERVICE"; then
+                log_error "Invalid or inactive proxy service: $SERVICE"
                 exit 1
             fi
             shift 2
@@ -90,11 +95,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-# Ensure we're in the correct directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-cd "$ROOT_DIR"
 
 log_info "Starting Docker Integration Tests"
 log_gray "Working directory: $(pwd)"
@@ -169,7 +169,17 @@ cleanup() {
     
     # Stop and remove any test containers that might be running
     local test_containers
-    test_containers=$(docker ps -a --filter "name=maven-test-" --filter "name=nuget-test-" --filter "name=pypi-test-" --filter "name=oci-test-" --filter "name=npm-test-" -q 2>/dev/null || true)
+    local service_output
+    if ! service_output=$(node scripts/service-manifest.mjs list --status active --role proxy --format lines) || [[ -z "$service_output" ]]; then
+        log_warning "Unable to discover active services; skipping container cleanup"
+        return
+    fi
+
+    local filters=()
+    while IFS= read -r service; do
+        filters+=(--filter "name=${service}-test-")
+    done <<< "$service_output"
+    test_containers=$(docker ps -a "${filters[@]}" -q 2>/dev/null || true)
     
     if [[ -n "$test_containers" ]]; then
         log_gray "Cleaning up test containers..."
@@ -200,7 +210,12 @@ main() {
     if [[ -n "$SERVICE" ]]; then
         services=("$SERVICE")
     else
-        services=("maven" "nuget" "pypi" "oci" "npm")
+        local service_output
+        if ! service_output=$(node scripts/service-manifest.mjs list --status active --role proxy --format lines) || [[ -z "$service_output" ]]; then
+            log_error "Unable to discover active proxy services"
+            exit 1
+        fi
+        mapfile -t services <<< "$service_output"
     fi
     
     local total_start_time

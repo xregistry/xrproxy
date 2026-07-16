@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "services": [
+    {
+      "id": "npm",
+      "name": "npm Registry",
+      "role": "proxy",
+      "status": "active",
+      "directory": "npm",
+      "port": 3100,
+      "groupTypes": ["noderegistries"],
+      "environment": {
+        "PORT": "3100",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "npm",
+          "name": "xregistry-npm-bridge",
+          "dockerfile": "npm.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/npm-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "500m",
+        "memory": "1Gi"
+      }
+    },
+    {
+      "id": "pypi",
+      "name": "PyPI Registry",
+      "role": "proxy",
+      "status": "active",
+      "directory": "pypi",
+      "port": 3000,
+      "groupTypes": ["pythonregistries"],
+      "environment": {
+        "PORT": "3000",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "pypi",
+          "name": "xregistry-pypi-bridge",
+          "dockerfile": "pypi.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/pypi-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "maven",
+      "name": "Maven Central Registry",
+      "role": "proxy",
+      "status": "active",
+      "directory": "maven",
+      "port": 3300,
+      "groupTypes": ["javaregistries"],
+      "environment": {
+        "PORT": "3300",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "maven",
+          "name": "xregistry-maven-bridge",
+          "dockerfile": "maven.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/maven-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "nuget",
+      "name": "NuGet Registry",
+      "role": "proxy",
+      "status": "active",
+      "directory": "nuget",
+      "port": 3200,
+      "groupTypes": ["dotnetregistries"],
+      "environment": {
+        "PORT": "3200",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "nuget",
+          "name": "xregistry-nuget-bridge",
+          "dockerfile": "nuget.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/nuget-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "oci",
+      "name": "OCI Registry",
+      "role": "proxy",
+      "status": "active",
+      "directory": "oci",
+      "port": 3400,
+      "groupTypes": ["containerregistries"],
+      "environment": {
+        "PORT": "3400",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "oci",
+          "name": "xregistry-oci-bridge",
+          "dockerfile": "oci.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/oci-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "mcp",
+      "name": "MCP Server Registry",
+      "role": "proxy",
+      "status": "active",
+      "directory": "mcp",
+      "port": 3600,
+      "groupTypes": ["mcpproviders"],
+      "environment": {
+        "XREGISTRY_MCP_PORT": "3600",
+        "XREGISTRY_MCP_HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "mcp",
+          "name": "xregistry-mcp-bridge",
+          "dockerfile": "mcp.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/mcp-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "bridge",
+      "name": "Unified xRegistry Bridge",
+      "role": "bridge",
+      "status": "active",
+      "directory": "bridge",
+      "port": 8080,
+      "groupTypes": [],
+      "environment": {
+        "PORT": "8080",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "bridge",
+          "name": "xregistry-bridge",
+          "dockerfile": "bridge.Dockerfile"
+        },
+        {
+          "id": "bridge-viewer",
+          "name": "xregistry-bridge-viewer",
+          "dockerfile": "bridge.Dockerfile.viewer"
+        }
+      ],
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "crates",
+      "name": "crates.io Registry",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "crates",
+      "port": 3700,
+      "groupTypes": ["rustregistries"]
+    },
+    {
+      "id": "terraform",
+      "name": "Terraform Registry",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "terraform",
+      "port": 3800,
+      "groupTypes": ["terraformregistries"]
+    },
+    {
+      "id": "gomod",
+      "name": "Go Module Proxy",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "gomod",
+      "port": 3900,
+      "groupTypes": ["gomoduleregistries"]
+    },
+    {
+      "id": "rubygems",
+      "name": "RubyGems Registry",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "rubygems",
+      "port": 4000,
+      "groupTypes": ["rubyregistries"]
+    },
+    {
+      "id": "packagist",
+      "name": "Packagist Registry",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "packagist",
+      "port": 4100,
+      "groupTypes": ["phpregistries"]
+    },
+    {
+      "id": "pubdev",
+      "name": "pub.dev Registry",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "pubdev",
+      "port": 4200,
+      "groupTypes": ["dartregistries"]
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face Hub",
+      "role": "proxy",
+      "status": "planned",
+      "directory": "huggingface",
+      "port": 4300,
+      "groupTypes": ["machinelearninghubs"]
+    }
+  ]
+}
