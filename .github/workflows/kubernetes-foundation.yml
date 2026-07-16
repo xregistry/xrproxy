@@ -125,22 +125,34 @@ jobs:
         with:
           cluster_name: xrproxy
 
-      - name: Build bridge with readiness endpoint
+      - name: Build and load active fleet images
         run: |
-          docker build \
-            --file bridge.Dockerfile \
-            --tag ghcr.io/xregistry/xrproxy/xregistry-bridge:chart-test \
-            .
-          kind load docker-image \
-            ghcr.io/xregistry/xrproxy/xregistry-bridge:chart-test \
-            --name xrproxy
+          node scripts/service-manifest.mjs matrix images > images.json
+          jq -c '.[] | select(.image != "bridge-viewer")' images.json |
+            while read -r image; do
+              image_name=$(jq -r '.imageName' <<<"$image")
+              dockerfile=$(jq -r '.dockerfile' <<<"$image")
+              reference="ghcr.io/xregistry/xrproxy/${image_name}:chart-test"
+
+              docker build --file "$dockerfile" --tag "$reference" .
+              kind load docker-image "$reference" --name xrproxy
+            done
 
       - name: Install chart into kind and verify readiness
         run: |
+          diagnose() {
+            kubectl -n xrproxy get pods,deployments,services -o wide || true
+            kubectl -n xrproxy get events --sort-by=.lastTimestamp || true
+            kubectl -n xrproxy describe pods || true
+            helm status xrproxy --namespace xrproxy || true
+          }
+          trap diagnose ERR
+
           helm install xrproxy charts/xrproxy \
             --namespace xrproxy \
             --create-namespace \
-            --set services.bridge.image.tag=chart-test \
+            --set image.tag=chart-test \
+            --set image.pullPolicy=Never \
             --wait \
             --timeout 10m
 
