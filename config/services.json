@@ -280,10 +280,29 @@
       "id": "huggingface",
       "name": "Hugging Face Hub",
       "role": "proxy",
-      "status": "planned",
+      "status": "active",
       "directory": "huggingface",
       "port": 4300,
-      "groupTypes": ["machinelearninghubs"]
+      "groupTypes": ["huggingfaceregistries"],
+      "environment": {
+        "PORT": "4300",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "huggingface",
+          "name": "xregistry-huggingface-bridge",
+          "dockerfile": "huggingface.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/huggingface-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/ready",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
     }
   ]
 }

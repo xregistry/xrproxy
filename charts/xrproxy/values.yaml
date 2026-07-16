@@ -341,4 +341,35 @@ services:
       minReplicas: 1
       maxReplicas: 3
       targetCPUUtilizationPercentage: 75
+  huggingface:
+    enabled: true
+    role: proxy
+    directory: huggingface
+    image:
+      repository: xregistry-huggingface-bridge
+      tag: ""
+      digest: ""
+    port: 4300
+    healthPath: /health
+    readinessPath: /ready
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4300"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/huggingface/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
 # END GENERATED SERVICES

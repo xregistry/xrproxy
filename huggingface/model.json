@@ -1,0 +1,150 @@
+{
+  "groups": {
+    "huggingfaceregistries": {
+      "plural": "huggingfaceregistries",
+      "singular": "huggingfaceregistry",
+      "description": "A Hugging Face Hub registry endpoint (e.g., huggingface.co).",
+      "resources": {
+        "models": {
+          "plural": "models",
+          "singular": "model",
+          "description": "A machine learning model hosted on Hugging Face Hub.",
+          "hasdocument": false,
+          "attributes": {
+            "repoid": {
+              "type": "string",
+              "description": "Full Hugging Face repository ID (owner/name or name)."
+            },
+            "author": {
+              "type": "string",
+              "description": "Owner / organisation of the model."
+            },
+            "sha": {
+              "type": "string",
+              "description": "Current HEAD commit SHA (default branch tip)."
+            },
+            "private": {
+              "type": "boolean",
+              "description": "Whether the repository is private."
+            },
+            "gated": {
+              "type": "string",
+              "description": "Gated-access status: false, 'auto', or 'manual'."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total download count (anonymously visible)."
+            },
+            "likes": {
+              "type": "integer",
+              "description": "Like count."
+            },
+            "pipeline_tag": {
+              "type": "string",
+              "description": "Primary ML task pipeline tag."
+            },
+            "library_name": {
+              "type": "string",
+              "description": "Primary ML library (e.g., transformers, diffusers)."
+            },
+            "tags": {
+              "type": "array",
+              "item": { "type": "string" },
+              "description": "Repository tags."
+            },
+            "refs": {
+              "type": "object",
+              "description": "Mutable aliases: branches and tags with their target commit SHAs. Short TTL cache."
+            }
+          }
+        },
+        "datasets": {
+          "plural": "datasets",
+          "singular": "dataset",
+          "description": "A dataset hosted on Hugging Face Hub.",
+          "hasdocument": false,
+          "attributes": {
+            "repoid": {
+              "type": "string",
+              "description": "Full Hugging Face repository ID (owner/name or name)."
+            },
+            "author": {
+              "type": "string",
+              "description": "Owner / organisation of the dataset."
+            },
+            "sha": {
+              "type": "string",
+              "description": "Current HEAD commit SHA (default branch tip)."
+            },
+            "private": {
+              "type": "boolean",
+              "description": "Whether the repository is private."
+            },
+            "gated": {
+              "type": "string",
+              "description": "Gated-access status: false, 'auto', or 'manual'."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total download count (anonymously visible)."
+            },
+            "likes": {
+              "type": "integer",
+              "description": "Like count."
+            },
+            "tags": {
+              "type": "array",
+              "item": { "type": "string" },
+              "description": "Repository tags."
+            },
+            "refs": {
+              "type": "object",
+              "description": "Mutable aliases: branches and tags with their target commit SHAs. Short TTL cache."
+            }
+          }
+        },
+        "spaces": {
+          "plural": "spaces",
+          "singular": "space",
+          "description": "A Hugging Face Space (interactive ML demo application).",
+          "hasdocument": false,
+          "attributes": {
+            "repoid": {
+              "type": "string",
+              "description": "Full Hugging Face repository ID (owner/name)."
+            },
+            "author": {
+              "type": "string",
+              "description": "Owner / organisation of the space."
+            },
+            "sha": {
+              "type": "string",
+              "description": "Current HEAD commit SHA (default branch tip)."
+            },
+            "private": {
+              "type": "boolean",
+              "description": "Whether the space is private."
+            },
+            "sdk": {
+              "type": "string",
+              "description": "Space SDK (gradio, streamlit, docker, static, etc.)."
+            },
+            "likes": {
+              "type": "integer",
+              "description": "Like count."
+            },
+            "tags": {
+              "type": "array",
+              "item": { "type": "string" },
+              "description": "Repository tags."
+            },
+            "refs": {
+              "type": "object",
+              "description": "Mutable aliases: branches and tags with their target commit SHAs. Short TTL cache."
+            }
+          }
+        }
+      }
+    }
+  }
+}

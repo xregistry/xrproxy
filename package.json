@@ -26,6 +26,7 @@
     "build:oci": "node scripts/service-manifest.mjs run build --service oci",
     "build:mcp": "node scripts/service-manifest.mjs run build --service mcp",
     "build:crates": "node scripts/service-manifest.mjs run build --service crates",
+    "build:huggingface": "node scripts/service-manifest.mjs run build --service huggingface",
     "build:bridge": "node scripts/service-manifest.mjs run build --service bridge",
     "build:minimal": "npm install && cd test && npm install && cd ..",
     "start": "node server.js",
@@ -37,6 +38,7 @@
     "start:oci": "cd oci && npm start",
     "start:mcp": "cd mcp && npm start",
     "start:crates": "cd crates && npm start",
+    "start:huggingface": "cd huggingface && npm start",
     "start:bridge": "cd bridge && npm start",
     "dev": "node server.js --enable=pypi",
     "test": "npm run test:standalone",
@@ -50,6 +52,7 @@
     "test:oci:server": "npm run build:oci && cd test && npm run test:oci",
     "test:mcp:server": "npm run build:mcp && cd mcp && npm test",
     "test:crates:server": "npm run build:crates && cd crates && npm test",
+    "test:huggingface:server": "npm run build:huggingface && cd test && npm run test:huggingface",
     "test:docker": "npm run test:integration:docker && npm run test:integration:bridge",
     "test:install": "npm run build:minimal",
     "test:npm": "npm run build:npm && cd test && npm run test:npm",
@@ -69,7 +72,10 @@
     "docker:run": "docker run -p 3000:3000 --rm xregistry-unified",
     "docker:test": "bash test-docker.sh",
     "docker:compose": "docker-compose up unified",
-    "docker:compose:dev": "docker-compose up pypi npm"
+    "docker:compose:dev": "docker-compose up pypi npm",
+    "build:huggingface": "node scripts/service-manifest.mjs run build --service huggingface",
+    "start:huggingface": "cd huggingface && npm start",
+    "test:huggingface:server": "npm run build:huggingface && cd test && npm run test:huggingface"
   },
   "keywords": [
     "xregistry",
