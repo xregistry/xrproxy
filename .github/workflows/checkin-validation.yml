@@ -60,6 +60,7 @@ jobs:
       - run: npm ci
       - run: npm run services:validate
       - run: npm run test:manifest
+      - run: npm run test:compose-services
       - run: npm run helm:services:check
       - run: npm run test:helm-services
       - id: matrix

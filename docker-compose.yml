@@ -9,7 +9,7 @@ services:
     environment:
       - NODE_ENV=production
       - BRIDGE_PORT=8080
-      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3000","apikey":"npm-api-key"},{"url":"http://pypi:3100","apikey":"pypi-api-key"},{"url":"http://maven:3200","apikey":"maven-api-key"},{"url":"http://nuget:3300","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
+      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
     volumes:
       - ./logs/bridge:/app/logs
       - ./cache:/app/cache
@@ -34,16 +34,16 @@ services:
       context: .
       dockerfile: maven.Dockerfile
     ports:
-      - "3200:3200"
+      - "3300:3300"
     environment:
       - NODE_ENV=production
-      - PORT=3200
+      - PORT=3300
     volumes:
       - ./logs/maven:/app/logs
       - ./maven/cache:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3200/"]
+      test: ["CMD", "curl", "-f", "http://localhost:3300/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -55,10 +55,10 @@ services:
       context: .
       dockerfile: npm.Dockerfile
     ports:
-      - "3000:3000"
+      - "3100:3100"
     environment:
       - NODE_ENV=production
-      - PORT=3000
+      - PORT=3100
       - HOST=0.0.0.0
     volumes:
       - ./logs/npm:/app/logs
@@ -66,7 +66,7 @@ services:
       - ./npm/all-packages:/app/all-packages
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:3100/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -78,16 +78,16 @@ services:
       context: .
       dockerfile: pypi.Dockerfile
     ports:
-      - "3100:3100"
+      - "3000:3000"
     environment:
       - NODE_ENV=production
-      - PORT=3100
+      - PORT=3000
     volumes:
       - ./logs/pypi:/app/logs
       - ./pypi/cache:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3100/"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -99,16 +99,16 @@ services:
       context: .
       dockerfile: nuget.Dockerfile
     ports:
-      - "3300:3300"
+      - "3200:3200"
     environment:
       - NODE_ENV=production
-      - PORT=3300
+      - PORT=3200
     volumes:
       - ./logs/nuget:/app/logs
       - ./nuget/cache:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3300/"]
+      test: ["CMD", "curl", "-f", "http://localhost:3200/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -170,7 +170,7 @@ services:
   #     - VIEWER_ENABLED=true
   #     - VIEWER_PROXY_ENABLED=true
   #     - API_PATH_PREFIX=/registry
-  #     - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3000","apikey":"npm-api-key"},{"url":"http://pypi:3100","apikey":"pypi-api-key"},{"url":"http://maven:3200","apikey":"maven-api-key"},{"url":"http://nuget:3300","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
+  #     - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
   #   volumes:
   #     - ./logs/bridge:/app/logs
   #     - ./cache:/app/cache
