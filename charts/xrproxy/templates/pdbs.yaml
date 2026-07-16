@@ -1,0 +1,19 @@
+{{- if .Values.pdb.enabled }}
+{{- range $id, $service := .Values.services }}
+{{- if $service.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "xrproxy.serviceName" (dict "root" $ "id" $id) }}
+  labels:
+    {{- include "xrproxy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $id }}
+spec:
+  minAvailable: {{ $.Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "xrproxy.selectorLabels" (dict "root" $ "id" $id) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

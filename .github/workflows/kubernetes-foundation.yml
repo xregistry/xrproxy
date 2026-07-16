@@ -1,0 +1,107 @@
+name: Kubernetes Foundation
+
+on:
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "charts/**"
+      - "config/services.json"
+      - "package.json"
+      - "scripts/service-manifest.mjs"
+      - "scripts/helm-services.mjs"
+      - "scripts/helm-services.test.mjs"
+      - ".github/workflows/kubernetes-foundation.yml"
+  pull_request:
+    branches: ["main", "develop"]
+    paths:
+      - "charts/**"
+      - "config/services.json"
+      - "package.json"
+      - "scripts/service-manifest.mjs"
+      - "scripts/helm-services.mjs"
+      - "scripts/helm-services.test.mjs"
+      - ".github/workflows/kubernetes-foundation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    name: Helm lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - run: npm run helm:services:check
+      - run: npm run test:helm-services
+      - run: helm lint charts/xrproxy --strict
+      - run: helm template xrproxy charts/xrproxy --namespace xrproxy > rendered.yaml
+      - name: Verify long release names keep service resources unique
+        run: |
+          release=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          helm template "$release" charts/xrproxy --namespace xrproxy > rendered-long-name.yaml
+          test "$(
+            grep -E '^  name: .+-(npm|nuget|maven|mcp)$' rendered-long-name.yaml |
+              sort -u |
+              wc -l
+          )" -eq 4
+      - name: Render optional Gateway API resources
+        run: |
+          helm template xrproxy charts/xrproxy \
+            --namespace xrproxy \
+            --set gateway.enabled=true \
+            --set gateway.create=true \
+            --set gateway.className=example \
+            --set gateway.listener.hostname=packages.example.com \
+            --set-json 'gateway.httpRoute.hostnames=["packages.example.com"]' \
+            > rendered-gateway.yaml
+
+  kind-api-smoke:
+    name: kind API smoke
+    needs: helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: xrproxy
+      - name: Build bridge with readiness endpoint
+        run: |
+          docker build \
+            --file bridge.Dockerfile \
+            --tag ghcr.io/xregistry/xrproxy/xregistry-bridge:chart-test \
+            .
+          kind load docker-image \
+            ghcr.io/xregistry/xrproxy/xregistry-bridge:chart-test \
+            --name xrproxy
+      - name: Install chart into kind
+        run: |
+          helm install xrproxy charts/xrproxy \
+            --namespace xrproxy \
+            --create-namespace \
+            --set services.bridge.image.tag=chart-test \
+            --wait \
+            --timeout 10m
+          for deployment in $(kubectl -n xrproxy get deployments -o name); do
+            kubectl -n xrproxy rollout status "$deployment" --timeout=30s
+          done
+          test "$(kubectl -n xrproxy get deployments -o name | wc -l)" -eq 7
+          test "$(kubectl -n xrproxy get services -o name | wc -l)" -eq 7
+          kubectl -n xrproxy get configmap xrproxy-xrproxy-downstreams
+          kubectl -n xrproxy run bridge-smoke \
+            --image=curlimages/curl:8.16.0 \
+            --restart=Never \
+            --rm \
+            --attach \
+            --command -- \
+            curl --fail --silent --show-error \
+            http://xrproxy-xrproxy-bridge:8080/ready

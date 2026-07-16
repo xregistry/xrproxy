@@ -1,0 +1,34 @@
+{{- if and .Values.gateway.enabled .Values.gateway.create }}
+{{- if not .Values.gateway.className }}
+{{- fail "gateway.className is required when gateway.create=true" }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "xrproxy.fullname" . }}
+  labels:
+    {{- include "xrproxy.labels" . | nindent 4 }}
+  {{- with .Values.gateway.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  gatewayClassName: {{ .Values.gateway.className }}
+  listeners:
+    - name: {{ .Values.gateway.listener.name }}
+      protocol: {{ ternary "HTTPS" .Values.gateway.listener.protocol .Values.gateway.listener.tls.enabled }}
+      port: {{ default (ternary 443 80 .Values.gateway.listener.tls.enabled) .Values.gateway.listener.port }}
+      {{- with .Values.gateway.listener.hostname }}
+      hostname: {{ . | quote }}
+      {{- end }}
+      {{- if .Values.gateway.listener.tls.enabled }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ required "gateway.listener.tls.certificateSecretName is required when TLS is enabled" .Values.gateway.listener.tls.certificateSecretName }}
+      {{- end }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+{{- end }}

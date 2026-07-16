@@ -132,6 +132,7 @@ describe("Maven Docker Integration Tests", function () {
       `docker run -d --name ${containerName} -p ${serverPort}:3300 ` +
         `-e PORT=3300 ` +
         `-e HOST=0.0.0.0 ` +
+        `-e MAVEN_USE_TEST_INDEX=true ` +
         `maven-test-image:latest`
     );
 
