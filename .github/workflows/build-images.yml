@@ -17,6 +17,7 @@ on:
       - "gomod/**"
       - "rubygems/**"
       - "packagist/**"
+      - "terraform/**"
       - "viewer/**"
       - "shared/**"
       - "config/services.json"

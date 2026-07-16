@@ -1,0 +1,12 @@
+{
+  "modules": [
+    {
+      "source": "terraform-aws-modules/vpc/aws",
+      "versions": [
+        { "version": "5.1.0" },
+        { "version": "5.0.0" },
+        { "version": "4.0.0" }
+      ]
+    }
+  ]
+}

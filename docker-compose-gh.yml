@@ -13,7 +13,7 @@ services:
       - VIEWER_PATH=/app/bridge/viewer/dist/xregistry-viewer
       - VIEWER_PROXY_ENABLED=true
       - API_PATH_PREFIX=/registry
-      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"},{"url":"http://huggingface:4300"},{"url":"http://gomod:3900","apikey":"gomod-api-key"},{"url":"http://rubygems:4000","apikey":"rubygems-api-key"},{"url":"http://packagist:4100","apikey":"packagist-api-key"}]}
+      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"},{"url":"http://huggingface:4300"},{"url":"http://gomod:3900","apikey":"gomod-api-key"},{"url":"http://terraform:3800","apikey":"terraform-api-key"},{"url":"http://rubygems:4000","apikey":"rubygems-api-key"},{"url":"http://packagist:4100","apikey":"packagist-api-key"}]}
     restart: unless-stopped
     depends_on:
       - npm
@@ -25,6 +25,7 @@ services:
       - crates
       - huggingface
       - gomod
+      - terraform
       - rubygems
       - packagist
     healthcheck:
@@ -216,6 +217,23 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Terraform Registry
+  terraform:
+    image: ghcr.io/xregistry/xrproxy/xregistry-terraform-bridge:latest
+    ports:
+      - "3800:3800"
+    environment:
+      - NODE_ENV=production
+      - PORT=3800
+      - HOST=0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3800/health"]
       interval: 30s
       timeout: 10s
       retries: 3

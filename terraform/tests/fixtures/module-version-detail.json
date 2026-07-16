@@ -1,0 +1,13 @@
+{
+  "id": "terraform-aws-modules/vpc/aws/5.1.0",
+  "owner": "terraform-aws-modules",
+  "namespace": "terraform-aws-modules",
+  "name": "vpc",
+  "provider": "aws",
+  "provider_logo_url": "",
+  "description": "Terraform module which creates VPC resources on AWS",
+  "source": "https://github.com/terraform-aws-modules/terraform-aws-vpc",
+  "published_at": "2023-06-12T10:00:00Z",
+  "downloads": 50000000,
+  "verified": true
+}

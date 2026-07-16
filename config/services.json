@@ -249,12 +249,31 @@
       "id": "terraform",
       "name": "Terraform Registry",
       "role": "proxy",
-      "status": "planned",
+      "status": "active",
       "directory": "terraform",
       "port": 3800,
       "groupTypes": [
         "terraformregistries"
-      ]
+      ],
+      "environment": {
+        "PORT": "3800",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "terraform",
+          "name": "xregistry-terraform-bridge",
+          "dockerfile": "terraform.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/terraform-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
     },
     {
       "id": "rubygems",

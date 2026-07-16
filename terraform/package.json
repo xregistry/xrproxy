@@ -1,0 +1,46 @@
+{
+  "name": "xregistry-terraform-wrapper",
+  "version": "1.0.0",
+  "description": "xRegistry API wrapper for the Terraform Registry (providers and modules)",
+  "main": "dist/terraform/src/server.js",
+  "scripts": {
+    "clean": "rimraf dist",
+    "prebuild": "npm run clean",
+    "build": "tsc",
+    "prestart": "npm run build",
+    "start": "node dist/terraform/src/server.js",
+    "dev": "nodemon --watch src --ext ts --exec \"npm run build && npm start\"",
+    "type-check": "tsc --noEmit",
+    "test": "jest --testPathPattern=tests/ --forceExit",
+    "test:watch": "jest --watch --testPathPattern=tests/ --forceExit",
+    "test:coverage": "jest --coverage --testPathPattern=tests/ --forceExit"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@xregistry/registry-core": "file:../shared/registry-core",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.0",
+    "jest": "^29.7.0",
+    "rimraf": "^5.0.5",
+    "ts-jest": "^29.4.0",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.ts"],
+    "collectCoverageFrom": ["src/**/*.ts"],
+    "coverageDirectory": "coverage",
+    "transform": {
+      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+    }
+  }
+}

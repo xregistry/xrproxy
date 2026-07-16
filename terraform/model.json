@@ -1,0 +1,113 @@
+{
+  "groups": {
+    "terraformregistries": {
+      "description": "A group representing a Terraform registry provider (e.g., registry.terraform.io).",
+      "plural": "terraformregistries",
+      "singular": "terraformregistry",
+      "resources": {
+        "providers": {
+          "description": "A Terraform provider. The resource ID is encoded as namespace~type (e.g., hashicorp~aws).",
+          "plural": "providers",
+          "singular": "provider",
+          "hasdocument": false,
+          "attributes": {
+            "namespace": {
+              "type": "string",
+              "description": "The namespace (owner) of the provider on the Terraform Registry (e.g., hashicorp)."
+            },
+            "type": {
+              "type": "string",
+              "description": "The type identifier of the provider (e.g., aws)."
+            },
+            "source": {
+              "type": "string",
+              "description": "Fully-qualified provider source address (namespace/type)."
+            },
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of the provider."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total cumulative download count from the Terraform Registry."
+            },
+            "tier": {
+              "type": "string",
+              "description": "Provider tier: official, partner, or community."
+            },
+            "logo_url": {
+              "type": "string",
+              "description": "URL to the provider's logo image."
+            },
+            "categories": {
+              "type": "array",
+              "item": { "type": "string" },
+              "description": "Categories that describe the provider's purpose."
+            },
+            "featured": {
+              "type": "boolean",
+              "description": "Whether the provider is featured on the Terraform Registry."
+            },
+            "unlisted": {
+              "type": "boolean",
+              "description": "Whether the provider is unlisted on the Terraform Registry."
+            },
+            "warning": {
+              "type": "string",
+              "description": "Optional deprecation or warning message from the registry."
+            },
+            "aliases": {
+              "type": "array",
+              "item": { "type": "string" },
+              "description": "Alternate source addresses for this provider."
+            }
+          }
+        },
+        "modules": {
+          "description": "A Terraform module. The resource ID is encoded as namespace~name~provider (e.g., hashicorp~consul~aws).",
+          "plural": "modules",
+          "singular": "module",
+          "hasdocument": false,
+          "attributes": {
+            "namespace": {
+              "type": "string",
+              "description": "The namespace (owner) of the module on the Terraform Registry."
+            },
+            "name": {
+              "type": "string",
+              "description": "The module name (e.g., consul)."
+            },
+            "provider": {
+              "type": "string",
+              "description": "The provider system this module targets (e.g., aws)."
+            },
+            "source": {
+              "type": "string",
+              "description": "Fully-qualified module source address (namespace/name/provider)."
+            },
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of the module."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total cumulative download count from the Terraform Registry."
+            },
+            "verified": {
+              "type": "boolean",
+              "description": "Whether the module is verified by HashiCorp."
+            },
+            "trusted": {
+              "type": "boolean",
+              "description": "Whether the module publisher is trusted."
+            },
+            "owner": {
+              "type": "string",
+              "description": "GitHub username or organisation that owns the module repository."
+            }
+          }
+        }
+      }
+    }
+  }
+}
