@@ -26,5 +26,5 @@
     }
   },
   "include": ["src/**/*", "../shared/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "../shared/registry-core/**/*", "**/*.test.ts"]
 }

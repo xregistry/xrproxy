@@ -76,6 +76,21 @@ jobs:
       - run: npm ci
       - run: npm run test:integration
 
+  registry-core:
+    name: Registry Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            shared/registry-core/package-lock.json
+      - run: npm run ci:registry-core
+
   docker-integration-tests:
     name: Docker Integration Tests (${{ matrix.service }})
     needs: [service-matrix, unit-tests]
@@ -186,6 +201,7 @@ jobs:
     needs:
       - service-matrix
       - unit-tests
+      - registry-core
       - docker-integration-tests
       - bridge-integration-tests
       - code-quality
@@ -196,12 +212,13 @@ jobs:
         env:
           SERVICE_MATRIX: ${{ needs.service-matrix.result }}
           UNIT_TESTS: ${{ needs.unit-tests.result }}
+          REGISTRY_CORE: ${{ needs.registry-core.result }}
           DOCKER_TESTS: ${{ needs.docker-integration-tests.result }}
           BRIDGE_TESTS: ${{ needs.bridge-integration-tests.result }}
           CODE_QUALITY: ${{ needs.code-quality.result }}
           DOCKERFILES: ${{ needs.dockerfile-validation.result }}
         run: |
-          for result in "$SERVICE_MATRIX" "$UNIT_TESTS" "$DOCKER_TESTS" "$BRIDGE_TESTS" "$CODE_QUALITY" "$DOCKERFILES"; do
+          for result in "$SERVICE_MATRIX" "$UNIT_TESTS" "$REGISTRY_CORE" "$DOCKER_TESTS" "$BRIDGE_TESTS" "$CODE_QUALITY" "$DOCKERFILES"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more validation jobs failed or were skipped"
               exit 1
