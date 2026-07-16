@@ -1,0 +1,114 @@
+{{- range $id, $service := .Values.services }}
+{{- if $service.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "xrproxy.serviceName" (dict "root" $ "id" $id) }}
+  labels:
+    {{- include "xrproxy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $id }}
+spec:
+  {{- if not $service.autoscaling.enabled }}
+  replicas: {{ $service.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "xrproxy.selectorLabels" (dict "root" $ "id" $id) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "xrproxy.selectorLabels" (dict "root" $ "id" $id) | nindent 8 }}
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $.Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "xrproxy.serviceAccountName" $ }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      {{- with $.Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ if kindIs "string" . }}{{ . }}{{ else }}{{ .name }}{{ end }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ $id }}
+          image: {{ include "xrproxy.image" (dict "root" $ "service" $service) | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $service.port }}
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: production
+            {{- range $name, $value := $service.environment }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- if eq $service.role "bridge" }}
+            - name: BRIDGE_CONFIG_FILE
+              value: /etc/xrproxy/downstreams.json
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ $service.healthPath }}
+              port: http
+            {{- toYaml $.Values.probes.startup | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ $service.readinessPath }}
+              port: http
+            {{- toYaml $.Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ $service.healthPath }}
+              port: http
+            {{- toYaml $.Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $service.resources | nindent 12 }}
+          volumeMounts:
+            {{- if and $.Values.cache.enabled $service.cache.enabled }}
+            - name: cache
+              mountPath: {{ $service.cache.mountPath }}
+            {{- end }}
+            {{- if eq $service.role "bridge" }}
+            - name: downstreams
+              mountPath: /etc/xrproxy/downstreams.json
+              subPath: downstreams.json
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- if and $.Values.cache.enabled $service.cache.enabled }}
+        - name: cache
+          emptyDir:
+            {{- $sizeLimit := default $.Values.cache.sizeLimit $service.cache.sizeLimit }}
+            {{- if $sizeLimit }}
+            sizeLimit: {{ $sizeLimit }}
+            {{- end }}
+        {{- end }}
+        {{- if eq $service.role "bridge" }}
+        - name: downstreams
+          configMap:
+            name: {{ include "xrproxy.fullname" $ }}-downstreams
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- end }}

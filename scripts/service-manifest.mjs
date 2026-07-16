@@ -22,6 +22,12 @@ function requireString(value, field) {
   }
 }
 
+function requirePositiveInteger(value, field) {
+  if (!Number.isInteger(value) || value < 1) {
+    fail(`${field} must be a positive integer`);
+  }
+}
+
 export function validateManifest(manifest = loadManifest()) {
   if (manifest.schemaVersion !== 1) {
     fail(`Unsupported service manifest schemaVersion: ${manifest.schemaVersion}`);
@@ -101,9 +107,32 @@ export function validateManifest(manifest = loadManifest()) {
       }
     }
 
+    if (!service.environment || typeof service.environment !== 'object' || Array.isArray(service.environment)) {
+      fail(`${service.id}.environment must be an object`);
+    }
+    for (const [name, value] of Object.entries(service.environment)) {
+      requireString(name, `${service.id}.environment key`);
+      if (!['string', 'number', 'boolean'].includes(typeof value)) {
+        fail(`${service.id}.environment.${name} must be a string, number, or boolean`);
+      }
+    }
+
+    if (!service.deployment || typeof service.deployment !== 'object' || Array.isArray(service.deployment)) {
+      fail(`${service.id}.deployment must be an object`);
+    }
+    requirePositiveInteger(service.deployment.replicas, `${service.id}.deployment.replicas`);
+    requireString(service.deployment.healthPath, `${service.id}.deployment.healthPath`);
+    if (!service.deployment.healthPath.startsWith('/')) {
+      fail(`${service.id}.deployment.healthPath must start with /`);
+    }
+    requireString(service.deployment.cpu, `${service.id}.deployment.cpu`);
+    requireString(service.deployment.memory, `${service.id}.deployment.memory`);
+
     if (!Array.isArray(service.images) || service.images.length === 0) {
       fail(`${service.id}.images must be a non-empty array`);
     }
+    requireString(service.deployment?.healthPath, `${service.id}.deployment.healthPath`);
+    requireString(service.deployment?.readinessPath, `${service.id}.deployment.readinessPath`);
     for (const image of service.images) {
       requireString(image.id, `${service.id}.images[].id`);
       requireString(image.name, `${service.id}.images[].name`);

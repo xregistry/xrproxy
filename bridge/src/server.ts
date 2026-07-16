@@ -176,6 +176,13 @@ app.get('/health', async (_req: Request, res: Response) => {
     res.status(200).json(health);
 });
 
+// Readiness is stricter than liveness: do not accept traffic until at least
+// one downstream has initialized and contributed routes to the bridge.
+app.get('/ready', async (_req: Request, res: Response) => {
+    const health = await healthService.getHealth();
+    res.status(health.status === 'healthy' ? 200 : 503).json(health);
+});
+
 // Mount xRegistry static routes with optional path prefix
 const xregistryRoutes = createXRegistryRoutes(
     modelService,
