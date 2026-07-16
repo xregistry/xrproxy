@@ -1,10 +1,10 @@
 # xRegistry Bridge
 
-A modular TypeScript-based xRegistry bridge that aggregates multiple downstream package registries into a unified xRegistry endpoint. The bridge provides resilient startup, health monitoring, and automatic failover for downstream services.
+A modular TypeScript-based xRegistry bridge that aggregates multiple downstream metadata registries into a unified xRegistry endpoint. The bridge provides resilient startup, health monitoring, and automatic failover for downstream services.
 
 ## 🚀 Features
 
-- **Multi-Registry Support**: Proxies requests to NPM, PyPI, Maven, NuGet, OCI, and MCP registries
+- **Multi-Registry Support**: Discovers and proxies arbitrary xRegistry group types, including multi-group backends
 - **Resilient Startup**: Gracefully handles unavailable downstream servers with configurable retry logic
 - **TypeScript**: Fully typed codebase with strict TypeScript configuration
 - **Security**: Built-in authentication, CORS, and security headers
@@ -33,7 +33,15 @@ The bridge uses a service-oriented architecture:
 ### Routes
 
 - **xRegistry Routes**: Static endpoints (/, /model, /capabilities, /health, /status)
-- **Dynamic Proxy Routes**: Automatically created for each available group type, proxying to downstream servers
+- **Dynamic Proxy Routes**: Dispatches each currently available group type to its owning downstream server
+
+### Consolidation behavior
+
+- A downstream may advertise multiple group types. Routes are activated and removed as downstream models change.
+- A group type advertised by multiple active downstreams is disabled instead of selecting an arbitrary winner. The collision appears in `/health` and `/status`; bridge health is `degraded` while unaffected groups remain available.
+- Root collection counts are included only when a downstream root response provides an exact non-negative safe integer. Unknown, estimated, and partial counts are omitted.
+- Failed inline collection expansion preserves the requested collection key as an empty object and adds an HTTP `Warning` header.
+- Encoded identifiers remain intact through proxy routing, including resource and version IDs that contain `/`.
 
 ## 📦 Prerequisites
 
