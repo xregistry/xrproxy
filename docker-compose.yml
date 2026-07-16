@@ -9,7 +9,7 @@ services:
     environment:
       - NODE_ENV=production
       - BRIDGE_PORT=8080
-      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
+      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"}]}
     volumes:
       - ./logs/bridge:/app/logs
       - ./cache:/app/cache
@@ -21,6 +21,7 @@ services:
       - nuget
       - oci
       - mcp
+      - crates
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -155,6 +156,30 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  # Crates.io Service
+  crates:
+    build:
+      context: .
+      dockerfile: crates.Dockerfile
+    ports:
+      - "3700:3700"
+    environment:
+      - NODE_ENV=production
+      - PORT=3700
+      - HOST=0.0.0.0
+      - UPSTREAM_URL=https://crates.io
+      - CACHE_DIR=/app/crates/cache
+    volumes:
+      - ./logs/crates:/app/logs
+      - ./crates/cache:/app/crates/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3700/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # Bridge with Viewer - Optional service with integrated viewer UI
   # Uncomment to run bridge with viewer instead of standard bridge

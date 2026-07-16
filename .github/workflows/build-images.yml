@@ -12,6 +12,7 @@ on:
       - "nuget/**"
       - "oci/**"
       - "mcp/**"
+      - "crates/**"
       - "viewer/**"
       - "shared/**"
       - "config/services.json"

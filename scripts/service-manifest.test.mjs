@@ -13,12 +13,12 @@ test('the committed service manifest is valid', () => {
   assert.equal(manifest.schemaVersion, 1);
 });
 
-test('active proxy services include MCP and use unique ports', () => {
+test('active proxy services include MCP and crates, and use unique ports', () => {
   const manifest = validateManifest(loadManifest());
   const proxies = selectServices(manifest, { status: 'active', role: 'proxy' });
   assert.deepEqual(
     proxies.map(service => service.id),
-    ['npm', 'pypi', 'maven', 'nuget', 'oci', 'mcp']
+    ['npm', 'pypi', 'maven', 'nuget', 'oci', 'mcp', 'crates']
   );
   assert.equal(new Set(proxies.map(service => service.port)).size, proxies.length);
 });
@@ -28,9 +28,9 @@ test('planned first-wave services have reserved ports and group types', () => {
   const planned = selectServices(manifest, { status: 'planned', role: 'proxy' });
   assert.deepEqual(
     planned.map(service => service.id),
-    ['crates', 'terraform', 'gomod', 'rubygems', 'packagist', 'pubdev', 'huggingface']
+    ['terraform', 'gomod', 'rubygems', 'packagist', 'pubdev', 'huggingface']
   );
-  assert.equal(new Set(planned.flatMap(service => service.groupTypes)).size, 7);
+  assert.equal(new Set(planned.flatMap(service => service.groupTypes)).size, 6);
 });
 
 test('image and Docker test matrices are derived from active services', () => {
@@ -38,11 +38,11 @@ test('image and Docker test matrices are derived from active services', () => {
   const images = createMatrix(manifest, 'images');
   const dockerTests = createMatrix(manifest, 'docker-tests');
 
-  assert.equal(images.length, 8);
+  assert.equal(images.length, 9); // npm, pypi, maven, nuget, oci, mcp, crates, bridge, bridge-viewer
   assert.ok(images.some(image => image.image === 'bridge-viewer'));
   assert.deepEqual(
     dockerTests.map(entry => entry.service),
-    ['npm', 'pypi', 'maven', 'nuget', 'oci', 'mcp']
+    ['npm', 'pypi', 'maven', 'nuget', 'oci', 'mcp', 'crates']
   );
 });
 

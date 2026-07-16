@@ -1,0 +1,85 @@
+{
+  "groups": {
+    "rustregistries": {
+      "plural": "rustregistries",
+      "singular": "rustregistry",
+      "description": "Rust package registry provider (e.g., crates.io).",
+      "resources": {
+        "crates": {
+          "plural": "crates",
+          "singular": "crate",
+          "description": "A Rust crate (library or binary) published to the registry.",
+          "hasdocument": false,
+          "attributes": {
+            "name": {
+              "type": "string",
+              "description": "The canonical name of the crate."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short description of the crate."
+            },
+            "homepage": {
+              "type": "string",
+              "description": "The homepage URL for the crate."
+            },
+            "repository": {
+              "type": "string",
+              "description": "The source repository URL for the crate."
+            },
+            "documentation": {
+              "type": "string",
+              "description": "The documentation URL for the crate."
+            },
+            "categories": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "Category slugs that the crate belongs to."
+            },
+            "keywords": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "Keywords that describe the crate."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total all-time download count for the crate."
+            },
+            "recent_downloads": {
+              "type": "integer",
+              "description": "Recent (last 90 days) download count for the crate."
+            },
+            "max_version": {
+              "type": "string",
+              "description": "The highest semver version published for this crate."
+            },
+            "max_stable_version": {
+              "type": "string",
+              "description": "The highest stable (non-pre-release) version published for this crate."
+            },
+            "newest_version": {
+              "type": "string",
+              "description": "The most recently published version of this crate."
+            },
+            "yanked": {
+              "type": "boolean",
+              "description": "Whether the latest version of the crate has been yanked."
+            },
+            "license": {
+              "type": "string",
+              "description": "The SPDX license identifier(s) for the crate."
+            },
+            "links": {
+              "type": "object",
+              "description": "Hypermedia links for related crates.io resources."
+            }
+          }
+        }
+      }
+    }
+  }
+}
