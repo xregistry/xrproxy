@@ -1,0 +1,70 @@
+﻿# EKS non-production example — copy to terraform.tfvars and fill in values.
+
+cluster_name       = "xrproxy-dev"
+environment        = "dev"
+region             = "us-east-1"
+kubernetes_version = "1.31"
+
+system_node_pool = {
+  vm_size   = "m6i.large"
+  min_count = 2
+  max_count = 4
+}
+
+workload_node_pool = {
+  vm_size   = "m6i.xlarge"
+  min_count = 1
+  max_count = 4
+}
+
+network = {
+  vpc_cidr           = "10.0.0.0/16"
+  node_subnet_cidr   = "10.0.0.0/22"
+  pod_cidr           = "10.244.0.0/16"
+  service_cidr       = "10.96.0.0/16"
+  dns_service_ip     = "10.96.0.10"
+  availability_zones = []
+}
+
+oci_registry = {
+  name = "xrproxy-dev"
+}
+
+workload_identity = {
+  enabled    = true
+  namespaces = ["default", "flux-system"]
+}
+
+static_egress = {
+  enabled  = false
+  single_az_nat = false  # true = one NAT total (dev/cost-saving only, not for prod)
+}
+
+dns = {
+  enabled   = false
+  zone_name = ""
+}
+
+certificates = {
+  enabled        = true
+  acme_email     = "platform@example.com"
+  acme_server    = "https://acme-staging-v02.api.letsencrypt.org/directory"
+  cluster_issuer = "letsencrypt-staging"
+}
+
+observability = {
+  enabled   = true
+  namespace = "monitoring"
+}
+
+flux = {
+  enabled    = false
+  git_url    = ""
+  git_branch = "main"
+  git_path   = "clusters/dev"
+}
+
+tags = {
+  environment = "dev"
+  team        = "platform"
+}

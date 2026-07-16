@@ -1,0 +1,73 @@
+﻿# AKS non-production example — copy this to terraform.tfvars and fill in values.
+# Run: tofu init && tofu plan -var-file=terraform.tfvars
+
+cluster_name       = "xrproxy-dev"
+environment        = "dev"
+region             = "eastus"
+kubernetes_version = "1.31"
+
+system_node_pool = {
+  vm_size   = "Standard_D2ds_v5"
+  min_count = 2
+  max_count = 4
+}
+
+workload_node_pool = {
+  vm_size   = "Standard_D4ds_v5"
+  min_count = 1
+  max_count = 4
+}
+
+network = {
+  vpc_cidr           = "10.0.0.0/16"
+  node_subnet_cidr   = "10.0.0.0/22"
+  pod_cidr           = "10.244.0.0/16"
+  service_cidr       = "10.96.0.0/16"
+  dns_service_ip     = "10.96.0.10"
+  availability_zones = ["1", "2", "3"]
+}
+
+oci_registry = {
+  name = "xrproxydevacr"
+  sku  = "standard"
+}
+
+workload_identity = {
+  enabled    = true
+  namespaces = ["default", "flux-system"]
+}
+
+static_egress = {
+  enabled  = false
+  ip_count = 1
+}
+
+dns = {
+  enabled   = false
+  zone_name = ""
+}
+
+certificates = {
+  enabled        = true
+  acme_email     = "platform@example.com"
+  acme_server    = "https://acme-staging-v02.api.letsencrypt.org/directory"
+  cluster_issuer = "letsencrypt-staging"
+}
+
+observability = {
+  enabled   = true
+  namespace = "monitoring"
+}
+
+flux = {
+  enabled    = false
+  git_url    = ""
+  git_branch = "main"
+  git_path   = "clusters/dev"
+}
+
+tags = {
+  environment  = "dev"
+  team         = "platform"
+  cost-center  = "infra-dev"
+}
