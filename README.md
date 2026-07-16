@@ -151,10 +151,10 @@ curl http://localhost:8080/capabilities
 The project uses a bridge architecture where:
 
 1. **Individual Registry Services** run on separate ports:
-   - NPM: 3000
-   - PyPI: 3100
-   - Maven: 3200
-   - NuGet: 3300
+   - NPM: 3100
+   - PyPI: 3000
+   - Maven: 3300
+   - NuGet: 3200
    - OCI: 3400
    - MCP: 3600
 
@@ -174,7 +174,7 @@ curl http://localhost:8080/
 
 # Check all registries are merged
 curl http://localhost:8080/model | jq '.groups | keys'
-# Should return: ["containerregistries", "dotnetregistries", "javaregistries", "noderegistries", "pythonregistries"]
+# Should return: ["containerregistries", "dotnetregistries", "javaregistries", "mcpproviders", "noderegistries", "pythonregistries"]
 ```
 
 ## 🐳 Docker Deployment
@@ -285,18 +285,24 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 ### Development Quick Start
 
 ```bash
-# Set up development environment
-npm install
+# Validate the canonical service inventory
+npm ci
+npm run services:validate
 
-# Start services for development
-cd test/integration
-node run-docker-integration-tests.js
+# List active services
+npm run services:list
 
-# In another terminal, start bridge
-cd bridge
+# Build one service or the complete active inventory
+npm run build:mcp
 npm run build
-PORT=8080 node dist/proxy.js
 ```
+
+`config/services.json` is the source of truth for service IDs, ports, group
+types, images, Dockerfiles, integration tests, and initial deployment
+resources. Add a planned entry there before creating a new proxy, then change
+its status to `active` only when its implementation, image, and deterministic
+Docker integration test are present. CI derives its Docker test and image
+build matrices from this manifest.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed development documentation.
 
