@@ -166,8 +166,10 @@ export async function startFixtureServer(routes: readonly FixtureRoute[]): Promi
       return requests;
     },
     close: async () => {
+      const closed = once(server, 'close');
       server.close();
-      await once(server, 'close');
+      server.closeAllConnections();
+      await closed;
     }
   };
 }

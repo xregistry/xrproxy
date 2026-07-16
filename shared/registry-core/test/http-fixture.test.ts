@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Agent, get } from 'node:http';
 import test from 'node:test';
 import { HttpUpstreamClient, startFixtureServer, UpstreamError } from '../src';
 
@@ -90,6 +91,27 @@ test('fixture routes provide deterministic response sequences and request captur
     assert.equal(fixture.requests[0]?.headers['x-test'], 'yes');
   } finally {
     await fixture.close();
+  }
+});
+
+test('fixture shutdown closes persistent connections promptly', async () => {
+  const fixture = await startFixtureServer([{
+    path: '/keep-alive',
+    responses: [{ body: { ok: true } }]
+  }]);
+  const agent = new Agent({ keepAlive: true });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      get(`${fixture.url}/keep-alive`, { agent }, response => {
+        response.resume();
+        response.once('end', resolve);
+      }).once('error', reject);
+    });
+    const started = Date.now();
+    await fixture.close();
+    assert.ok(Date.now() - started < 1_000);
+  } finally {
+    agent.destroy();
   }
 });
 

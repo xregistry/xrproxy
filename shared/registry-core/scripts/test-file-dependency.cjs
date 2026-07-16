@@ -31,7 +31,7 @@ try {
     throw install.error;
   }
   if (install.status !== 0) {
-    process.exit(install.status ?? 1);
+    throw new Error(`npm install exited with status ${install.status ?? 1}`);
   }
   if (!existsSync(dist)) {
     throw new Error('file: install did not run the registry-core prepare build');
@@ -42,8 +42,11 @@ try {
     cwd: consumer,
     stdio: 'inherit'
   });
+  if (smoke.error) {
+    throw smoke.error;
+  }
   if (smoke.status !== 0) {
-    process.exit(smoke.status ?? 1);
+    throw new Error(`file dependency smoke test exited with status ${smoke.status ?? 1}`);
   }
 } finally {
   rmSync(consumer, { recursive: true, force: true });
