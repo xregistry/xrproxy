@@ -1,0 +1,82 @@
+name: Upstream Smoke Tests
+
+# Live upstream smoke tests are non-blocking: they run on a schedule and on
+# demand only — never on push or pull_request — so a transient outage of an
+# external registry (npm.js.org, pypi.org, …) cannot gate a PR.
+#
+# The kind cluster API smoke (which tests only our own bridge/chart, not live
+# upstreams) lives in kubernetes-foundation.yml and IS a required PR/push gate.
+on:
+  schedule:
+    # Every Monday at 05:00 UTC
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  live-upstream-probes:
+    name: Live upstream endpoint probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # continue-on-error: a real-upstream outage must never cause this scheduled
+    # workflow to be marked as a failure that could affect PR branch protection.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build all proxy services
+        run: node scripts/service-manifest.mjs run build
+
+      - name: Start proxy services and wait for readiness
+        run: |
+          for svc in $(node scripts/service-manifest.mjs list --status active --role proxy --format lines); do
+            port=$(node -e "
+              const m = JSON.parse(require('fs').readFileSync('config/services.json'));
+              const s = m.services.find(s => s.id === '$svc');
+              console.log(s.port);
+            ")
+            node "$svc/dist/server.js" &
+            echo "Started $svc on port $port (PID $!)"
+          done
+          sleep 5
+
+      - name: Probe each service health endpoint
+        run: |
+          node -e "
+            const m = JSON.parse(require('fs').readFileSync('config/services.json'));
+            const active = m.services.filter(s => s.status === 'active' && s.role === 'proxy');
+            const http = require('http');
+            let failures = 0;
+            const checks = active.map(s => new Promise(resolve => {
+              const req = http.get(
+                { hostname: '127.0.0.1', port: s.port, path: s.deployment.healthPath, timeout: 5000 },
+                res => {
+                  if (res.statusCode < 500) {
+                    console.log('  PASS', s.id, s.deployment.healthPath, '->', res.statusCode);
+                  } else {
+                    console.error('  FAIL', s.id, '->', res.statusCode);
+                    failures++;
+                  }
+                  resolve();
+                },
+              );
+              req.on('error', err => {
+                console.error('  FAIL', s.id, '->', err.message);
+                failures++;
+                resolve();
+              });
+            }));
+            Promise.all(checks).then(() => process.exit(failures > 0 ? 1 : 0));
+          "

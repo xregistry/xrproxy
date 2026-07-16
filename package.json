@@ -16,6 +16,8 @@
     "helm:services:generate": "node scripts/helm-services.mjs generate",
     "helm:services:check": "node scripts/helm-services.mjs check",
     "test:helm-services": "node --test scripts/helm-services.test.mjs",
+    "ci:drift:check": "node scripts/ci-drift-check.mjs",
+    "test:ci-drift": "node --test scripts/ci-drift-check.test.mjs",
     "build": "node scripts/service-manifest.mjs run build",
     "build:npm": "node scripts/service-manifest.mjs run build --service npm",
     "build:pypi": "node scripts/service-manifest.mjs run build --service pypi",
