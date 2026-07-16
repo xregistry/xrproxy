@@ -57,12 +57,6 @@ function notFound(id: string, kind: string): UpstreamError {
   return new UpstreamError({ code: 'not_found', message: `${kind} not found: ${id}` });
 }
 
-function requireParam(params: Record<string, string | undefined>, name: string): string {
-  const value = params[name];
-  if (value === undefined || value === '') throw notFound(name, 'param');
-  return value;
-}
-
 export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
   readonly ttlMs: number;
   readonly negativeTtlMs: number;
@@ -288,7 +282,3 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
   // Error handler must come last
   app.use(handleError);
 }
-
-// Suppress unused import warning
-void requireParam;
-
