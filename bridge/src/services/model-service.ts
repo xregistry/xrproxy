@@ -4,12 +4,19 @@
  */
 
 import { incrementBridgeEpoch } from '../config/constants';
-import { ConsolidatedCapabilities, ConsolidatedModel, DownstreamConfig, ServerState } from '../types/bridge';
+import {
+    ConsolidatedCapabilities,
+    ConsolidatedModel,
+    DownstreamConfig,
+    GroupCollision,
+    ServerState
+} from '../types/bridge';
 
 export class ModelService {
     private consolidatedModel: ConsolidatedModel = {};
     private consolidatedCapabilities: ConsolidatedCapabilities = {};
     private groupTypeToBackend: Record<string, DownstreamConfig> = {};
+    private groupCollisions: GroupCollision[] = [];
 
     constructor(private readonly logger: any) { }
 
@@ -55,68 +62,82 @@ export class ModelService {
         return this.groupTypeToBackend[groupType];
     }
 
+    getGroupCollisions(): GroupCollision[] {
+        return this.groupCollisions.map(collision => ({
+            groupType: collision.groupType,
+            servers: [...collision.servers]
+        }));
+    }
+
     /**
      * Rebuild consolidated model from active servers
      */
     rebuildConsolidatedModel(serverStates: Map<string, ServerState>): boolean {
-        const previousGroups = Object.keys(this.groupTypeToBackend);
+        const previousGroups = Object.keys(this.groupTypeToBackend).sort();
+        const previousCollisions = JSON.stringify(this.groupCollisions);
 
         // Reset consolidated state
         this.consolidatedModel = {};
         this.consolidatedCapabilities = {};
         this.groupTypeToBackend = {};
+        this.groupCollisions = [];
 
-        // Rebuild from active servers
-        for (const [url, state] of serverStates) {
-            if (state.isActive && state.model && state.capabilities) {
-                const { model, capabilities } = state;
+        const activeStates = Array.from(serverStates.entries())
+            .filter(([, state]) => state.isActive && state.model && state.capabilities)
+            .sort(([left], [right]) => left.localeCompare(right));
 
-                // Merge models - merge groups instead of overwriting
-                if (model.groups) {
-                    if (!this.consolidatedModel.groups) {
-                        this.consolidatedModel.groups = {};
-                    }
-                    this.consolidatedModel.groups = {
-                        ...this.consolidatedModel.groups,
-                        ...model.groups
-                    };
-                }
+        const groupCandidates = new Map<string, Array<{ url: string; state: ServerState; definition: any }>>();
 
-                // Merge other model properties
-                this.consolidatedModel = {
-                    ...this.consolidatedModel,
-                    ...model,
-                    groups: this.consolidatedModel.groups // Preserve merged groups
-                };
+        for (const [url, state] of activeStates) {
+            const { model, capabilities } = state;
 
-                this.consolidatedCapabilities = {
-                    ...this.consolidatedCapabilities,
-                    ...capabilities
-                };
+            // Preserve deterministic non-group model metadata. Group definitions
+            // are assembled separately so a duplicate can never silently win.
+            const { groups: _groups, ...modelMetadata } = model;
+            this.consolidatedModel = {
+                ...this.consolidatedModel,
+                ...modelMetadata
+            };
+            this.consolidatedCapabilities = {
+                ...this.consolidatedCapabilities,
+                ...capabilities
+            };
 
-                // Update group mappings
-                if (model.groups) {
-                    for (const groupType of Object.keys(model.groups)) {
-                        if (this.groupTypeToBackend[groupType]) {
-                            this.logger.warn('Group type collision detected', {
-                                groupType,
-                                existingServer: this.groupTypeToBackend[groupType].url,
-                                newServer: url
-                            });
-                        }
-                        this.groupTypeToBackend[groupType] = state.server;
-                    }
-                }
+            for (const [groupType, definition] of Object.entries(model.groups || {})) {
+                const candidates = groupCandidates.get(groupType) || [];
+                candidates.push({ url, state, definition });
+                groupCandidates.set(groupType, candidates);
             }
         }
 
-        const currentGroups = Object.keys(this.groupTypeToBackend);
+        const consolidatedGroups: Record<string, any> = {};
+        for (const groupType of Array.from(groupCandidates.keys()).sort()) {
+            const candidates = groupCandidates.get(groupType)!;
+            if (candidates.length !== 1) {
+                const servers = candidates.map(candidate => candidate.url).sort();
+                this.groupCollisions.push({ groupType, servers });
+                this.logger.error('Group type collision detected; group disabled', {
+                    groupType,
+                    servers
+                });
+                continue;
+            }
+
+            const candidate = candidates[0];
+            consolidatedGroups[groupType] = candidate.definition;
+            this.groupTypeToBackend[groupType] = candidate.state.server;
+        }
+        this.consolidatedModel.groups = consolidatedGroups;
+
+        const currentGroups = Object.keys(this.groupTypeToBackend).sort();
         const hasChanges = previousGroups.length !== currentGroups.length ||
-            !previousGroups.every(group => currentGroups.includes(group));
+            !previousGroups.every((group, index) => group === currentGroups[index]) ||
+            previousCollisions !== JSON.stringify(this.groupCollisions);
 
         if (hasChanges) {
             this.logger.info('Consolidated model updated', {
                 availableGroups: currentGroups,
+                collisions: this.groupCollisions,
                 activeServers: Array.from(serverStates.values())
                     .filter(s => s.isActive)
                     .map(s => s.server.url)

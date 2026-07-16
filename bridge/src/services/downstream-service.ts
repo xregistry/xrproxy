@@ -129,13 +129,6 @@ export class DownstreamService {
                 correlationId: headers['x-correlation-id']
             });
 
-            // Merge root response data into model data to capture counts
-            Object.keys(rootResponse.data)
-                .filter(key => key.endsWith('count'))
-                .forEach(countKey => {
-                    modelData[countKey] = rootResponse.data[countKey];
-                });
-
             return {
                 model: modelData,
                 capabilities: capabilitiesData,
@@ -193,6 +186,7 @@ export class DownstreamService {
             state.isActive = true;
             state.model = result.model;
             state.capabilities = result.capabilities;
+            state.rootResponse = result.rootResponse;
             state.error = undefined;
             state.consecutiveFailures = 0;
 
@@ -207,6 +201,7 @@ export class DownstreamService {
             // Only deactivate if it was previously active
             if (state.isActive) {
                 state.isActive = false;
+                state.rootResponse = undefined;
                 this.logger.warn('Server deactivated', {
                     url,
                     error: state.error,

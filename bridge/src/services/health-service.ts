@@ -39,14 +39,21 @@ export class HealthService {
 
         const serverHealth = await Promise.all(healthChecks);
         const hasActiveServers = this.downstreamService.getActiveServers().length > 0;
+        const groupCollisions = this.modelService.getGroupCollisions();
+        const status = !hasActiveServers
+            ? 'unhealthy'
+            : groupCollisions.length > 0
+                ? 'degraded'
+                : 'healthy';
 
         return {
-            status: hasActiveServers ? 'healthy' : 'unhealthy',
+            status,
             timestamp: new Date().toISOString(),
             activeServers: this.downstreamService.getActiveServers().length,
             totalServers: serverStates.size,
             downstreams: serverHealth,
             consolidatedGroups: Object.keys(groupTypeToBackend),
+            groupCollisions,
             retryInterval: RETRY_INTERVAL
         };
     }
@@ -76,6 +83,7 @@ export class HealthService {
                 acc[groupType] = groupTypeToBackend[groupType].url;
                 return acc;
             }, {} as Record<string, string>),
+            groupCollisions: this.modelService.getGroupCollisions(),
             configuration: {
                 startupWaitTime: parseInt(process.env['STARTUP_WAIT_TIME'] || '60000'),
                 retryInterval: RETRY_INTERVAL,
