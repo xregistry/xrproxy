@@ -4,8 +4,7 @@
   "description": "xRegistry proxy for the Go Module ecosystem, using the GOPROXY protocol for exact lookup and the Go index for discovery",
   "main": "dist/gomod/src/server.js",
   "scripts": {
-    "build": "tsc && npm run copy:shared",
-    "copy:shared": "node -e \"require('fs').cpSync('../shared/filter', 'dist/shared/filter', { recursive: true })\"",
+    "build": "tsc",
     "build:watch": "tsc --watch",
     "start": "node dist/gomod/src/server.js",
     "start:dev": "ts-node src/server.ts",
