@@ -19,6 +19,7 @@ on:
       - "*.Dockerfile"
       - "package.json"
       - "package-lock.json"
+      - ".github/workflows/build-images.yml"
       - ".github/workflows/checkin-validation.yml"
   pull_request:
     branches: ["main", "develop"]
@@ -38,6 +39,7 @@ on:
       - "*.Dockerfile"
       - "package.json"
       - "package-lock.json"
+      - ".github/workflows/build-images.yml"
       - ".github/workflows/checkin-validation.yml"
   workflow_dispatch:
 
