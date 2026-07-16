@@ -1,0 +1,36 @@
+{
+  "name": "xregistry-crates-wrapper",
+  "version": "1.0.0",
+  "description": "xRegistry API wrapper for crates.io (Rust package registry)",
+  "main": "dist/src/server.js",
+  "types": "dist/src/server.d.ts",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
+    "start": "node dist/src/server.js",
+    "start:dev": "node --require ts-node/register src/server.ts",
+    "test": "node --test \"dist/test/**/*.test.js\"",
+    "test:build": "tsc -p tsconfig.test.json",
+    "test:run": "npm run test:build && npm test"
+  },
+  "dependencies": {
+    "@xregistry/registry-core": "file:../shared/registry-core",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^20.19.0",
+    "rimraf": "^5.0.10",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "xregistry",
+    "crates",
+    "rust",
+    "package-registry"
+  ],
+  "license": "MIT"
+}

@@ -205,10 +205,31 @@
       "id": "crates",
       "name": "crates.io Registry",
       "role": "proxy",
-      "status": "planned",
+      "status": "active",
       "directory": "crates",
       "port": 3700,
-      "groupTypes": ["rustregistries"]
+      "groupTypes": ["rustregistries"],
+      "environment": {
+        "PORT": "3700",
+        "HOST": "0.0.0.0",
+        "UPSTREAM_URL": "https://crates.io",
+        "CACHE_DIR": "/app/crates/cache"
+      },
+      "images": [
+        {
+          "id": "crates",
+          "name": "xregistry-crates-bridge",
+          "dockerfile": "crates.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/crates-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/ready",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
     },
     {
       "id": "terraform",

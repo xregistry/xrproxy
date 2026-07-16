@@ -13,7 +13,7 @@ services:
       - VIEWER_PATH=/app/bridge/viewer/dist/xregistry-viewer
       - VIEWER_PROXY_ENABLED=true
       - API_PATH_PREFIX=/registry
-      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
+      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"}]}
     restart: unless-stopped
     depends_on:
       - npm
@@ -22,6 +22,7 @@ services:
       - nuget
       - oci
       - mcp
+      - crates
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -121,6 +122,25 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3600/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Crates.io Service
+  crates:
+    image: ghcr.io/xregistry/xrproxy/xregistry-crates-bridge:latest
+    ports:
+      - "3700:3700"
+    environment:
+      - NODE_ENV=production
+      - PORT=3700
+      - HOST=0.0.0.0
+      - UPSTREAM_URL=https://crates.io
+      - CACHE_DIR=/app/crates/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3700/health"]
       interval: 30s
       timeout: 10s
       retries: 3

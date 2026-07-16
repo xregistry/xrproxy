@@ -308,4 +308,37 @@ services:
       minReplicas: 1
       maxReplicas: 3
       targetCPUUtilizationPercentage: 75
+  crates:
+    enabled: true
+    role: proxy
+    directory: crates
+    image:
+      repository: xregistry-crates-bridge
+      tag: ""
+      digest: ""
+    port: 3700
+    healthPath: /health
+    readinessPath: /ready
+    replicas: 1
+    environment:
+      CACHE_DIR: "/app/crates/cache"
+      HOST: "0.0.0.0"
+      PORT: "3700"
+      UPSTREAM_URL: "https://crates.io"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/crates/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
 # END GENERATED SERVICES
