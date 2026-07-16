@@ -241,15 +241,6 @@
       "groupTypes": ["terraformregistries"]
     },
     {
-      "id": "gomod",
-      "name": "Go Module Proxy",
-      "role": "proxy",
-      "status": "planned",
-      "directory": "gomod",
-      "port": 3900,
-      "groupTypes": ["gomoduleregistries"]
-    },
-    {
       "id": "rubygems",
       "name": "RubyGems Registry",
       "role": "proxy",
@@ -300,6 +291,34 @@
         "replicas": 1,
         "healthPath": "/health",
         "readinessPath": "/ready",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
+    },
+    {
+      "id": "gomod",
+      "name": "Go Module Proxy",
+      "role": "proxy",
+      "status": "active",
+      "directory": "gomod",
+      "port": 3900,
+      "groupTypes": ["goregistries"],
+      "environment": {
+        "PORT": "3900",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "gomod",
+          "name": "xregistry-gomod-proxy",
+          "dockerfile": "gomod.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/gomod-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/health",
         "cpu": "250m",
         "memory": "512Mi"
       }

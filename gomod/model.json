@@ -1,0 +1,67 @@
+{
+  "groups": {
+    "goregistries": {
+      "description": "A Go module registry provider (e.g., proxy.golang.org).",
+      "plural": "goregistries",
+      "singular": "goregistry",
+      "resources": {
+        "modules": {
+          "description": "A Go module available in the registry, including its metadata and published versions.",
+          "plural": "modules",
+          "singular": "module",
+          "hasdocument": false,
+          "attributes": {
+            "name": {
+              "type": "string",
+              "description": "The canonical module path (e.g. github.com/pkg/errors)."
+            },
+            "latest_version": {
+              "type": "string",
+              "description": "The latest known version of this module."
+            },
+            "repository": {
+              "type": "string",
+              "description": "VCS repository URL inferred from the module path."
+            },
+            "info_url": {
+              "type": "string",
+              "description": "GOPROXY .info endpoint URL for the latest version."
+            },
+            "mod_url": {
+              "type": "string",
+              "description": "GOPROXY .mod endpoint URL for the latest version."
+            },
+            "zip_url": {
+              "type": "string",
+              "description": "GOPROXY .zip endpoint URL for the latest version."
+            },
+            "gomod_hash": {
+              "type": "string",
+              "description": "Hash of the go.mod file (from Go checksum database)."
+            },
+            "zip_hash": {
+              "type": "string",
+              "description": "Hash of the module zip file (from Go checksum database)."
+            },
+            "pseudo_version": {
+              "type": "boolean",
+              "description": "Whether this version is a pseudo-version (e.g. v0.0.0-20210101000000-abcdef012345)."
+            },
+            "pre_release": {
+              "type": "boolean",
+              "description": "Whether this is a pre-release version."
+            },
+            "retracted": {
+              "type": "boolean",
+              "description": "Whether this version has been retracted."
+            },
+            "retract_rationale": {
+              "type": "string",
+              "description": "Rationale for retraction if the version has been retracted."
+            }
+          }
+        }
+      }
+    }
+  }
+}

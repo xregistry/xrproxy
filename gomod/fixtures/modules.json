@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic test fixtures for the Go Module xRegistry proxy. These entries are used in unit and integration tests and do not change between runs.",
+  "modules": [
+    {
+      "path": "github.com/pkg/errors",
+      "version": "v0.9.1",
+      "timestamp": "2020-01-14T15:33:02Z",
+      "infoResponse": {
+        "Version": "v0.9.1",
+        "Time": "2020-01-14T15:33:02Z"
+      },
+      "gomod": "module github.com/pkg/errors\n\ngo 1.12\n"
+    },
+    {
+      "path": "github.com/gorilla/mux",
+      "version": "v1.8.1",
+      "timestamp": "2023-05-10T12:00:00Z",
+      "infoResponse": {
+        "Version": "v1.8.1",
+        "Time": "2023-05-10T12:00:00Z"
+      },
+      "gomod": "module github.com/gorilla/mux\n\ngo 1.20\n"
+    },
+    {
+      "path": "github.com/BurntSushi/toml",
+      "escapedPath": "github.com/!burnt!sushi/toml",
+      "version": "v1.3.2",
+      "timestamp": "2023-06-08T00:00:00Z",
+      "infoResponse": {
+        "Version": "v1.3.2",
+        "Time": "2023-06-08T00:00:00Z"
+      },
+      "gomod": "module github.com/BurntSushi/toml\n\ngo 1.18\n"
+    },
+    {
+      "path": "golang.org/x/net",
+      "version": "v0.0.0-20210405180319-a5a99cb37ef4",
+      "timestamp": "2021-04-05T18:03:19Z",
+      "isPseudoVersion": true,
+      "infoResponse": {
+        "Version": "v0.0.0-20210405180319-a5a99cb37ef4",
+        "Time": "2021-04-05T18:03:19Z"
+      },
+      "gomod": "module golang.org/x/net\n\ngo 1.17\n"
+    }
+  ]
+}

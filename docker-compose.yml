@@ -9,7 +9,7 @@ services:
     environment:
       - NODE_ENV=production
       - BRIDGE_PORT=8080
-      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"},{"url":"http://huggingface:4300"}]}
+      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"},{"url":"http://huggingface:4300"},{"url":"http://gomod:3900","apikey":"gomod-api-key"}]}
     volumes:
       - ./logs/bridge:/app/logs
       - ./cache:/app/cache
@@ -23,6 +23,7 @@ services:
       - mcp
       - crates
       - huggingface
+      - gomod
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -199,6 +200,28 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4300/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Go Module Proxy Service
+  gomod:
+    build:
+      context: .
+      dockerfile: gomod.Dockerfile
+    ports:
+      - "3900:3900"
+    environment:
+      - NODE_ENV=production
+      - PORT=3900
+      - HOST=0.0.0.0
+    volumes:
+      - ./logs/gomod:/app/logs
+      - ./gomod/cache:/app/gomod/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3900/health"]
       interval: 30s
       timeout: 10s
       retries: 3

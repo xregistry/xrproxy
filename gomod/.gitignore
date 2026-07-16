@@ -1,0 +1,8 @@
+dist/
+node_modules/
+cache/*.json
+logs/
+*.log
+*.tgz
+coverage/
+.nyc_output/

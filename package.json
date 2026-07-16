@@ -27,6 +27,7 @@
     "build:mcp": "node scripts/service-manifest.mjs run build --service mcp",
     "build:crates": "node scripts/service-manifest.mjs run build --service crates",
     "build:huggingface": "node scripts/service-manifest.mjs run build --service huggingface",
+    "build:gomod": "node scripts/service-manifest.mjs run build --service gomod",
     "build:bridge": "node scripts/service-manifest.mjs run build --service bridge",
     "build:minimal": "npm install && cd test && npm install && cd ..",
     "start": "node server.js",
@@ -73,8 +74,8 @@
     "docker:test": "bash test-docker.sh",
     "docker:compose": "docker-compose up unified",
     "docker:compose:dev": "docker-compose up pypi npm",
-    "build:huggingface": "node scripts/service-manifest.mjs run build --service huggingface",
     "start:huggingface": "cd huggingface && npm start",
+    "start:gomod": "cd gomod && npm start",
     "test:huggingface:server": "npm run build:huggingface && cd test && npm run test:huggingface"
   },
   "keywords": [
