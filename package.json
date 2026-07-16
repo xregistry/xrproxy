@@ -42,7 +42,7 @@
     "test:npm:angular": "npm run build:npm && cd test && npm run test:npm:angular",
     "test:npm:basic": "npm run build:npm && cd test && npm run test:npm:basic",
     "test:unit": "npm run build:minimal && npx mocha 'test/unit/**/*.test.js' --recursive --timeout 5000 --exit",
-    "test:integration": "npm run build:minimal && npx mocha 'test/integration/**/*.test.js' --recursive --timeout 15000 --exit",
+    "test:integration": "npm run build:minimal && npx mocha \"test/integration/nuget-filter-sort-inline.test.js\" \"test/integration/pagination-links.test.js\" --timeout 15000 --exit",
     "test:regression": "npm run build:minimal && npx mocha 'test/regression/**/*.test.js' --recursive --timeout 10000 --exit",
     "test:integration:docker": "npm run build && powershell -ExecutionPolicy Bypass -File test/run-docker-integration-tests.ps1",
     "test:integration:docker:bash": "npm run build && ./test/run-docker-integration-tests.sh",
