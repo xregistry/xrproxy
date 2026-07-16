@@ -4,6 +4,8 @@ jspm_packages/
 dist/
 tmp/
 **/dist
+shared/registry-core/.test-cache/
+shared/registry-core/.file-consumer-test/
 
 # Viewer build output (submodule itself is tracked)
 viewer/dist/

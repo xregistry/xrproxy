@@ -42,5 +42,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*", "../shared/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "../shared/registry-core/**/*", "**/*.test.ts", "**/*.spec.ts"]
 }
