@@ -25,6 +25,7 @@ network = {
   service_cidr       = "10.96.0.0/16"
   dns_service_ip     = "10.96.0.10"
   availability_zones = ["1", "2", "3"]
+  data_plane         = "azure" # Use "cilium" for production (required); test the in-place migration first.
 }
 
 oci_registry = {
@@ -70,4 +71,19 @@ tags = {
   environment  = "dev"
   team         = "platform"
   cost-center  = "infra-dev"
+}
+
+cluster_access = {
+  private_cluster_enabled = false
+  authorized_ip_ranges    = [] # Set to ["<corp-cidr>"] for prod, or private_cluster_enabled = true
+}
+
+azure_policy = {
+  enabled = false # Set true for production to enforce admission controls
+}
+
+key_vault_secrets_store = {
+  enabled           = false # Set true when workloads mount Key Vault secrets
+  rotation_enabled  = true
+  rotation_interval = "2m"
 }

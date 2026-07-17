@@ -52,6 +52,7 @@ variable "network" {
     service_cidr       = optional(string, "10.96.0.0/16")
     dns_service_ip     = optional(string, "10.96.0.10")
     availability_zones = optional(list(string), ["1", "2", "3"])
+    data_plane         = optional(string, "azure")
   })
   default = {}
 }
@@ -120,4 +121,28 @@ variable "flux" {
 variable "tags" {
   type    = map(string)
   default = { environment = "dev", team = "platform" }
+}
+
+variable "cluster_access" {
+  type = object({
+    private_cluster_enabled = optional(bool, false)
+    authorized_ip_ranges    = optional(list(string), [])
+  })
+  default = {}
+}
+
+variable "azure_policy" {
+  type = object({
+    enabled = optional(bool, false)
+  })
+  default = {}
+}
+
+variable "key_vault_secrets_store" {
+  type = object({
+    enabled           = optional(bool, false)
+    rotation_enabled  = optional(bool, true)
+    rotation_interval = optional(string, "2m")
+  })
+  default = {}
 }
