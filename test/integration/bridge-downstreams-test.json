@@ -1,11 +1,11 @@
 {
   "servers": [
     {
-      "url": "http://npm-registry:3000",
+      "url": "http://npm-registry:3100",
       "apiKey": "npm-api-key-test-123"
     },
     {
-      "url": "http://pypi-registry:3100",
+      "url": "http://pypi-registry:3000",
       "apiKey": "pypi-api-key-test-123"
     },
     {
@@ -19,6 +19,10 @@
     {
       "url": "http://oci-registry:3400",
       "apiKey": "oci-api-key-test-123"
+    },
+    {
+      "url": "http://terraform-registry:3800",
+      "apiKey": "terraform-api-key-test-123"
     }
   ]
 }

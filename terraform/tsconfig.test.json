@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "jest"],
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitReturns": false
+  },
+  "include": ["src/**/*", "tests/**/*", "../shared/**/*.ts"],
+  "exclude": ["node_modules", "dist", "../shared/registry-core/**/*"]
+}

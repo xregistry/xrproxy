@@ -1,0 +1,21 @@
+{
+  "protocols": ["5.0"],
+  "os": "linux",
+  "arch": "amd64",
+  "filename": "terraform-provider-aws_5.0.0_linux_amd64.zip",
+  "download_url": "https://releases.hashicorp.com/terraform-provider-aws/5.0.0/terraform-provider-aws_5.0.0_linux_amd64.zip",
+  "shasums_url": "https://releases.hashicorp.com/terraform-provider-aws/5.0.0/terraform-provider-aws_5.0.0_SHA256SUMS",
+  "shasums_signature_url": "https://releases.hashicorp.com/terraform-provider-aws/5.0.0/terraform-provider-aws_5.0.0_SHA256SUMS.sig",
+  "shasum": "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+  "signing_keys": {
+    "gpg_public_keys": [
+      {
+        "key_id": "34365D9472D7468F",
+        "ascii_armor": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        "trust_signature": "",
+        "source": "HashiCorp",
+        "source_url": "https://www.hashicorp.com/security.html"
+      }
+    ]
+  }
+}
