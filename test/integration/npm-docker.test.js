@@ -105,7 +105,7 @@ describe("NPM Docker Integration Tests", function () {
   };
 
   before(async function () {
-    this.timeout(180000); // 3 minutes for build
+    this.timeout(420000); // Allow cold CI image builds plus readiness polling.
 
     // Generate unique container name and random port
     containerName = `npm-test-${Date.now()}-${Math.floor(

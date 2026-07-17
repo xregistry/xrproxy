@@ -148,11 +148,22 @@ jobs:
           }
           trap diagnose ERR
 
+          # The single-node CI cluster validates wiring, not production sizing.
+          # Keep chart defaults intact while fitting the complete fleet on kind.
+          resource_overrides=()
+          while read -r service; do
+            resource_overrides+=(
+              --set "services.${service}.resources.requests.cpu=10m"
+              --set "services.${service}.resources.requests.memory=64Mi"
+            )
+          done < <(node scripts/service-manifest.mjs list --status active --format lines)
+
           helm install xrproxy charts/xrproxy \
             --namespace xrproxy \
             --create-namespace \
             --set image.tag=chart-test \
             --set image.pullPolicy=Never \
+            "${resource_overrides[@]}" \
             --wait \
             --timeout 10m
 

@@ -42,12 +42,20 @@ jobs:
       - name: Start proxy services and wait for readiness
         run: |
           for svc in $(node scripts/service-manifest.mjs list --status active --role proxy --format lines); do
-            port=$(node -e "
-              const m = JSON.parse(require('fs').readFileSync('config/services.json'));
-              const s = m.services.find(s => s.id === '$svc');
-              console.log(s.port);
+            # Read the canonical port and environment for this service from the manifest.
+            port=$(node -p "require('./config/services.json').services.find(s => s.id === '$svc').port")
+            # Export every environment variable declared in the service manifest entry
+            # so that the service's own npm start script picks up PORT, HOST, etc.
+            eval $(node -p "
+              const s = require('./config/services.json').services.find(x => x.id === '$svc');
+              Object.entries(s.environment || {})
+                .map(([k, v]) => 'export ' + k + '=' + JSON.stringify(String(v)))
+                .join('; ')
             ")
-            node "$svc/dist/server.js" &
+            # Invoke each service through its own package.json start script rather
+            # than hard-coding the compiled entry-point path (which differs across
+            # services: dist/server.js, dist/src/server.js, dist/<dir>/src/server.js).
+            npm start --prefix "$svc" &
             echo "Started $svc on port $port (PID $!)"
           done
           sleep 5
