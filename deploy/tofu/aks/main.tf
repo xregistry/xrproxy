@@ -16,6 +16,8 @@
 #       Test the rollout in non-production before applying it to production.
 #   • Standard tier cluster (prod) / Free (dev).
 #   • OIDC + Entra Workload Identity: no static secrets in pods.
+#   • Distinct UserAssigned control-plane identity with Managed Identity
+#     Operator permission over the kubelet identity.
 #   • Explicit UserAssigned kubelet identity: deterministic ACR pull IAM.
 #   • cluster_access: private cluster or authorized IP ranges enforced for prod
 #     via lifecycle precondition — public unrestricted endpoint is rejected.
@@ -185,6 +187,20 @@ resource "azurerm_user_assigned_identity" "kubelet" {
   tags                = local.common_tags
 }
 
+resource "azurerm_user_assigned_identity" "control_plane" {
+  name                = "id-control-plane-${local.prefix}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  tags                = local.common_tags
+}
+
+resource "azurerm_role_assignment" "control_plane_kubelet" {
+  scope                            = azurerm_user_assigned_identity.kubelet.id
+  role_definition_name             = "Managed Identity Operator"
+  principal_id                     = azurerm_user_assigned_identity.control_plane.principal_id
+  skip_service_principal_aad_check = true
+}
+
 # ─── OCI registry (ACR) ─────────────────────────────────────────────────────
 
 resource "azurerm_container_registry" "this" {
@@ -306,7 +322,7 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.kubelet.id]
+    identity_ids = [azurerm_user_assigned_identity.control_plane.id]
   }
 
   kubelet_identity {
@@ -401,6 +417,7 @@ resource "azurerm_kubernetes_cluster" "this" {
     azurerm_subnet_nat_gateway_association.nodes,
     azurerm_nat_gateway_public_ip_association.this,
     azurerm_container_registry.this,
+    azurerm_role_assignment.control_plane_kubelet,
   ]
 
   tags = local.common_tags

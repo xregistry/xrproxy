@@ -98,6 +98,24 @@ mock_provider "azurerm" {
   }
 }
 
+override_resource {
+  target = azurerm_user_assigned_identity.kubelet
+  values = {
+    id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-xrproxy-test-dev/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-kubelet-xrproxy-test-dev"
+    client_id    = "00000000-0000-0000-0000-000000000020"
+    principal_id = "00000000-0000-0000-0000-000000000021"
+  }
+}
+
+override_resource {
+  target = azurerm_user_assigned_identity.control_plane
+  values = {
+    id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-xrproxy-test-dev/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-control-plane-xrproxy-test-dev"
+    client_id    = "00000000-0000-0000-0000-000000000030"
+    principal_id = "00000000-0000-0000-0000-000000000031"
+  }
+}
+
 mock_provider "flux" {}
 
 # ─── Helper variables reused across runs ────────────────────────────────────
@@ -126,6 +144,36 @@ run "validate_minimal" {
   assert {
     condition     = output.cluster_name == "aks-xrproxy-test-dev"
     error_message = "Expected cluster_name to follow aks-{cluster_name}-{environment} pattern."
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.control_plane.name == "id-control-plane-xrproxy-test-dev"
+    error_message = "Expected a dedicated control-plane identity."
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.kubelet.name == "id-kubelet-xrproxy-test-dev"
+    error_message = "Expected a dedicated kubelet identity."
+  }
+
+  assert {
+    condition     = contains(azurerm_kubernetes_cluster.this.identity[0].identity_ids, azurerm_user_assigned_identity.control_plane.id)
+    error_message = "AKS must use the control-plane identity instead of the kubelet identity."
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.control_plane_kubelet.scope == azurerm_user_assigned_identity.kubelet.id
+    error_message = "Managed Identity Operator must be scoped to the kubelet identity."
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.control_plane_kubelet.principal_id == azurerm_user_assigned_identity.control_plane.principal_id
+    error_message = "Managed Identity Operator must be assigned to the control-plane identity."
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.control_plane_kubelet.role_definition_name == "Managed Identity Operator"
+    error_message = "The control-plane identity must receive the Managed Identity Operator role."
   }
 
   assert {
