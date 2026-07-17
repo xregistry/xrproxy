@@ -77,6 +77,11 @@ output "observability_endpoint" {
   value       = var.observability.enabled ? "https://${azurerm_monitor_workspace.this[0].query_endpoint}" : ""
 }
 
+output "monitor_workspace_id" {
+  description = "Azure Monitor workspace resource ID used by managed Prometheus data collection rules."
+  value       = var.observability.enabled ? azurerm_monitor_workspace.this[0].id : ""
+}
+
 output "resource_group_name" {
   description = "Resource group that contains all module resources."
   value       = azurerm_resource_group.this.name
