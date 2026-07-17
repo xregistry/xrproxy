@@ -434,6 +434,37 @@ services:
       minReplicas: 1
       maxReplicas: 3
       targetCPUUtilizationPercentage: 75
+  pubdev:
+    enabled: true
+    role: proxy
+    directory: pubdev
+    image:
+      repository: xregistry-pubdev-bridge
+      tag: ""
+      digest: ""
+    port: 4200
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4200"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/pubdev/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
   huggingface:
     enabled: true
     role: proxy

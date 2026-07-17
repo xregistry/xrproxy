@@ -339,12 +339,31 @@
       "id": "pubdev",
       "name": "pub.dev Registry",
       "role": "proxy",
-      "status": "planned",
+      "status": "active",
       "directory": "pubdev",
       "port": 4200,
       "groupTypes": [
         "dartregistries"
-      ]
+      ],
+      "environment": {
+        "PORT": "4200",
+        "HOST": "0.0.0.0"
+      },
+      "images": [
+        {
+          "id": "pubdev",
+          "name": "xregistry-pubdev-bridge",
+          "dockerfile": "pubdev.Dockerfile"
+        }
+      ],
+      "integrationTest": "test/integration/pubdev-docker.test.js",
+      "deployment": {
+        "replicas": 1,
+        "healthPath": "/health",
+        "readinessPath": "/health",
+        "cpu": "250m",
+        "memory": "512Mi"
+      }
     },
     {
       "id": "huggingface",

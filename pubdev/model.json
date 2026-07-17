@@ -1,0 +1,73 @@
+{
+  "description": "The xRegistry model for the pub.dev wrapper, describing the structure and metadata for Dart/Flutter package registries and packages.",
+  "groups": {
+    "dartregistries": {
+      "description": "A group representing a Dart/Flutter package registry provider (e.g., pub.dev). Contains all available Dart package registries.",
+      "plural": "dartregistries",
+      "singular": "dartregistry",
+      "resources": {
+        "packages": {
+          "description": "A resource representing a Dart/Flutter package in the registry, including its metadata and available versions.",
+          "plural": "packages",
+          "singular": "package",
+          "hasdocument": false,
+          "attributes": {
+            "name": { "type": "string", "description": "The canonical name of the Dart package." },
+            "description": { "type": "string", "description": "A short description of the package." },
+            "homepage": { "type": "string", "description": "The main homepage URL for the package." },
+            "repository": { "type": "string", "description": "The source repository URL for the package." },
+            "publisher": { "type": "string", "description": "The verified publisher of the package (e.g., dart.dev)." },
+            "sdk_constraint": { "type": "string", "description": "The Dart SDK version constraint for the latest version." },
+            "flutter_constraint": { "type": "string", "description": "The Flutter SDK version constraint, if applicable." },
+            "likes": { "type": "integer", "description": "The number of likes (pub.dev scoring)." },
+            "pub_points": { "type": "integer", "description": "The pub points score (pub.dev scoring)." },
+            "popularity": { "type": "number", "description": "The popularity score between 0 and 1." },
+            "keywords": { "type": "array", "item": { "type": "string" }, "description": "Keywords from pubspec.yaml topics." },
+            "license": { "type": "string", "description": "The SPDX license identifier for the package." },
+            "platforms": { "type": "array", "item": { "type": "string" }, "description": "Supported platforms." },
+            "retracted": { "type": "boolean", "description": "Whether this package has been discontinued." },
+            "dependencies": {
+              "type": "array",
+              "description": "Runtime dependencies for the package.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "name": { "type": "string", "description": "The name of the dependency package." },
+                  "constraint": { "type": "string", "description": "The version constraint." },
+                  "package": { "type": "xid", "description": "Cross-reference to the dependency package.", "target": "/dartregistries/package" }
+                }
+              }
+            },
+            "dev_dependencies": {
+              "type": "array",
+              "description": "Development dependencies for the package.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "name": { "type": "string", "description": "The name of the development dependency package." },
+                  "constraint": { "type": "string", "description": "The version constraint." },
+                  "package": { "type": "xid", "description": "Cross-reference to the dev dependency package.", "target": "/dartregistries/package" }
+                }
+              }
+            },
+            "package": { "type": "xid", "description": "Cross-reference to another package resource.", "target": "/dartregistries/package" }
+          },
+          "versions": {
+            "description": "A specific published version of a Dart package.",
+            "plural": "versions",
+            "singular": "version",
+            "attributes": {
+              "published": { "type": "timestamp", "description": "The UTC timestamp when this version was published." },
+              "archive_url": { "type": "string", "description": "The download URL for the package archive (.tar.gz)." },
+              "archive_sha256": { "type": "string", "description": "The SHA-256 checksum of the package archive." },
+              "pubspec": { "type": "object", "description": "The raw pubspec.yaml content as parsed JSON for this version." },
+              "sdk_constraint": { "type": "string", "description": "The Dart SDK version constraint for this version." },
+              "flutter_constraint": { "type": "string", "description": "The Flutter SDK version constraint for this version." },
+              "retracted": { "type": "boolean", "description": "Whether this version has been retracted." }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -18,6 +18,7 @@ on:
       - "rubygems/**"
       - "packagist/**"
       - "terraform/**"
+      - "pubdev/**"
       - "viewer/**"
       - "shared/**"
       - "config/services.json"
