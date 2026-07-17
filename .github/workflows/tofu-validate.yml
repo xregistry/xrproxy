@@ -1,0 +1,123 @@
+﻿name: OpenTofu Validate
+
+on:
+  push:
+    branches: [ "main", "develop", "feat/cloud-tofu-modules" ]
+    paths:
+      - 'deploy/tofu/**'
+      - '.github/workflows/tofu-validate.yml'
+  pull_request:
+    branches: [ "main", "develop" ]
+    paths:
+      - 'deploy/tofu/**'
+      - '.github/workflows/tofu-validate.yml'
+  workflow_dispatch:
+
+# Least-privilege: read access for checkout only.
+# No cloud credentials are required — all checks use mock providers.
+permissions:
+  contents: read
+
+env:
+  TOFU_VERSION: "1.8.8"
+
+jobs:
+  # ─── Format check (no network, no credentials) ─────────────────────────────
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: tofu fmt -check (recursive)
+        working-directory: deploy/tofu
+        run: tofu fmt -check -recursive -diff
+
+  # ─── Validate + static plan (mock providers, no credentials) ───────────────
+  validate:
+    name: Validate & Static Plan — ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: fmt
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [ aks, eks, gke ]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: tofu init (no backend)
+        working-directory: deploy/tofu/${{ matrix.module }}
+        run: tofu init -backend=false -input=false
+
+      - name: tofu validate
+        working-directory: deploy/tofu/${{ matrix.module }}
+        run: tofu validate
+
+      - name: tofu test (mock providers — no cloud credentials required)
+        working-directory: deploy/tofu/${{ matrix.module }}
+        run: tofu test
+
+  # ─── Validate example configurations ───────────────────────────────────────
+  validate-examples:
+    name: Validate Example — ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: fmt
+
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [ aks, eks, gke ]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: tofu init (no backend)
+        working-directory: deploy/tofu/examples/${{ matrix.example }}
+        run: tofu init -backend=false -input=false
+
+      - name: tofu validate
+        working-directory: deploy/tofu/examples/${{ matrix.example }}
+        run: tofu validate
+
+  # ─── Summary gate ──────────────────────────────────────────────────────────
+  tofu-validate-complete:
+    name: OpenTofu Validation Complete
+    runs-on: ubuntu-latest
+    needs: [ fmt, validate, validate-examples ]
+    if: always()
+
+    steps:
+      - name: Check all jobs
+        run: |
+          echo "fmt:               ${{ needs.fmt.result }}"
+          echo "validate:          ${{ needs.validate.result }}"
+          echo "validate-examples: ${{ needs.validate-examples.result }}"
+
+          if [[ "${{ needs.fmt.result }}" != "success" ||
+                "${{ needs.validate.result }}" != "success" ||
+                "${{ needs.validate-examples.result }}" != "success" ]]; then
+            echo "One or more OpenTofu validation checks failed"
+            exit 1
+          fi
+          echo "All OpenTofu validation checks passed"

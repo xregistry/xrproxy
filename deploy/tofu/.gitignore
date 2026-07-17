@@ -1,0 +1,10 @@
+# OpenTofu provider cache and state (lock files ARE committed)
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+*.tfvars
+!*.tfvars.example
+
+# Sensitive output files
+kubeconfig
