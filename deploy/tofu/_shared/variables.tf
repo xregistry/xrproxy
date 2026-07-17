@@ -194,6 +194,21 @@ variable "flux" {
   default = {}
 }
 
+
+# ─── Cluster access / API server controls ────────────────────────────────────
+# Provider-specific; each module exposes a cluster_access object with the
+# same intent (restrict who can reach the API server) but provider-tailored
+# fields:
+#   AKS: private_cluster_enabled (bool), authorized_ip_ranges (list(string))
+#   EKS: public_access (bool), public_access_cidrs (list(string)), private_access (bool)
+#   GKE: enable_private_nodes (bool), enable_private_endpoint (bool),
+#        master_ipv4_cidr_block (string), master_authorized_networks (list(object))
+# All providers enforce a lifecycle precondition rejecting prod when the public
+# endpoint is unrestricted.
+
+# ─── Cluster add-ons (AKS-specific) ─────────────────────────────────────────
+# azure_policy: Azure Policy admission controller (disabled by default / dev-safe)
+# key_vault_secrets_store: Key Vault CSI driver with rotation
 # ─── Tags / Labels ────────────────────────────────────────────────────────────
 
 variable "tags" {

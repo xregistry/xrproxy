@@ -1,14 +1,33 @@
 # AKS thin module — Day-0 conservative choices
 #
 # Design decisions:
-#   • Azure CNI Overlay: scales to large pod counts without consuming VNet IPs
-#     per-pod; no node-level IP pre-allocation needed.
-#   • Standard tier cluster (prod) / Free (dev): Standard required for Uptime
-#     SLA and multi-zone control plane HA.
-#   • OIDC + Entra Workload Identity: pods exchange projected SA tokens for
-#     Entra credentials without static secrets.
-#   • Explicit UserAssigned kubelet identity: deterministic IAM wiring (ACR
-#     pull role) resolvable before the API server is reachable.
+#   • Azure CNI Overlay: scales to large pod counts without consuming VNet IPs.
+#   • Configurable network dataplane (network.data_plane):
+#     "azure" (default): Azure CNI built-in dataplane + azure network policy.
+#       Safe for existing clusters; dev/staging upgrades preserve the current
+#       dataplane with no cluster replacement required.
+#     "cilium": eBPF dataplane; kube-proxy replaced by Cilium. Cilium L3-L7
+#       NetworkPolicy enforcement activated automatically. Requires overlay
+#       mode (already set) and Kubernetes >= 1.25 (enforced by version
+#       validation). Recommended for production; a lifecycle precondition
+#       rejects environment = prod when data_plane != "cilium" — production
+#       therefore fails closed until Cilium is explicitly opted in.
+#     AKS and AzureRM support an in-place "azure" to "cilium" migration.
+#       Test the rollout in non-production before applying it to production.
+#   • Standard tier cluster (prod) / Free (dev).
+#   • OIDC + Entra Workload Identity: no static secrets in pods.
+#   • Explicit UserAssigned kubelet identity: deterministic ACR pull IAM.
+#   • cluster_access: private cluster or authorized IP ranges enforced for prod
+#     via lifecycle precondition — public unrestricted endpoint is rejected.
+#   • azure_policy: disabled by default (dev-safe); enable for prod to enforce
+#     admission controls.
+#   • key_vault_secrets_store: CSI driver disabled by default; enable when
+#     workloads mount Key Vault secrets. Rotation enabled by default when CSI
+#     is on.
+#   • StandardV2 NAT Gateway for static egress (zone-redundant, when enabled).
+#   • Azure Monitor managed Prometheus.
+#   • Auto-upgrade channel = "patch"; node OS channel = "NodeImage".
+#   • Flux disabled by default (safe Day-0; enable in second apply).
 #
 # ─── Static egress — StandardV2 NAT Gateway (zone-redundant) ─────────────────
 #
@@ -214,9 +233,52 @@ resource "azurerm_kubernetes_cluster" "this" {
   oidc_issuer_enabled       = var.workload_identity.enabled
   workload_identity_enabled = var.workload_identity.enabled
 
+  # ─── API server access ───────────────────────────────────────────────────
+  # private_cluster_enabled creates a private endpoint; public endpoint is
+  # disabled. A lifecycle precondition (below) enforces that production clusters
+  # are either private OR have explicit authorized_ip_ranges.
+  private_cluster_enabled = var.cluster_access.private_cluster_enabled
+
+  # authorized_ip_ranges restricts the PUBLIC API server endpoint to specified
+  # CIDRs. Only emitted when the cluster is not private and CIDRs are given;
+  # omitting the block leaves AKS with no IP restriction (acceptable for dev).
+  dynamic "api_server_access_profile" {
+    for_each = !var.cluster_access.private_cluster_enabled && length(var.cluster_access.authorized_ip_ranges) > 0 ? [1] : []
+    content {
+      authorized_ip_ranges = var.cluster_access.authorized_ip_ranges
+    }
+  }
+
+  # ─── Add-ons ─────────────────────────────────────────────────────────────
+  # azure_policy_enabled: enforce cluster compliance via Azure Policy admission
+  # controller. Disabled by default (dev-safe); enable for production.
+  azure_policy_enabled = var.azure_policy.enabled
+
+  # key_vault_secrets_provider: CSI driver for mounting Key Vault secrets as
+  # volumes with optional automatic rotation.
+  dynamic "key_vault_secrets_provider" {
+    for_each = var.key_vault_secrets_store.enabled ? [1] : []
+    content {
+      secret_rotation_enabled  = var.key_vault_secrets_store.rotation_enabled
+      secret_rotation_interval = var.key_vault_secrets_store.rotation_enabled ? var.key_vault_secrets_store.rotation_interval : null
+    }
+  }
+
+  # ─── Configurable network dataplane: Azure CNI Overlay ───────────────────
+  # network_data_plane: "azure" (default, safe for upgrades) or "cilium"
+  #   (eBPF dataplane; replaces kube-proxy; recommended for production).
+  # network_policy is set to the same value as network_data_plane so that
+  #   policy enforcement is always consistent with the active dataplane.
+  # Both require network_plugin_mode = "overlay" (already set above).
+  # A lifecycle precondition (below) enforces that production clusters use
+  # the Cilium dataplane.
+  # AKS supports an in-place "azure" to "cilium" migration. Test the rollout
+  # in non-production before applying it to production.
   network_profile {
     network_plugin      = "azure"
     network_plugin_mode = "overlay"
+    network_data_plane  = var.network.data_plane
+    network_policy      = var.network.data_plane
     pod_cidr            = var.network.pod_cidr
     service_cidr        = var.network.service_cidr
     dns_service_ip      = var.network.dns_service_ip
@@ -277,15 +339,10 @@ resource "azurerm_kubernetes_cluster" "this" {
     }
   }
 
-  # ─── Reliability preconditions ────────────────────────────────────────────
+  # ─── Reliability / security preconditions ────────────────────────────────
   lifecycle {
     precondition {
       # Ensure at least one system node per availability zone.
-      # With StandardV2 NAT Gateway the system pool spans all zones via a
-      # single shared subnet. A zone failure removes nodes in that zone; if
-      # min_count < len(zones) the remaining nodes may all land in one zone,
-      # leaving kube-system and Flux without capacity in the failed zone.
-      # Single-zone deployments (len=1) are exempt (min_count >= 1 is trivial).
       condition     = length(local.zones) <= 1 || var.system_node_pool.min_count >= length(local.zones)
       error_message = <<-EOT
         system_node_pool.min_count (${var.system_node_pool.min_count}) must be >= the
@@ -294,6 +351,48 @@ resource "azurerm_kubernetes_cluster" "this" {
         node capacity from the affected zone.
         Fix: increase system_node_pool.min_count to at least ${length(local.zones)}, or
         reduce network.availability_zones to match your min_count budget.
+      EOT
+    }
+    precondition {
+      # Reject production clusters with an unrestricted public API server.
+      # An unguarded public endpoint allows any internet host to attempt
+      # connections to the Kubernetes control plane.
+      # Pass this check by either:
+      #   a) cluster_access.private_cluster_enabled = true  (no public endpoint)
+      #   b) cluster_access.authorized_ip_ranges = ["<corp-cidr>", ...]
+      condition = !(
+        var.environment == "prod" &&
+        !var.cluster_access.private_cluster_enabled &&
+        length(var.cluster_access.authorized_ip_ranges) == 0
+      )
+      error_message = <<-EOT
+        Production AKS clusters must have a restricted API server. Set either:
+          a) cluster_access.private_cluster_enabled = true (recommended; disables
+             the public endpoint entirely)
+          b) cluster_access.authorized_ip_ranges = ["<corp-egress-cidr>/32", ...]
+             (restricts the public endpoint to explicit corporate CIDRs)
+        An unrestricted public API server exposes the Kubernetes control plane
+        to unauthenticated connection attempts from the internet.
+      EOT
+    }
+    precondition {
+      # Require the Cilium eBPF dataplane for production clusters.
+      # The Cilium dataplane provides enhanced network observability, L3-L7
+      # policy enforcement, and eBPF-based performance. Production clusters
+      # must explicitly opt in to Cilium; this precondition fails closed so
+      # that a new prod cluster cannot be created with the default azure
+      # dataplane by accident. Dev and staging clusters retain the azure
+      # default and can upgrade to cilium independently.
+      # AKS supports an in-place "azure" to "cilium" migration. Test the
+      # rollout in non-production before applying it to production.
+      condition     = !(var.environment == "prod" && var.network.data_plane != "cilium")
+      error_message = <<-EOT
+        Production AKS clusters must use the Cilium eBPF dataplane. Set:
+          network = { data_plane = "cilium", ... }
+        The Cilium dataplane provides L3-L7 NetworkPolicy enforcement and
+        enhanced eBPF-based performance required for production workloads.
+        AKS supports an in-place migration from "azure" to "cilium"; test the
+        rollout in a non-production environment before applying to production.
       EOT
     }
   }

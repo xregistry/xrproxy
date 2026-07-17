@@ -27,12 +27,15 @@ module "aks" {
   network      = var.network
   oci_registry = var.oci_registry
 
-  workload_identity = var.workload_identity
-  static_egress     = var.static_egress
-  dns               = var.dns
-  certificates      = var.certificates
-  observability     = var.observability
-  flux              = var.flux
+  workload_identity       = var.workload_identity
+  static_egress           = var.static_egress
+  dns                     = var.dns
+  certificates            = var.certificates
+  observability           = var.observability
+  flux                    = var.flux
+  cluster_access          = var.cluster_access
+  azure_policy            = var.azure_policy
+  key_vault_secrets_store = var.key_vault_secrets_store
 
   tags = var.tags
 }
