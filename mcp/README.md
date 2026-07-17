@@ -42,6 +42,7 @@ Environment variables:
 - `XREGISTRY_MCP_BASEURL` - Base URL for self-referencing URLs
 - `XREGISTRY_MCP_API_KEY` - Optional API key for authentication
 - `XREGISTRY_MCP_REGISTRY_URL` - MCP registry URL (default: https://registry.modelcontextprotocol.io)
+- `XREGISTRY_MCP_UPSTREAM_TIMEOUT_MS` - Bounded upstream request timeout in milliseconds (default: 45000)
 - `LOG_LEVEL` - Logging level (default: info)
 
 ## Usage

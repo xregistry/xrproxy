@@ -45,7 +45,7 @@ export class MCPService {
         this.cacheTtl = config.cacheTtl ?? CACHE_CONFIG.CACHE_TTL_MS;
 
         this.httpClient = axios.create({
-            timeout: config.timeout || MCP_REGISTRY.TIMEOUT_MS,
+            timeout: config.timeout ?? MCP_REGISTRY.TIMEOUT_MS,
             headers: {
                 'User-Agent': config.userAgent || MCP_REGISTRY.USER_AGENT,
                 'Accept': 'application/json',

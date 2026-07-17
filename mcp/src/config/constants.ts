@@ -92,7 +92,7 @@ export const MCP_REGISTRY = {
     API_VERSION: 'v0',
     SERVERS_ENDPOINT: '/v0/servers',
     USER_AGENT: 'xRegistry-MCP-Wrapper/1.0',
-    TIMEOUT_MS: 10000,
+    TIMEOUT_MS: 45000,
 } as const;
 
 export const PATHS = {
