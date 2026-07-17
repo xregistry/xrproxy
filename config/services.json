@@ -163,7 +163,8 @@
       ],
       "environment": {
         "XREGISTRY_MCP_PORT": "3600",
-        "XREGISTRY_MCP_HOST": "0.0.0.0"
+        "XREGISTRY_MCP_HOST": "0.0.0.0",
+        "XREGISTRY_MCP_UPSTREAM_TIMEOUT_MS": "45000"
       },
       "images": [
         {

@@ -119,6 +119,24 @@ describe('MCPService', () => {
       metadata: { count: 1 },
     } as any;
 
+    it('uses a timeout long enough for cold upstream detail requests', () => {
+      expect(mockedAxios.create).toHaveBeenCalledWith(
+        expect.objectContaining({ timeout: 45000 })
+      );
+    });
+
+    it('supports an explicit upstream timeout override', () => {
+      new MCPService({
+        baseUrl: 'https://test-registry.example.com',
+        cacheDir,
+        timeout: 60000,
+      });
+
+      expect(mockedAxios.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timeout: 60000 })
+      );
+    });
+
     it('serves a fresh cached response without revalidating upstream', async () => {
       httpGetMock.mockResolvedValue({
         status: 200,

@@ -3,10 +3,11 @@
  * @fileoverview Service for MCP servers
  */
 
+import axios from 'axios';
 import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
-import { HTTP_STATUS, PAGINATION, REGISTRY_CONFIG, SERVER_CONFIG, getBaseUrl } from './config/constants';
+import { HTTP_STATUS, MCP_REGISTRY, PAGINATION, REGISTRY_CONFIG, SERVER_CONFIG, getBaseUrl } from './config/constants';
 import { corsMiddleware } from './middleware/cors';
 import { MCPService } from './services/mcp-service';
 import { MCPServerResponse } from './types/mcp';
@@ -34,6 +35,7 @@ export interface ServerOptions {
     mcpRegistryUrl?: string;
     cacheEnabled?: boolean;
     cacheTtl?: number;
+    upstreamTimeout?: number;
     logLevel?: string;
     baseUrl?: string;
 }
@@ -61,6 +63,7 @@ export class XRegistryServer {
             mcpRegistryUrl: options.mcpRegistryUrl || 'https://registry.modelcontextprotocol.io',
             cacheEnabled: options.cacheEnabled !== false,
             cacheTtl: options.cacheTtl || 86400000,
+            upstreamTimeout: options.upstreamTimeout || MCP_REGISTRY.TIMEOUT_MS,
             logLevel: options.logLevel || 'info',
             baseUrl: options.baseUrl || `http://localhost:${options.port || SERVER_CONFIG.DEFAULT_PORT}`
         };
@@ -94,7 +97,8 @@ export class XRegistryServer {
         // Initialize MCP service
         this.mcpService = new MCPService({
             baseUrl: this.options.mcpRegistryUrl,
-            cacheTtl: this.options.cacheTtl
+            cacheTtl: this.options.cacheTtl,
+            timeout: this.options.upstreamTimeout
         });
     }
 
@@ -646,47 +650,41 @@ export class XRegistryServer {
      */
     private async getServerWithVersions(req: express.Request, providerId: string, serverId: string, inlineVersions: boolean): Promise<any | null> {
         const baseUrl = getBaseUrl(req);
-
-        try {
-            const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
-            if (!versionsResponse || !versionsResponse.servers || versionsResponse.servers.length === 0) {
-                return null;
-            }
-
-            const matchingServers = versionsResponse.servers;
-
-            // Find the latest version
-            const latestServer = matchingServers.find(s => s._meta?.['io.modelcontextprotocol.registry/official']?.isLatest) || matchingServers[0];
-            const serverMeta = this.mcpService.convertToXRegistryServer(latestServer, providerId, baseUrl);
-
-            // Add versions URL and count
-            const result: any = {
-                ...serverMeta,
-                versionsurl: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions`,
-                versionscount: matchingServers.length,
-                metaurl: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/meta`
-            };
-
-            if (inlineVersions) {
-                const versions: Record<string, any> = {};
-                for (const mcpServer of matchingServers) {
-                    const versionMeta = this.mcpService.convertToXRegistryServer(mcpServer, providerId, baseUrl);
-                    const versionId = versionMeta.versionid;
-                    // Update paths to include /versions/ segment
-                    versions[versionId] = {
-                        ...versionMeta,
-                        self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
-                        xid: `/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
-                    };
-                }
-                result.versions = versions;
-            }
-
-            return result;
-        } catch (error) {
-            this.logger.error(`Failed to fetch versions for server ${providerId}/${serverId}`, error);
+        const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
+        if (!versionsResponse || !versionsResponse.servers || versionsResponse.servers.length === 0) {
             return null;
         }
+
+        const matchingServers = versionsResponse.servers;
+
+        // Find the latest version
+        const latestServer = matchingServers.find(s => s._meta?.['io.modelcontextprotocol.registry/official']?.isLatest) || matchingServers[0];
+        const serverMeta = this.mcpService.convertToXRegistryServer(latestServer, providerId, baseUrl);
+
+        // Add versions URL and count
+        const result: any = {
+            ...serverMeta,
+            versionsurl: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions`,
+            versionscount: matchingServers.length,
+            metaurl: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/meta`
+        };
+
+        if (inlineVersions) {
+            const versions: Record<string, any> = {};
+            for (const mcpServer of matchingServers) {
+                const versionMeta = this.mcpService.convertToXRegistryServer(mcpServer, providerId, baseUrl);
+                const versionId = versionMeta.versionid;
+                // Update paths to include /versions/ segment
+                versions[versionId] = {
+                    ...versionMeta,
+                    self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
+                    xid: `/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
+                };
+            }
+            result.versions = versions;
+        }
+
+        return result;
     }
 
     /**
@@ -694,30 +692,24 @@ export class XRegistryServer {
      */
     private async getServerVersion(req: express.Request, providerId: string, serverId: string, versionId: string): Promise<ServerMetadata | null> {
         const baseUrl = getBaseUrl(req);
-
-        try {
-            const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
-            if (!versionsResponse || !versionsResponse.servers) {
-                return null;
-            }
-
-            for (const mcpServer of versionsResponse.servers) {
-                const serverMeta = this.mcpService.convertToXRegistryServer(mcpServer, providerId, baseUrl);
-                if (serverMeta.versionid === versionId) {
-                    // Update paths to include /versions/ segment
-                    return {
-                        ...serverMeta,
-                        self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
-                        xid: `/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
-                    };
-                }
-            }
-
-            return null;
-        } catch (error) {
-            this.logger.error(`Failed to fetch version ${versionId} for server ${providerId}/${serverId}`, error);
+        const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
+        if (!versionsResponse || !versionsResponse.servers) {
             return null;
         }
+
+        for (const mcpServer of versionsResponse.servers) {
+            const serverMeta = this.mcpService.convertToXRegistryServer(mcpServer, providerId, baseUrl);
+            if (serverMeta.versionid === versionId) {
+                // Update paths to include /versions/ segment
+                return {
+                    ...serverMeta,
+                    self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
+                    xid: `/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
+                };
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -725,32 +717,26 @@ export class XRegistryServer {
      */
     private async getServerVersionsList(req: express.Request, providerId: string, serverId: string, inline?: string): Promise<any | null> {
         const baseUrl = getBaseUrl(req);
-
-        try {
-            const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
-            if (!versionsResponse || !versionsResponse.servers || versionsResponse.servers.length === 0) {
-                return null;
-            }
-
-            // Build versions object with each version as a top-level property
-            const versions: Record<string, any> = {};
-            for (const mcpServer of versionsResponse.servers) {
-                const versionMeta = this.mcpService.convertToXRegistryServer(mcpServer, providerId, baseUrl);
-                const versionId = versionMeta.versionid;
-
-                // Update paths to include /versions/ in the URL
-                versions[versionId] = {
-                    ...versionMeta,
-                    self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
-                    xid: `/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
-                };
-            }
-
-            return versions;
-        } catch (error) {
-            this.logger.error(`Failed to fetch versions list for server ${providerId}/${serverId}`, error);
+        const versionsResponse = await this.mcpService.resolveServerVersions(providerId, serverId);
+        if (!versionsResponse || !versionsResponse.servers || versionsResponse.servers.length === 0) {
             return null;
         }
+
+        // Build versions object with each version as a top-level property
+        const versions: Record<string, any> = {};
+        for (const mcpServer of versionsResponse.servers) {
+            const versionMeta = this.mcpService.convertToXRegistryServer(mcpServer, providerId, baseUrl);
+            const versionId = versionMeta.versionid;
+
+            // Update paths to include /versions/ in the URL
+            versions[versionId] = {
+                ...versionMeta,
+                self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
+                xid: `/mcpproviders/${providerId}/servers/${serverId}/versions/${versionId}`,
+            };
+        }
+
+        return versions;
     }
 
     /**
@@ -771,6 +757,14 @@ export class XRegistryServer {
      */
     private handleError(res: express.Response, error: any): void {
         this.logger.error('Request error', error);
+        if (axios.isAxiosError(error) && error.code === 'ECONNABORTED') {
+            res.status(HTTP_STATUS.GATEWAY_TIMEOUT).json({
+                error: 'Gateway timeout',
+                message: 'MCP Registry request timed out'
+            });
+            return;
+        }
+
         res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
             error: 'Internal server error',
             message: error.message || 'Unknown error'
@@ -824,6 +818,9 @@ if (require.main === module) {
         port: parseInt(process.env.XREGISTRY_MCP_PORT || '3600'),
         host: process.env.XREGISTRY_MCP_HOST || '0.0.0.0',
         mcpRegistryUrl: process.env.XREGISTRY_MCP_REGISTRY_URL,
+        upstreamTimeout: process.env.XREGISTRY_MCP_UPSTREAM_TIMEOUT_MS
+            ? parseInt(process.env.XREGISTRY_MCP_UPSTREAM_TIMEOUT_MS, 10)
+            : undefined,
         baseUrl: process.env.XREGISTRY_MCP_BASEURL,
         logLevel: process.env.LOG_LEVEL
     });
