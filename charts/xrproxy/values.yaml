@@ -341,6 +341,37 @@ services:
       minReplicas: 1
       maxReplicas: 3
       targetCPUUtilizationPercentage: 75
+  rubygems:
+    enabled: true
+    role: proxy
+    directory: rubygems
+    image:
+      repository: xregistry-rubygems-bridge
+      tag: ""
+      digest: ""
+    port: 4000
+    healthPath: /health
+    readinessPath: /health
+    replicas: 1
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4000"
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    cache:
+      enabled: true
+      mountPath: /app/rubygems/cache
+      sizeLimit: ""
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 3
+      targetCPUUtilizationPercentage: 75
   huggingface:
     enabled: true
     role: proxy

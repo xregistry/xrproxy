@@ -9,7 +9,7 @@ services:
     environment:
       - NODE_ENV=production
       - BRIDGE_PORT=8080
-      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"},{"url":"http://huggingface:4300"},{"url":"http://gomod:3900","apikey":"gomod-api-key"}]}
+      - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://crates:3700","apikey":"crates-api-key"},{"url":"http://huggingface:4300"},{"url":"http://gomod:3900","apikey":"gomod-api-key"},{"url":"http://rubygems:4000","apikey":"rubygems-api-key"}]}
     volumes:
       - ./logs/bridge:/app/logs
       - ./cache:/app/cache
@@ -24,6 +24,7 @@ services:
       - crates
       - huggingface
       - gomod
+      - rubygems
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -227,6 +228,27 @@ services:
       retries: 3
       start_period: 60s
 
+  # RubyGems Service
+  rubygems:
+    build:
+      context: .
+      dockerfile: rubygems.Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - HOST=0.0.0.0
+    volumes:
+      - ./logs/rubygems:/app/logs
+      - ./rubygems/cache:/app/rubygems/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
   # Bridge with Viewer - Optional service with integrated viewer UI
   # Uncomment to run bridge with viewer instead of standard bridge
   # bridge-viewer:
@@ -241,7 +263,7 @@ services:
   #     - VIEWER_ENABLED=true
   #     - VIEWER_PROXY_ENABLED=true
   #     - API_PATH_PREFIX=/registry
-  #     - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"}]}
+  #     - DOWNSTREAMS_JSON={"servers":[{"url":"http://npm:3100","apikey":"npm-api-key"},{"url":"http://pypi:3000","apikey":"pypi-api-key"},{"url":"http://maven:3300","apikey":"maven-api-key"},{"url":"http://nuget:3200","apikey":"nuget-api-key"},{"url":"http://oci:3400","apikey":"oci-api-key"},{"url":"http://mcp:3600","apikey":"mcp-api-key"},{"url":"http://rubygems:4000","apikey":"rubygems-api-key"}]}
   #   volumes:
   #     - ./logs/bridge:/app/logs
   #     - ./cache:/app/cache
