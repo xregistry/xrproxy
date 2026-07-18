@@ -29,6 +29,25 @@
         }
       }
     },
+    "viewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "apiPathPrefix"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "digest"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^(|sha256:[a-f0-9]{64})$" }
+          }
+        },
+        "apiPathPrefix": { "type": "string", "pattern": "^/" }
+      }
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,
@@ -106,7 +125,7 @@
       "additionalProperties": { "$ref": "#/definitions/service" }
     }
   },
-  "required": ["image", "serviceAccount", "probes", "cache", "pdb", "networkPolicy", "gateway", "certificate", "services"],
+  "required": ["image", "viewer", "serviceAccount", "probes", "cache", "pdb", "networkPolicy", "gateway", "certificate", "services"],
   "definitions": {
     "probe": {
       "type": "object",

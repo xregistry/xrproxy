@@ -1,0 +1,16 @@
+viewer:
+  enabled: true
+  apiPathPrefix: /registry
+
+gateway:
+  enabled: true
+  create: true
+  className: approuting-istio
+  listener:
+    name: http
+    protocol: HTTP
+    port: 80
+    hostname: ""
+    tls:
+      enabled: false
+      certificateSecretName: ""

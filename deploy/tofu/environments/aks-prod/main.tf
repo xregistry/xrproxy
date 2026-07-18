@@ -2,6 +2,8 @@ provider "azurerm" {
   features {}
 }
 
+provider "azapi" {}
+
 module "aks" {
   source = "../../aks"
 
@@ -91,6 +93,29 @@ module "aks" {
   tags = {
     workload = "xrproxy"
     owner    = "xregistry"
+  }
+}
+
+resource "azapi_update_resource" "managed_gateway_ingress" {
+  type        = "Microsoft.ContainerService/managedClusters@2026-02-01"
+  resource_id = module.aks.cluster_id
+
+  body = {
+    properties = {
+      ingressProfile = {
+        gatewayAPI = {
+          installation = "Standard"
+        }
+        webAppRouting = {
+          enabled = true
+          gatewayAPIImplementations = {
+            appRoutingIstio = {
+              mode = "Enabled"
+            }
+          }
+        }
+      }
+    }
   }
 }
 

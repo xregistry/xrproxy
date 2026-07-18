@@ -74,12 +74,17 @@ jobs:
         run: |
           helm template xrproxy charts/xrproxy \
             --namespace xrproxy \
+            --set viewer.enabled=true \
             --set gateway.enabled=true \
             --set gateway.create=true \
             --set gateway.className=example \
             --set gateway.listener.hostname=packages.example.com \
             --set-json 'gateway.httpRoute.hostnames=["packages.example.com"]' \
             > rendered-gateway.yaml
+          grep -q "kind: Gateway" rendered-gateway.yaml
+          grep -q "kind: HTTPRoute" rendered-gateway.yaml
+          grep -q "xregistry-bridge-viewer" rendered-gateway.yaml
+          grep -q "name: API_PATH_PREFIX" rendered-gateway.yaml
 
       # Provider-overlay validation: render each overlay values file found under
       # charts/xrproxy/ci/.  No-op when the directory or files are absent.

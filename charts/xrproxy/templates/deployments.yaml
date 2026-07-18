@@ -1,5 +1,9 @@
 {{- range $id, $service := .Values.services }}
 {{- if $service.enabled }}
+{{- $imageService := $service }}
+{{- if and (eq $id "bridge") $.Values.viewer.enabled }}
+{{- $imageService = dict "image" $.Values.viewer.image }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -45,7 +49,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ $id }}
-          image: {{ include "xrproxy.image" (dict "root" $ "service" $service) | quote }}
+          image: {{ include "xrproxy.image" (dict "root" $ "service" $imageService) | quote }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           securityContext:
             {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
@@ -63,6 +67,16 @@ spec:
             {{- if eq $service.role "bridge" }}
             - name: BRIDGE_CONFIG_FILE
               value: /etc/xrproxy/downstreams.json
+            {{- if $.Values.viewer.enabled }}
+            - name: VIEWER_ENABLED
+              value: "true"
+            - name: VIEWER_PATH
+              value: /app/bridge/viewer/dist/xregistry-viewer
+            - name: VIEWER_PROXY_ENABLED
+              value: "true"
+            - name: API_PATH_PREFIX
+              value: {{ $.Values.viewer.apiPathPrefix | quote }}
+            {{- end }}
             {{- end }}
           startupProbe:
             httpGet:
