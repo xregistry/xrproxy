@@ -85,6 +85,8 @@ jobs:
           grep -q "kind: HTTPRoute" rendered-gateway.yaml
           grep -q "xregistry-bridge-viewer" rendered-gateway.yaml
           grep -q "name: API_PATH_PREFIX" rendered-gateway.yaml
+          grep -q "name: xrproxy-xrproxy-gateway-ingress" rendered-gateway.yaml
+          grep -q "gateway.networking.k8s.io/gateway-name: xrproxy-xrproxy" rendered-gateway.yaml
 
       # Provider-overlay validation: render each overlay values file found under
       # charts/xrproxy/ci/.  No-op when the directory or files are absent.

@@ -30,6 +30,25 @@ spec:
     - ports:
         - port: {{ (index .Values.services "bridge").port }}
           protocol: TCP
+{{- if and .Values.gateway.enabled .Values.gateway.create }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "xrproxy.fullname" . }}-gateway-ingress
+  labels:
+    {{- include "xrproxy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: {{ include "xrproxy.fullname" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ default (ternary 443 80 .Values.gateway.listener.tls.enabled) .Values.gateway.listener.port }}
+          protocol: TCP
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
