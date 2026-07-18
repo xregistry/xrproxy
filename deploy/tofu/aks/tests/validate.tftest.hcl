@@ -177,6 +177,21 @@ run "validate_minimal" {
   }
 
   assert {
+    condition     = azurerm_role_assignment.control_plane_network.scope == azurerm_subnet.nodes.id
+    error_message = "Network Contributor must be scoped only to the AKS node subnet."
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.control_plane_network.principal_id == azurerm_user_assigned_identity.control_plane.principal_id
+    error_message = "Subnet access must be assigned to the AKS control-plane identity."
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.control_plane_network.role_definition_name == "Network Contributor"
+    error_message = "The control-plane identity must receive Network Contributor on the node subnet."
+  }
+
+  assert {
     condition     = output.static_egress_ips == []
     error_message = "static_egress_ips should be empty when static_egress.enabled = false."
   }

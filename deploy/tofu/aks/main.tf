@@ -201,6 +201,13 @@ resource "azurerm_role_assignment" "control_plane_kubelet" {
   skip_service_principal_aad_check = true
 }
 
+resource "azurerm_role_assignment" "control_plane_network" {
+  scope                            = azurerm_subnet.nodes.id
+  role_definition_name             = "Network Contributor"
+  principal_id                     = azurerm_user_assigned_identity.control_plane.principal_id
+  skip_service_principal_aad_check = true
+}
+
 # ─── OCI registry (ACR) ─────────────────────────────────────────────────────
 
 resource "azurerm_container_registry" "this" {
@@ -418,6 +425,7 @@ resource "azurerm_kubernetes_cluster" "this" {
     azurerm_nat_gateway_public_ip_association.this,
     azurerm_container_registry.this,
     azurerm_role_assignment.control_plane_kubelet,
+    azurerm_role_assignment.control_plane_network,
   ]
 
   tags = local.common_tags
