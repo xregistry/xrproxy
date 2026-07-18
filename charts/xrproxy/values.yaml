@@ -8,6 +8,14 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
+viewer:
+  enabled: false
+  image:
+    repository: xregistry-bridge-viewer
+    tag: ""
+    digest: ""
+  apiPathPrefix: /registry
+
 serviceAccount:
   create: true
   name: ""

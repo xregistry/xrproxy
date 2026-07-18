@@ -25,11 +25,15 @@ tofu plan -out=aks-prod.tfplan
 tofu apply aks-prod.tfplan
 ```
 
-The first apply intentionally leaves Flux, DNS, and certificate automation
-disabled. It creates a zone-redundant Premium ACR and wires the AKS managed
-Prometheus collector to its Azure Monitor workspace. Validate the private
-cluster, ACR access, metrics ingestion, egress IP, and all node pools before
-enabling GitOps and deploying the fleet under issue #148.
+Flux, DNS, and certificate automation remain disabled. The environment creates
+a zone-redundant Premium ACR, wires the AKS managed Prometheus collector to its
+Azure Monitor workspace, and enables the AKS-managed Gateway API CRDs with the
+application-routing Istio implementation. The application chart creates the
+public Gateway and HTTPRoute; downstream registry services remain private.
+
+The initial public endpoint is the managed Gateway IP over HTTP. Attach an
+owned DNS name and TLS certificate before moving production clients from the
+parallel Azure Container Apps deployment.
 
 Because the API server is private, use Azure AKS run-command for initial
 validation when the operator is outside the VNet:

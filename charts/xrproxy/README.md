@@ -27,6 +27,18 @@ The chart creates one Deployment and ClusterIP Service for each active entry in 
 
 The default cache is an `emptyDir`. This matches the applications' rebuildable local-cache behavior and avoids implying that their cache files are safe for concurrent shared-volume access.
 
+## Viewer
+
+Enable the viewer to run the complete browser and API application from the bridge workload:
+
+```yaml
+viewer:
+  enabled: true
+  apiPathPrefix: /registry
+```
+
+This selects the `xregistry-bridge-viewer` image, serves the viewer at `/viewer/`, moves the consolidated API under `/registry`, and redirects `/` to the viewer.
+
 ## Gateway API
 
 To create a Gateway and HTTPRoute:
@@ -35,17 +47,13 @@ To create a Gateway and HTTPRoute:
 gateway:
   enabled: true
   create: true
-  className: example
+  className: approuting-istio
   listener:
-    protocol: HTTPS
-    port: 443
-    hostname: packages.example.com
+    protocol: HTTP
+    port: 80
+    hostname: ""
     tls:
-      enabled: true
-      certificateSecretName: packages-tls
-  httpRoute:
-    hostnames:
-      - packages.example.com
+      enabled: false
 ```
 
 Set `gateway.create=false` and `gateway.parentRef.name` to attach the HTTPRoute to a platform-managed Gateway. The chart does not install Gateway API CRDs or a controller.

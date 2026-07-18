@@ -1,6 +1,13 @@
 terraform {
   required_version = ">= 1.8.0"
 
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.0"
+    }
+  }
+
   backend "azurerm" {
     resource_group_name  = "rg-xrproxy-tfstate"
     storage_account_name = "stxrproxyweuprod"
