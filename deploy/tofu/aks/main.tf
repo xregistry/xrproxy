@@ -364,6 +364,12 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   # ─── Reliability / security preconditions ────────────────────────────────
   lifecycle {
+    # Gateway API and application-routing Istio are configured by the
+    # production root through AzAPI because AzureRM does not yet expose the
+    # complete ingressProfile schema. AzureRM still reads part of that profile
+    # as its legacy web_app_routing block and would otherwise remove it.
+    ignore_changes = [web_app_routing]
+
     precondition {
       # Ensure at least one system node per availability zone.
       condition     = length(local.zones) <= 1 || var.system_node_pool.min_count >= length(local.zones)
