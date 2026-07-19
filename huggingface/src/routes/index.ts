@@ -423,7 +423,7 @@ export function setupRoutes(app: Express, _config: HfConfig, client: HuggingFace
 
       // Use the repo's actual default branch, not hardcoded 'main'
       const branch = defaultBranchOf(info);
-      const commits = await client.listCommits(type, repoId, branch, page);
+      const commits = await client.listCommits(type, repoId, branch, page - 1);
 
       const headSha = info.sha;
       const collection: Record<string, unknown> = {};

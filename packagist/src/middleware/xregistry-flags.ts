@@ -10,6 +10,8 @@ export interface XRegistryFlags {
     filter?: string[][];
     sort?: { attribute: string; direction: 'asc' | 'desc' };
     epoch?: number;
+    offset?: number;
+    limit?: number;
 }
 
 export function getNamePrefixFilter(filter: string[][] | undefined): string | undefined {
@@ -53,6 +55,15 @@ function parseSort(v: string | string[] | undefined): XRegistryFlags['sort'] | u
     };
 }
 
+function parseNonNegativeInteger(
+    value: string | string[] | undefined,
+    fallback: number,
+): number {
+    if (Array.isArray(value)) value = value[0];
+    const parsed = Number.parseInt(value ?? '', 10);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export function parseXRegistryFlags(req: Request, _res: Response, next: NextFunction): void {
     const q = req.query as Record<string, string | string[] | undefined>;
     const flags: XRegistryFlags = {};
@@ -64,6 +75,8 @@ export function parseXRegistryFlags(req: Request, _res: Response, next: NextFunc
     if (sort) flags.sort = sort;
     const epoch = q['epoch'] ? parseInt(q['epoch'] as string, 10) : undefined;
     if (epoch !== undefined && !isNaN(epoch)) flags.epoch = epoch;
+    flags.offset = parseNonNegativeInteger(q['offset'], 0);
+    flags.limit = Math.min(parseNonNegativeInteger(q['limit'], 15) || 15, 100);
     req.xregistryFlags = flags;
     next();
 }

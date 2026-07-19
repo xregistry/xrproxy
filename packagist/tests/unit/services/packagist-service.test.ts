@@ -108,6 +108,16 @@ describe('PackagistService', () => {
             expect(stable!.immutable).toBe(true);
         });
 
+        it('marks only the default stable version as isdefault', async () => {
+            const http = getHttpMock();
+            mockV1Only(http, symfonyConsoleFixture);
+
+            const versions = await service.getVersions('symfony/console', BASE_URL);
+
+            expect(versions.filter(v => v.isdefault)).toHaveLength(1);
+            expect(versions.find(v => v.isdefault)?.version).toBe('v7.1.0');
+        });
+
         it('marks dev-* versions as immutable=false', async () => {
             const http = getHttpMock();
             mockV1Only(http, symfonyConsoleFixture);
@@ -233,7 +243,7 @@ describe('PackagistService', () => {
                 packageNames: ['acme/one', 'acme/two', 'acme/three'],
             }));
 
-            const result = await service.listPackages(1, 2);
+            const result = await service.listPackages(0, 2);
 
             expect(http.getJson).toHaveBeenCalledWith('https://packagist.org/packages/list.json');
             expect(result.total).toBe(3);
@@ -253,6 +263,37 @@ describe('PackagistService', () => {
                 'https://packagist.org/search.json?q=symfony%2F&page=1&per_page=15',
             );
             expect(result.packages[0]?.name).toBe('symfony/console');
+        });
+
+        it('translates arbitrary search offsets across upstream pages', async () => {
+            const http = getHttpMock();
+            http.getJson
+                .mockResolvedValueOnce(ok({
+                    results: Array.from({ length: 15 }, (_, index) => ({
+                        name: `vendor/package-${index}`,
+                    })),
+                    total: 30,
+                }))
+                .mockResolvedValueOnce(ok({
+                    results: Array.from({ length: 15 }, (_, index) => ({
+                        name: `vendor/package-${index + 15}`,
+                    })),
+                    total: 30,
+                }));
+
+            const result = await service.searchPackagesAtOffset('vendor', 10, 15);
+
+            expect(result.packages.map(pkg => pkg.name)).toEqual(
+                Array.from({ length: 15 }, (_, index) => `vendor/package-${index + 10}`),
+            );
+            expect(http.getJson).toHaveBeenNthCalledWith(
+                1,
+                'https://packagist.org/search.json?q=vendor&page=1&per_page=15',
+            );
+            expect(http.getJson).toHaveBeenNthCalledWith(
+                2,
+                'https://packagist.org/search.json?q=vendor&page=2&per_page=15',
+            );
         });
 
         it('paginates prefix matches from the complete package-name catalog', async () => {

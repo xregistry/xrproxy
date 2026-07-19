@@ -33,6 +33,20 @@ describe('Hugging Face Hub URL construction', () => {
     expect(url.searchParams.get('skip')).toBe('50');
   });
 
+  it('uses the Hub commit API zero-based first page', async () => {
+    const getJson = jest.fn().mockResolvedValue({ value: [] });
+    const client = new HuggingFaceClient({
+      http: { getJson } as unknown as HttpUpstreamClient,
+      baseUrl: 'https://huggingface.co',
+    });
+
+    await client.listCommits('models', 'openai-community/gpt2', 'main');
+
+    const url = new URL(getJson.mock.calls[0][0] as string);
+    expect(url.pathname).toBe('/api/models/openai-community/gpt2/commits/main');
+    expect(url.searchParams.get('p')).toBe('0');
+  });
+
   it('paginates over case-insensitive prefix matches, not broad search results', async () => {
     const firstPage: HfRepoListEntry[] = Array.from({ length: 100 }, (_, i) => ({
       id: i === 40 ? 'Google/first' : `unrelated/model-${i}`,

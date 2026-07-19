@@ -170,6 +170,23 @@ describe("Packagist Docker Integration Tests", function () {
         throw err;
       }
     });
+
+    it("honors xRegistry prefix filtering and limit/offset pagination", async () => {
+      try {
+        const res = await loggedAxiosGet(
+          `${baseUrl}/composerregistries/packagist.org/packages?filter=name%3Dsymfony*&limit=2&offset=0`
+        );
+        expect(res.status).to.equal(200);
+        const packages = Object.values(res.data);
+        expect(packages).to.have.length.at.most(2);
+        expect(packages.every(pkg => pkg.name.toLowerCase().startsWith("symfony"))).to.equal(true);
+        expect(res.headers.link).to.include("offset=2");
+        expect(res.headers.link).to.include("limit=2");
+      } catch (err) {
+        if (err.response?.status === 502 || err.response?.status === 504) return;
+        throw err;
+      }
+    });
   });
 
   // ─── Package entity ──────────────────────────────────────────────────────────
@@ -197,6 +214,22 @@ describe("Packagist Docker Integration Tests", function () {
         expect(res.data.packageid).to.equal("symfony~console");
       } catch (err) {
         if (err.response?.status === 404 || err.response?.status === 502 || err.response?.status === 504) return;
+        throw err;
+      }
+    });
+
+    it("paginates versions and marks the default version", async () => {
+      try {
+        const res = await loggedAxiosGet(
+          `${baseUrl}/composerregistries/packagist.org/packages/symfony~console/versions?limit=2&offset=0`
+        );
+        expect(res.status).to.equal(200);
+        const versions = Object.values(res.data);
+        expect(versions).to.have.length.at.most(2);
+        expect(versions.some(version => version.isdefault === true)).to.equal(true);
+        expect(res.headers.link).to.include("offset=2");
+      } catch (err) {
+        if ([404, 502, 504].includes(err.response?.status)) return;
         throw err;
       }
     });

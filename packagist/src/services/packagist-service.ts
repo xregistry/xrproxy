@@ -93,6 +93,18 @@ function toIso(time?: string): string | undefined {
     return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
 }
 
+function selectDefaultVersion(versions: PackagistVersion[]): PackagistVersion | undefined {
+    return versions.find(v => !isDevVersion(v.version)) ?? versions[0];
+}
+
+function versionIdOf(version: PackagistVersion): string {
+    return buildVersionId(
+        version.version,
+        version.version_normalized,
+        version.source?.reference ?? version.dist?.reference,
+    );
+}
+
 /**
  * Map a PackagistVersion into an xRegistry version entity.
  * Applies the critical dev-* immutability rule and stable version timestamps.
@@ -102,6 +114,7 @@ function mapVersion(
     pkgId: string,
     v: PackagistVersion,
     baseUrl: string,
+    defaultVersionId: string | undefined,
 ): XRegistryVersion {
     const sourceRef = v.source?.reference ?? v.dist?.reference;
     const versionId = buildVersionId(v.version, v.version_normalized, sourceRef);
@@ -116,6 +129,7 @@ function mapVersion(
         xid,
         self,
         versionid: versionId,
+        isdefault: versionId === defaultVersionId,
         epoch: 1,
         createdat: releaseTime,
         modifiedat: releaseTime,
@@ -163,14 +177,8 @@ function mapPackage(
     const versions = Object.values(pkg.versions ?? {});
     const latestStable = versions.find(v => !isDevVersion(v.version));
     const displayVersion = latestStable?.version ?? versions[0]?.version;
-    const defaultVersion = latestStable ?? versions[0];
-    const defaultVersionId = defaultVersion
-        ? buildVersionId(
-            defaultVersion.version,
-            defaultVersion.version_normalized,
-            defaultVersion.source?.reference ?? defaultVersion.dist?.reference,
-        )
-        : undefined;
+    const defaultVersion = selectDefaultVersion(versions);
+    const defaultVersionId = defaultVersion ? versionIdOf(defaultVersion) : undefined;
 
     const times = versions
         .map(v => (v.time ? new Date(v.time).getTime() : NaN))
@@ -321,13 +329,12 @@ export class PackagistService {
      * empty `q` parameter to `/search.json`.
      */
     async listPackages(
-        page = 1,
-        perPage = 15,
+        offset = 0,
+        limit = 15,
     ): Promise<{ packages: PackageListEntry[]; total: number }> {
         const names = await this.getPackageNames();
-        const start = (page - 1) * perPage;
         return {
-            packages: names.slice(start, start + perPage).map(name => this.toPackageListEntry(name)),
+            packages: names.slice(offset, offset + limit).map(name => this.toPackageListEntry(name)),
             total: names.length,
         };
     }
@@ -369,18 +376,41 @@ export class PackagistService {
         return load();
     }
 
+    /** Translate xRegistry offset/limit pagination to Packagist's page API. */
+    async searchPackagesAtOffset(
+        query: string,
+        offset = 0,
+        limit = 15,
+    ): Promise<{ packages: PackageListEntry[]; total: number }> {
+        const page = Math.floor(offset / limit) + 1;
+        const inPageOffset = offset % limit;
+        const first = await this.searchPackages(query, page, limit);
+        if (inPageOffset === 0 || first.packages.length < limit) {
+            return {
+                packages: first.packages.slice(inPageOffset, inPageOffset + limit),
+                total: first.total,
+            };
+        }
+
+        const second = await this.searchPackages(query, page + 1, limit);
+        return {
+            packages: [...first.packages, ...second.packages]
+                .slice(inPageOffset, inPageOffset + limit),
+            total: first.total,
+        };
+    }
+
     /** Filter the complete Packagist name catalog, then paginate exact matches. */
     async searchPackagesByPrefix(
         prefix: string,
-        page = 1,
-        perPage = 15,
+        offset = 0,
+        limit = 15,
     ): Promise<{ packages: PackageListEntry[]; total: number }> {
         const normalizedPrefix = prefix.toLowerCase();
         const matchingNames = (await this.getPackageNames())
             .filter(name => name.toLowerCase().startsWith(normalizedPrefix));
-        const start = (page - 1) * perPage;
         return {
-            packages: matchingNames.slice(start, start + perPage)
+            packages: matchingNames.slice(offset, offset + limit)
                 .map(name => this.toPackageListEntry(name)),
             total: matchingNames.length,
         };
@@ -442,8 +472,11 @@ export class PackagistService {
         const pkg = await this.fetchPackage(vendorPackage);
         if (!pkg) return [];
         const pkgId = encodePackageId(vendorPackage);
-        return Object.values(pkg.versions ?? {}).map(v =>
-            mapVersion(vendorPackage, pkgId, v, hostBaseUrl),
+        const versions = Object.values(pkg.versions ?? {});
+        const defaultVersion = selectDefaultVersion(versions);
+        const defaultVersionId = defaultVersion ? versionIdOf(defaultVersion) : undefined;
+        return versions.map(v =>
+            mapVersion(vendorPackage, pkgId, v, hostBaseUrl, defaultVersionId),
         );
     }
 
