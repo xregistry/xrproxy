@@ -5,6 +5,7 @@
 import { Request, Response, Router } from 'express';
 import { getBaseUrl, REGISTRY_METADATA, SERVER_CONFIG } from '../config/constants';
 import { RegistryService } from '../services/registry-service';
+import { buildPaginationLinkHeader } from '../utils/pagination';
 
 const { GROUP_TYPE } = REGISTRY_METADATA;
 
@@ -46,16 +47,15 @@ export function createXRegistryRoutes(registryService: RegistryService): Router 
             limit,
             pattern
         );
-        const nextOffset = offset + Object.keys(groups).length;
         res.setHeader('X-Total-Count', String(totalCount));
-        if (nextOffset < totalCount) {
-            const nextQuery = new URLSearchParams({
-                offset: String(nextOffset),
-                limit: String(limit),
-            });
-            if (filterParam !== undefined) nextQuery.set('filter', filterParam);
-            res.setHeader('Link', `<${getBaseUrl(req)}/${GROUP_TYPE}?${nextQuery}>; rel="next"`);
-        }
+        const linkHeader = buildPaginationLinkHeader(
+            `${getBaseUrl(req)}/${GROUP_TYPE}`,
+            offset,
+            limit,
+            totalCount,
+            { filter: filterParam }
+        );
+        if (linkHeader) res.setHeader('Link', linkHeader);
         res.json(groups);
     });
 

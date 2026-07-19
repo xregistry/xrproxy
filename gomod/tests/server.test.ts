@@ -239,14 +239,15 @@ describe('Go Module Proxy Server', () => {
 
         const link = headers.get('link');
         expect(link).not.toBeNull();
-        const nextUrl = link!.match(/^<([^>]+)>; rel="next"$/)?.[1];
+        const nextUrl = link!.match(/<([^>]+)>; rel="next"/)?.[1];
         expect(nextUrl).toBeDefined();
         expect(new URL(nextUrl!).searchParams.get('filter')).toBe(filter);
 
         const nextPage = await getJson(nextUrl!);
         expect(Object.keys(nextPage.data)).toEqual(['pkg:errors']);
         expect(nextPage.headers.get('x-total-count')).toBe('2');
-        expect(nextPage.headers.get('link')).toBeNull();
+        expect(nextPage.headers.get('link')).toContain('rel="first"');
+        expect(nextPage.headers.get('link')).toContain('rel="prev"');
     });
 
     it('GET module by encoded path returns module record', async () => {
@@ -310,7 +311,8 @@ describe('Go Module Proxy Server', () => {
         );
         expect(Object.keys(data)).toEqual(['v0.9.1']);
         expect(headers.get('x-total-count')).toBe('2');
-        expect(headers.get('link')).toBeNull();
+        expect(headers.get('link')).toContain('rel="first"');
+        expect(headers.get('link')).toContain('rel="prev"');
     });
 
     it('omits unknown version timestamps instead of inventing current values', async () => {
