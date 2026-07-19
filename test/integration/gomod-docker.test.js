@@ -129,16 +129,19 @@ describe('Go Module Proxy Docker Integration Tests', function () {
     // Group endpoints
     // -----------------------------------------------------------------------
     describe('Group endpoints', () => {
-        it('GET /goregistries returns group collection with pkg.go.dev', async () => {
+        it('GET /goregistries returns native module namespaces', async () => {
             const { data, status } = await loggedGet(`${baseUrl}/goregistries`);
             expect(status).to.equal(200);
-            expect(data).to.have.property('pkg.go.dev');
+            expect(data).not.to.have.property('pkg.go.dev');
+            for (const groupId of Object.keys(data)) {
+                expect(groupId).to.match(/^[^/]+\.[^/]+$/);
+            }
         });
 
-        it('GET /goregistries/pkg.go.dev returns group detail', async () => {
-            const { data, status } = await loggedGet(`${baseUrl}/goregistries/pkg.go.dev`);
+        it('GET /goregistries/github.com returns namespace detail', async () => {
+            const { data, status } = await loggedGet(`${baseUrl}/goregistries/github.com`);
             expect(status).to.equal(200);
-            expect(data.goregistryid).to.equal('pkg.go.dev');
+            expect(data.goregistryid).to.equal('github.com');
             expect(data).to.have.property('modulesurl');
         });
     });
@@ -147,8 +150,8 @@ describe('Go Module Proxy Docker Integration Tests', function () {
     // Module collection
     // -----------------------------------------------------------------------
     describe('Module collection', () => {
-        it('GET /goregistries/pkg.go.dev/modules returns a collection', async () => {
-            const { data, headers, status } = await loggedGet(`${baseUrl}/goregistries/pkg.go.dev/modules`);
+        it('GET /goregistries/github.com/modules returns a collection', async () => {
+            const { data, headers, status } = await loggedGet(`${baseUrl}/goregistries/github.com/modules`);
             expect(status).to.equal(200);
             expect(headers).to.have.property('x-total-count');
             expect(data).not.to.have.property('modulescount');
@@ -158,7 +161,7 @@ describe('Go Module Proxy Docker Integration Tests', function () {
 
         it('supports limit/offset pagination', async () => {
             const { data, status } = await loggedGet(
-                `${baseUrl}/goregistries/pkg.go.dev/modules?limit=5&offset=0`
+                `${baseUrl}/goregistries/github.com/modules?limit=5&offset=0`
             );
             expect(status).to.equal(200);
         });
@@ -171,7 +174,7 @@ describe('Go Module Proxy Docker Integration Tests', function () {
         it('returns 404 for unknown module', async () => {
             try {
                 await loggedGet(
-                    `${baseUrl}/goregistries/pkg.go.dev/modules/${encodeURIComponent('github.com/does/not-exist-xyz-123')}`
+                    `${baseUrl}/goregistries/github.com/modules/does:not-exist-xyz-123`
                 );
                 throw new Error('Expected 404');
             } catch (err) {

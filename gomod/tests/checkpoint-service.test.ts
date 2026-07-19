@@ -109,6 +109,24 @@ describe('CheckpointService', () => {
         expect(paths[0]).toBe('a.io/foo');
     });
 
+    it('groups modules by the first module-path component', () => {
+        svc.mergeEntries([
+            { path: 'github.com/pkg/errors', version: 'v0.9.1', timestamp: '2020-01-01T00:00:00Z' },
+            { path: 'github.com/gorilla/mux', version: 'v1.8.0', timestamp: '2021-01-01T00:00:00Z' },
+            { path: 'golang.org/x/net', version: 'v0.1.0', timestamp: '2022-01-01T00:00:00Z' },
+        ]);
+
+        expect(svc.listGroupIds(0, 10)).toEqual({
+            groupIds: ['github.com', 'golang.org'],
+            totalKnown: 2,
+        });
+        expect(svc.getGroupModuleCount('github.com')).toBe(2);
+        expect(svc.listGroupModulePaths('github.com', undefined, 0, 10).paths).toEqual([
+            'github.com/gorilla/mux',
+            'github.com/pkg/errors',
+        ]);
+    });
+
     it('filters by substring', () => {
         svc.mergeEntries([
             { path: 'github.com/pkg/errors', version: 'v0.9.1', timestamp: '2020-01-01T00:00:00Z' },

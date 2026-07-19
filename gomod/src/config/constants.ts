@@ -42,7 +42,6 @@ export const REGISTRY_METADATA = {
   REGISTRY_ID:            'gomod-proxy',
   GROUP_TYPE:             'goregistries',
   GROUP_TYPE_SINGULAR:    'goregistry',
-  GROUP_ID:               'pkg.go.dev',
   RESOURCE_TYPE:          'modules',
   RESOURCE_TYPE_SINGULAR: 'module',
   SPEC_VERSION:           '1.0-rc2',

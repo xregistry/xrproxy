@@ -14,6 +14,7 @@ import {
     GoCatalogModuleEntry,
     GoIndexCheckpoint,
 } from '../types/go';
+import { modulePathToIdentity } from '../utils/path-escaping';
 
 export class CheckpointService {
     private readonly catalogPath: string;
@@ -143,6 +144,30 @@ export class CheckpointService {
         return Object.keys(this.catalog.modules).length;
     }
 
+    /** Return the number of distinct module-path namespaces in the catalog. */
+    getGroupCount(): number {
+        return this.getGroupIds().length;
+    }
+
+    /** Retrieve sorted, paginated module-path namespace IDs. */
+    listGroupIds(offset: number, limit: number): {
+        groupIds: string[];
+        totalKnown: number;
+    } {
+        const groupIds = this.getGroupIds();
+        return {
+            groupIds: groupIds.slice(offset, offset + limit),
+            totalKnown: groupIds.length,
+        };
+    }
+
+    /** Return the number of cataloged modules in one namespace. */
+    getGroupModuleCount(groupId: string): number {
+        return Object.keys(this.catalog.modules)
+            .filter(modulePath => modulePathToIdentity(modulePath).groupId === groupId)
+            .length;
+    }
+
     /** Return total number of index entries processed. */
     getEntryCount(): number {
         return this.catalog.checkpoint.entryCount;
@@ -160,6 +185,35 @@ export class CheckpointService {
         return {
             paths: sorted.slice(offset, offset + limit),
             totalKnown: sorted.length,
+        };
+    }
+
+    /** Retrieve modules within one namespace, with optional name filtering. */
+    listGroupModulePaths(
+        groupId: string,
+        pattern: string | undefined,
+        offset: number,
+        limit: number
+    ): {
+        paths: string[];
+        totalMatched: number;
+    } {
+        const inGroup = Object.keys(this.catalog.modules)
+            .filter(modulePath => modulePathToIdentity(modulePath).groupId === groupId)
+            .sort();
+        let matched = inGroup;
+        if (pattern) {
+            if (pattern.includes('*')) {
+                const re = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
+                matched = inGroup.filter(modulePath => re.test(modulePath));
+            } else {
+                const lower = pattern.toLowerCase();
+                matched = inGroup.filter(modulePath => modulePath.toLowerCase().includes(lower));
+            }
+        }
+        return {
+            paths: matched.slice(offset, offset + limit),
+            totalMatched: matched.length,
         };
     }
 
@@ -191,5 +245,11 @@ export class CheckpointService {
             paths: matched.slice(offset, offset + limit),
             totalMatched: matched.length,
         };
+    }
+
+    private getGroupIds(): string[] {
+        return [...new Set(
+            Object.keys(this.catalog.modules).map(modulePath => modulePathToIdentity(modulePath).groupId)
+        )].sort();
     }
 }

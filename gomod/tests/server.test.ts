@@ -117,6 +117,7 @@ describe('Go Module Proxy Server', () => {
             { path: 'github.com/pkg/errors', version: 'v0.9.1', timestamp: '2020-01-14T15:33:02Z', info: { Version: 'v0.9.1', Time: '2020-01-14T15:33:02Z' } },
             { path: 'github.com/gorilla/mux', version: 'v1.8.0', timestamp: '2020-08-03T00:00:00Z', info: { Version: 'v1.8.0', Time: '2020-08-03T00:00:00Z' } },
             { path: 'github.com/gorilla/mux', version: 'v1.8.1', timestamp: '2023-05-10T12:00:00Z', info: { Version: 'v1.8.1', Time: '2023-05-10T12:00:00Z' } },
+            { path: '4d63.com/biblepassageapi', version: 'v0.0.0-20181028062406-b6c0dd8e8611', timestamp: '2018-10-28T06:24:06Z', info: { Version: 'v0.0.0-20181028062406-b6c0dd8e8611', Time: '2018-10-28T06:24:06Z' } },
         ];
         // Also register fixture routes for every module in the fixture file.
         const fixtureEntries = fixtures.map(f => ({ path: f.path, version: f.version, info: f.infoResponse }));
@@ -167,7 +168,7 @@ describe('Go Module Proxy Server', () => {
         expect(data.specversion).toBe('1.0-rc2');
         expect(data.registryid).toBe('gomod-proxy');
         expect(data.goregistriesurl).toBeDefined();
-        expect(data.goregistriescount).toBe(1);
+        expect(data.goregistriescount).toBe(2);
     });
 
     it('GET /model returns the model', async () => {
@@ -184,25 +185,26 @@ describe('Go Module Proxy Server', () => {
     });
 
     it('GET /goregistries returns group collection', async () => {
-        const { data, status } = await getJson(`${baseUrl}/goregistries`);
+        const { data, status, headers } = await getJson(`${baseUrl}/goregistries`);
         expect(status).toBe(200);
-        expect(data['pkg.go.dev']).toBeDefined();
+        expect(Object.keys(data)).toEqual(['4d63.com', 'github.com']);
+        expect(headers.get('x-total-count')).toBe('2');
     });
 
-    it('GET /goregistries/pkg.go.dev returns group detail', async () => {
-        const { data, status } = await getJson(`${baseUrl}/goregistries/pkg.go.dev`);
+    it('GET /goregistries/github.com returns namespace detail', async () => {
+        const { data, status } = await getJson(`${baseUrl}/goregistries/github.com`);
         expect(status).toBe(200);
-        expect(data.goregistryid).toBe('pkg.go.dev');
-        expect(typeof data.modulescount).toBe('number');
+        expect(data.goregistryid).toBe('github.com');
+        expect(data.modulescount).toBe(2);
     });
 
-    it('GET /goregistries/pkg.go.dev/modules returns module list', async () => {
-        const { data, status, headers } = await getJson(`${baseUrl}/goregistries/pkg.go.dev/modules`);
+    it('GET /goregistries/github.com/modules returns modules in that namespace', async () => {
+        const { data, status, headers } = await getJson(`${baseUrl}/goregistries/github.com/modules`);
         expect(status).toBe(200);
-        expect(data['github.com/pkg/errors']).toBeDefined();
+        expect(data['pkg:errors']).toBeDefined();
         expect(Object.keys(data)).toEqual(expect.arrayContaining([
-            'github.com/gorilla/mux',
-            'github.com/pkg/errors',
+            'gorilla:mux',
+            'pkg:errors',
         ]));
         expect(data.self).toBeUndefined();
         expect(data.modulescount).toBeUndefined();
@@ -210,19 +212,19 @@ describe('Go Module Proxy Server', () => {
         expect(headers.get('x-total-count')).toBe('2');
     });
 
-    it('GET /goregistries/pkg.go.dev/modules supports pagination', async () => {
-        const { data, headers } = await getJson(`${baseUrl}/goregistries/pkg.go.dev/modules?limit=1&offset=0`);
+    it('GET /goregistries/github.com/modules supports pagination', async () => {
+        const { data, headers } = await getJson(`${baseUrl}/goregistries/github.com/modules?limit=1&offset=0`);
         expect(Object.keys(data)).toHaveLength(1);
         expect(headers.get('x-total-count')).toBe('2');
         expect(headers.get('link')).toContain('offset=1&limit=1');
     });
 
-    it('GET /goregistries/pkg.go.dev/modules preserves filters across pages', async () => {
+    it('GET /goregistries/github.com/modules preserves filters across pages', async () => {
         const filter = 'name=github.com*';
         const { data, headers } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules?filter=${encodeURIComponent(filter)}&limit=1&offset=0`
+            `${baseUrl}/goregistries/github.com/modules?filter=${encodeURIComponent(filter)}&limit=1&offset=0`
         );
-        expect(Object.keys(data)).toEqual(['github.com/gorilla/mux']);
+        expect(Object.keys(data)).toEqual(['gorilla:mux']);
         expect(headers.get('x-total-count')).toBe('2');
 
         const link = headers.get('link');
@@ -232,28 +234,29 @@ describe('Go Module Proxy Server', () => {
         expect(new URL(nextUrl!).searchParams.get('filter')).toBe(filter);
 
         const nextPage = await getJson(nextUrl!);
-        expect(Object.keys(nextPage.data)).toEqual(['github.com/pkg/errors']);
+        expect(Object.keys(nextPage.data)).toEqual(['pkg:errors']);
         expect(nextPage.headers.get('x-total-count')).toBe('2');
         expect(nextPage.headers.get('link')).toBeNull();
     });
 
     it('GET module by encoded path returns module record', async () => {
         const { data, status } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules/${encodeURIComponent('github.com/pkg/errors')}`
+            `${baseUrl}/goregistries/github.com/modules/pkg:errors`
         );
         expect(status).toBe(200);
-        expect(data.moduleid).toBe('github.com/pkg/errors');
+        expect(data.moduleid).toBe('pkg:errors');
+        expect(data.modulepath).toBe('github.com/pkg/errors');
         expect(data.versionid).toBe('v0.9.1');
         expect(data.isdefault).toBe(true);
         expect(data.latest_version).toBe('v0.9.1');
         expect(data.pseudo_version).toBe(false);
         expect(data.versionsurl).toBeDefined();
-        expect(data.self).not.toContain('%2F');
+        expect(data.self).toContain('/goregistries/github.com/modules/pkg%3Aerrors');
         expect(data.createdat <= data.modifiedat).toBe(true);
 
         const followed = await getJson(data.self);
         expect(followed.status).toBe(200);
-        expect(followed.data.moduleid).toBe('github.com/pkg/errors');
+        expect(followed.data.moduleid).toBe('pkg:errors');
 
         const versions = await getJson(data.versionsurl);
         expect(versions.status).toBe(200);
@@ -262,7 +265,7 @@ describe('Go Module Proxy Server', () => {
 
     it('GET single version returns version record', async () => {
         const { data, status } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules/${encodeURIComponent('github.com/pkg/errors')}/versions/v0.9.1`
+            `${baseUrl}/goregistries/github.com/modules/pkg:errors/versions/v0.9.1`
         );
         expect(status).toBe(200);
         expect(data.versionid).toBe('v0.9.1');
@@ -272,13 +275,13 @@ describe('Go Module Proxy Server', () => {
         expect(data.mod_url).toContain('v0.9.1.mod');
         expect(data.zip_url).toContain('v0.9.1.zip');
         expect(data.pseudo_version).toBe(false);
-        expect(data.self).not.toContain('%2F');
+        expect(data.self).toContain('/goregistries/github.com/modules/pkg%3Aerrors/versions/v0.9.1');
         expect(data.createdat <= data.modifiedat).toBe(true);
     });
 
     it('GET module versions collection returns versions', async () => {
         const { data, status, headers } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules/${encodeURIComponent('github.com/pkg/errors')}/versions`
+            `${baseUrl}/goregistries/github.com/modules/pkg:errors/versions`
         );
         expect(status).toBe(200);
         expect(data.self).toBeUndefined();
@@ -293,7 +296,7 @@ describe('Go Module Proxy Server', () => {
 
     it('GET module versions collection supports offset pagination', async () => {
         const { data, headers } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules/github.com/pkg/errors/versions?limit=1&offset=1`
+            `${baseUrl}/goregistries/github.com/modules/pkg:errors/versions?limit=1&offset=1`
         );
         expect(Object.keys(data)).toEqual(['v0.9.1']);
         expect(headers.get('x-total-count')).toBe('2');
@@ -302,7 +305,7 @@ describe('Go Module Proxy Server', () => {
 
     it('omits unknown version timestamps instead of inventing current values', async () => {
         const { data, status } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules/example.com/unknown-time/versions/v1.0.0`
+            `${baseUrl}/goregistries/example.com/modules/unknown-time/versions/v1.0.0`
         );
         expect(status).toBe(200);
         expect(data.createdat).toBeUndefined();
@@ -312,8 +315,16 @@ describe('Go Module Proxy Server', () => {
 
     it('GET unknown module returns 404', async () => {
         const { status } = await getJson(
-            `${baseUrl}/goregistries/pkg.go.dev/modules/${encodeURIComponent('github.com/does/not-exist')}`
+            `${baseUrl}/goregistries/github.com/modules/does:not-exist`
         );
         expect(status).toBe(404);
+    });
+
+    it('rejects malformed group/resource identities', async () => {
+        const { status, data } = await getJson(
+            `${baseUrl}/goregistries/github.com/modules/does::not-exist`
+        );
+        expect(status).toBe(400);
+        expect(data.title).toBe('Invalid Go module group/resource identity');
     });
 });

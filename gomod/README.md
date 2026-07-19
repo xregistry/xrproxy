@@ -7,7 +7,7 @@ An [xRegistry 1.0-rc2](https://github.com/xregistry/spec) compliant proxy for th
 | Attribute       | Value                         |
 |-----------------|-------------------------------|
 | Group type      | `goregistries`                |
-| Group ID        | `pkg.go.dev`                  |
+| Group ID        | First module-path component, such as `github.com` |
 | Resource type   | `modules`                     |
 | Default port    | `3900`                        |
 | Upstream proxy  | `https://proxy.golang.org`    |
@@ -53,6 +53,23 @@ Per the [Go module proxy spec](https://pkg.go.dev/golang.org/x/mod/module#Escape
 github.com/BurntSushi/toml  →  github.com/!burnt!sushi/toml
 ```
 
+### xRegistry identity mapping
+
+Go's native two-level namespace maps directly to xRegistry groups and
+resources. The first module-path component is the `goregistryid`; the remaining
+components form the `moduleid`. Because `/` is not valid inside an xRegistry
+entity ID and `:` is not valid inside a Go module path, remaining separators are
+encoded reversibly as colons:
+
+| Go module path | `goregistryid` | `moduleid` |
+|---|---|---|
+| `github.com/pkg/errors` | `github.com` | `pkg:errors` |
+| `4d63.com/biblepassageapi` | `4d63.com` | `biblepassageapi` |
+| `golang.org/x/net` | `golang.org` | `x:net` |
+
+The canonical path is retained in the `name` and `modulepath` attributes.
+A domain-root module such as `example.com` uses the reserved resource ID `@`.
+
 The proxy handles both escaped and canonical forms in xRegistry URLs.
 
 ### Immutable versions
@@ -67,11 +84,11 @@ Module versions are immutable (Go's semantic import versioning guarantees this).
 | GET    | `/model`                                                         | xRegistry model               |
 | GET    | `/capabilities`                                                  | Capabilities                  |
 | GET    | `/goregistries`                                                  | Registry group collection     |
-| GET    | `/goregistries/pkg.go.dev`                                       | Registry group detail         |
-| GET    | `/goregistries/pkg.go.dev/modules`                               | Module collection (paginated) |
-| GET    | `/goregistries/pkg.go.dev/modules/:modulePath`                   | Module detail                 |
-| GET    | `/goregistries/pkg.go.dev/modules/:modulePath/versions`          | Version collection            |
-| GET    | `/goregistries/pkg.go.dev/modules/:modulePath/versions/:version` | Version detail                |
+| GET    | `/goregistries/:moduleDomain`                                    | Module namespace detail       |
+| GET    | `/goregistries/:moduleDomain/modules`                            | Modules in a namespace        |
+| GET    | `/goregistries/:moduleDomain/modules/:moduleId`                  | Module detail                 |
+| GET    | `/goregistries/:moduleDomain/modules/:moduleId/versions`         | Version collection            |
+| GET    | `/goregistries/:moduleDomain/modules/:moduleId/versions/:version`| Version detail                |
 | GET    | `/health`                                                        | Health check                  |
 
 ### Pagination

@@ -1,7 +1,7 @@
 {
   "groups": {
     "goregistries": {
-      "description": "A Go module registry provider (e.g., proxy.golang.org).",
+      "description": "A Go module namespace identified by the first component of a canonical module path (for example github.com or golang.org).",
       "plural": "goregistries",
       "singular": "goregistry",
       "resources": {
@@ -14,6 +14,10 @@
             "name": {
               "type": "string",
               "description": "The canonical module path (e.g. github.com/pkg/errors)."
+            },
+            "modulepath": {
+              "type": "string",
+              "description": "The canonical Go module path reconstructed from the group and module identity."
             },
             "latest_version": {
               "type": "string",

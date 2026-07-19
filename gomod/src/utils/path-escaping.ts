@@ -53,8 +53,38 @@ export function unescapeVersion(escaped: string): string {
  * slash-delimited structure. Encoding the whole path turns slashes into %2F,
  * which clients may encode again when following self links.
  */
-export function encodeModulePathForUrl(modulePath: string): string {
-    return modulePath.split('/').map(encodeURIComponent).join('/');
+export interface ModuleIdentity {
+    groupId: string;
+    moduleId: string;
+}
+
+/**
+ * Map a Go module path onto the xRegistry Group/Resource hierarchy.
+ *
+ * The first module-path component is the registry group. Remaining path
+ * components form one xRegistry-safe resource ID. Go module paths cannot
+ * contain colons, so `:` is a reversible separator that avoids slash-bearing
+ * entity IDs.
+ */
+export function modulePathToIdentity(modulePath: string): ModuleIdentity {
+    const [groupId, ...remainder] = modulePath.split('/');
+    if (!groupId || remainder.some(segment => !segment) || modulePath.includes(':') || modulePath.includes('@')) {
+        throw new Error(`Invalid canonical Go module path: ${modulePath}`);
+    }
+    return {
+        groupId,
+        moduleId: remainder.length === 0 ? '@' : remainder.join(':'),
+    };
+}
+
+/** Reconstruct a canonical Go module path from its xRegistry identity. */
+export function identityToModulePath(groupId: string, moduleId: string): string {
+    if (!groupId || !moduleId || (moduleId !== '@' && (
+        moduleId.includes('@') || moduleId.split(':').some(segment => !segment)
+    ))) {
+        throw new Error(`Invalid Go module identity: ${groupId}/${moduleId}`);
+    }
+    return moduleId === '@' ? groupId : `${groupId}/${moduleId.replace(/:/g, '/')}`;
 }
 
 /**
