@@ -6,16 +6,16 @@ import { EntityStateManager } from '../../../shared/entity-state-manager';
 import { getBaseUrl, REGISTRY_METADATA } from '../config/constants';
 import { ModuleRecord, VersionRecord } from '../types/go';
 import {
-    encodeModulePathForUrl,
     isPreRelease,
     isPseudoVersion,
+    modulePathToIdentity,
     pseudoVersionTimestamp,
 } from '../utils/path-escaping';
 import { CheckpointService } from './checkpoint-service';
 import { GoModuleService } from './go-module-service';
 import { Request } from 'express';
 
-const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE, RESOURCE_TYPE_SINGULAR } = REGISTRY_METADATA;
+const { GROUP_TYPE, RESOURCE_TYPE, RESOURCE_TYPE_SINGULAR } = REGISTRY_METADATA;
 
 export class ModuleService {
     constructor(
@@ -29,11 +29,13 @@ export class ModuleService {
     // -------------------------------------------------------------------------
 
     private moduleXPath(modulePath: string): string {
-        return `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${modulePath}`;
+        const { groupId, moduleId } = modulePathToIdentity(modulePath);
+        return `/${GROUP_TYPE}/${groupId}/${RESOURCE_TYPE}/${moduleId}`;
     }
 
     private moduleBaseUrl(baseUrl: string, modulePath: string): string {
-        return `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeModulePathForUrl(modulePath)}`;
+        const { groupId, moduleId } = modulePathToIdentity(modulePath);
+        return `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_TYPE}/${encodeURIComponent(moduleId)}`;
     }
 
     private inferRepository(modulePath: string): string {
@@ -66,17 +68,19 @@ export class ModuleService {
 
         const xp = this.moduleXPath(modulePath);
         const selfUrl = this.moduleBaseUrl(baseUrl, modulePath);
+        const { moduleId } = modulePathToIdentity(modulePath);
 
         const allVersions = catalogEntry
             ? catalogEntry.versions
             : await this.goService.listVersions(modulePath);
 
         return {
-            [`${RESOURCE_TYPE_SINGULAR}id`]: modulePath,
+            [`${RESOURCE_TYPE_SINGULAR}id`]: moduleId,
             versionid: latest,
             isdefault: true,
             xid: xp,
             name: modulePath,
+            modulepath: modulePath,
             self: selfUrl,
             epoch: this.entityState.getEpoch(xp),
             ...this.entityTimestampFields(info.Time),
@@ -97,14 +101,11 @@ export class ModuleService {
     // -------------------------------------------------------------------------
 
     private versionXPath(modulePath: string, version: string): string {
-        return `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${modulePath}/versions/${version}`;
+        return `${this.moduleXPath(modulePath)}/versions/${version}`;
     }
 
     private versionBaseUrl(baseUrl: string, modulePath: string, version: string): string {
-        return (
-            `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/` +
-            `${encodeModulePathForUrl(modulePath)}/versions/${encodeURIComponent(version)}`
-        );
+        return `${this.moduleBaseUrl(baseUrl, modulePath)}/versions/${encodeURIComponent(version)}`;
     }
 
     private entityTimestampFields(timestamp: string | null | undefined): {

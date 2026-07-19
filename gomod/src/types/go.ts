@@ -67,6 +67,7 @@ export interface ModuleRecord {
     isdefault: boolean;
     xid: string;
     name: string;
+    modulepath: string;
     self: string;
     epoch: number;
     createdat?: string;

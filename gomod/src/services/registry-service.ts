@@ -10,7 +10,6 @@ const {
     REGISTRY_ID,
     GROUP_TYPE,
     GROUP_TYPE_SINGULAR,
-    GROUP_ID,
     RESOURCE_TYPE,
     SPEC_VERSION,
 } = REGISTRY_METADATA;
@@ -44,7 +43,7 @@ export class RegistryService {
             capabilities: this.getCapabilities(),
             model: `${baseUrl}/model`,
             [`${GROUP_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}`,
-            [`${GROUP_TYPE}count`]: 1,
+            [`${GROUP_TYPE}count`]: this.checkpoint.getGroupCount(),
             epoch: this.entityState.getEpoch('/'),
             createdat: this.entityState.getCreatedAt('/'),
             modifiedat: this.entityState.getModifiedAt('/'),
@@ -58,36 +57,42 @@ export class RegistryService {
         };
     }
 
-    getGroups(baseUrl: string): object {
-        const groupPath = `/${GROUP_TYPE}/${GROUP_ID}`;
-        return {
-            [GROUP_ID]: {
-                [`${GROUP_TYPE_SINGULAR}id`]: GROUP_ID,
+    getGroups(baseUrl: string, offset: number, limit: number, pattern?: string): {
+        groups: Record<string, unknown>;
+        totalCount: number;
+    } {
+        const { groupIds, totalKnown } = this.checkpoint.listGroupIds(offset, limit, pattern);
+        const groups: Record<string, unknown> = {};
+        for (const groupId of groupIds) {
+            const groupPath = `/${GROUP_TYPE}/${groupId}`;
+            groups[groupId] = {
+                [`${GROUP_TYPE_SINGULAR}id`]: groupId,
                 xid: groupPath,
                 self: `${baseUrl}${groupPath}`,
                 epoch: this.entityState.getEpoch(groupPath),
                 createdat: this.entityState.getCreatedAt(groupPath),
                 modifiedat: this.entityState.getModifiedAt(groupPath),
-                name: 'Go Module Proxy (proxy.golang.org)',
+                name: groupId,
                 [`${RESOURCE_TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_TYPE}`,
-                // Partial count from catalog — never fabricated; omit when unknown
-                [`${RESOURCE_TYPE}count`]: this.checkpoint.getModuleCount() || undefined,
-            },
-        };
+                [`${RESOURCE_TYPE}count`]: this.checkpoint.getGroupModuleCount(groupId),
+            };
+        }
+        return { groups, totalCount: totalKnown };
     }
 
-    getGroup(baseUrl: string): object {
-        const groupPath = `/${GROUP_TYPE}/${GROUP_ID}`;
+    getGroup(baseUrl: string, groupId: string): object {
+        const groupPath = `/${GROUP_TYPE}/${groupId}`;
+        const moduleCount = this.checkpoint.getGroupModuleCount(groupId);
         return {
-            [`${GROUP_TYPE_SINGULAR}id`]: GROUP_ID,
+            [`${GROUP_TYPE_SINGULAR}id`]: groupId,
             xid: groupPath,
             self: `${baseUrl}${groupPath}`,
             epoch: this.entityState.getEpoch(groupPath),
             createdat: this.entityState.getCreatedAt(groupPath),
             modifiedat: this.entityState.getModifiedAt(groupPath),
-            name: 'Go Module Proxy (proxy.golang.org)',
+            name: groupId,
             [`${RESOURCE_TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_TYPE}`,
-            [`${RESOURCE_TYPE}count`]: this.checkpoint.getModuleCount() || undefined,
+            [`${RESOURCE_TYPE}count`]: moduleCount || undefined,
         };
     }
 }

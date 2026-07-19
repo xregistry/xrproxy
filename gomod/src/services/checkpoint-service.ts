@@ -14,6 +14,7 @@ import {
     GoCatalogModuleEntry,
     GoIndexCheckpoint,
 } from '../types/go';
+import { modulePathToIdentity } from '../utils/path-escaping';
 
 export class CheckpointService {
     private readonly catalogPath: string;
@@ -143,6 +144,32 @@ export class CheckpointService {
         return Object.keys(this.catalog.modules).length;
     }
 
+    /** Return the number of distinct module-path namespaces in the catalog. */
+    getGroupCount(): number {
+        return this.getGroupIds().length;
+    }
+
+    /** Retrieve sorted, paginated module-path namespace IDs. */
+    listGroupIds(offset: number, limit: number, pattern?: string): {
+        groupIds: string[];
+        totalKnown: number;
+    } {
+        const groupIds = pattern
+            ? this.filterValues(this.getGroupIds(), pattern)
+            : this.getGroupIds();
+        return {
+            groupIds: groupIds.slice(offset, offset + limit),
+            totalKnown: groupIds.length,
+        };
+    }
+
+    /** Return the number of cataloged modules in one namespace. */
+    getGroupModuleCount(groupId: string): number {
+        return Object.keys(this.catalog.modules)
+            .filter(modulePath => modulePathToIdentity(modulePath).groupId === groupId)
+            .length;
+    }
+
     /** Return total number of index entries processed. */
     getEntryCount(): number {
         return this.catalog.checkpoint.entryCount;
@@ -163,6 +190,29 @@ export class CheckpointService {
         };
     }
 
+    /** Retrieve modules within one namespace, with optional name filtering. */
+    listGroupModulePaths(
+        groupId: string,
+        pattern: string | undefined,
+        offset: number,
+        limit: number
+    ): {
+        paths: string[];
+        totalMatched: number;
+    } {
+        const inGroup = Object.keys(this.catalog.modules)
+            .filter(modulePath => modulePathToIdentity(modulePath).groupId === groupId)
+            .sort();
+        let matched = inGroup;
+        if (pattern) {
+            matched = this.filterValues(inGroup, pattern);
+        }
+        return {
+            paths: matched.slice(offset, offset + limit),
+            totalMatched: matched.length,
+        };
+    }
+
     /** Look up a module entry by canonical path. */
     getModule(modulePath: string): GoCatalogModuleEntry | null {
         return this.catalog.modules[modulePath] ?? null;
@@ -180,16 +230,26 @@ export class CheckpointService {
     } {
         const all = Object.keys(this.catalog.modules).sort();
         let matched: string[];
-        if (pattern.includes('*')) {
-            const re = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
-            matched = all.filter((p) => re.test(p));
-        } else {
-            const lower = pattern.toLowerCase();
-            matched = all.filter((p) => p.toLowerCase().includes(lower));
-        }
+        matched = this.filterValues(all, pattern);
         return {
             paths: matched.slice(offset, offset + limit),
             totalMatched: matched.length,
         };
+    }
+
+    private getGroupIds(): string[] {
+        return [...new Set(
+            Object.keys(this.catalog.modules).map(modulePath => modulePathToIdentity(modulePath).groupId)
+        )].sort();
+    }
+
+    private filterValues(values: string[], pattern: string): string[] {
+        if (!pattern.includes('*')) {
+            const lower = pattern.toLowerCase();
+            return values.filter(value => value.toLowerCase().includes(lower));
+        }
+        const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`^${escaped.replace(/\\\*/g, '.*')}$`, 'i');
+        return values.filter(value => regex.test(value));
     }
 }
