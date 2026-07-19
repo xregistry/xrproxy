@@ -18,6 +18,7 @@ export interface XRegistryEntity {
 
 export interface XRegistryVersion extends XRegistryEntity {
     versionid: string;
+    isdefault: boolean;
     /** True for stable tagged releases; false for mutable dev-* aliases. */
     immutable: boolean;
     /** The human-readable version string as declared in composer.json. */

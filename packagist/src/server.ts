@@ -103,19 +103,29 @@ function sendEntity(req: Request, res: Response, entity: unknown): void {
 }
 
 /** Build RFC 5988 pagination links, preserving all existing query parameters. */
-function buildPaginationLinks(req: Request, page: number, total: number, perPage: number): string {
-    const totalPages = Math.ceil(total / perPage);
+function buildPaginationLinks(req: Request, offset: number, total: number, limit: number): string {
     const base = `${getBaseUrl(req)}${req.path}`;
-    const makeUrl = (p: number): string => {
-        const params = new URLSearchParams(req.query as Record<string, string>);
-        params.set('page', String(p));
+    const makeUrl = (nextOffset: number): string => {
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(req.query)) {
+            if (Array.isArray(value)) {
+                for (const entry of value) {
+                    if (typeof entry === 'string') params.append(key, entry);
+                }
+            } else if (typeof value === 'string') {
+                params.set(key, value);
+            }
+        }
+        params.delete('page');
+        params.set('offset', String(nextOffset));
+        params.set('limit', String(limit));
         return `${base}?${params.toString()}`;
     };
     const links: string[] = [];
-    if (page < totalPages) links.push(`<${makeUrl(page + 1)}>; rel="next"`);
-    if (page > 1) links.push(`<${makeUrl(page - 1)}>; rel="prev"`);
-    links.push(`<${makeUrl(1)}>; rel="first"`);
-    if (totalPages > 0) links.push(`<${makeUrl(totalPages)}>; rel="last"`);
+    if (offset + limit < total) links.push(`<${makeUrl(offset + limit)}>; rel="next"`);
+    if (offset > 0) links.push(`<${makeUrl(Math.max(0, offset - limit))}>; rel="prev"`);
+    links.push(`<${makeUrl(0)}>; rel="first"`);
+    if (total > 0) links.push(`<${makeUrl(Math.floor((total - 1) / limit) * limit)}>; rel="last"`);
     return links.join(', ');
 }
 
@@ -255,13 +265,13 @@ const app: Express = createRegistryApp({
             const namePrefix = getNamePrefixFilter(flags.filter);
             const pageStr = req.query['page'] as string | undefined;
             const page = pageStr ? Math.max(1, parseInt(pageStr, 10)) : 1;
-
-            const perPage = 15;
+            const limit = flags.limit ?? 15;
+            const offset = pageStr ? (page - 1) * limit : flags.offset ?? 0;
             const { packages, total } = namePrefix
-                ? await packagistService.searchPackagesByPrefix(namePrefix, page, perPage)
+                ? await packagistService.searchPackagesByPrefix(namePrefix, offset, limit)
                 : q
-                    ? await packagistService.searchPackages(q, page, perPage)
-                : await packagistService.listPackages(page, perPage);
+                ? await packagistService.searchPackagesAtOffset(q, offset, limit)
+                : await packagistService.listPackages(offset, limit);
 
             const base = getBaseUrl(req);
 
@@ -289,7 +299,7 @@ const app: Express = createRegistryApp({
             for (const item of items) {
                 response[item['packageid'] as string] = item;
             }
-            res.setHeader('Link', buildPaginationLinks(req, page, total, perPage));
+            res.setHeader('Link', buildPaginationLinks(req, offset, total, limit));
             sendEntity(req, res, response);
         }));
 
@@ -364,10 +374,15 @@ const app: Express = createRegistryApp({
                 versions = applySort(versions as unknown as Record<string, unknown>[], flags.sort) as unknown as typeof versions;
             }
 
+            const total = versions.length;
+            const offset = flags.offset ?? 0;
+            const limit = flags.limit ?? 15;
+            versions = versions.slice(offset, offset + limit);
             const response: Record<string, unknown> = {};
             for (const v of versions) {
                 response[v.versionid] = v;
             }
+            res.setHeader('Link', buildPaginationLinks(req, offset, total, limit));
             sendEntity(req, res, response);
         }));
 

@@ -318,7 +318,7 @@ export class HuggingFaceClient {
     type: ResourceType,
     repoId: string,
     ref: string,
-    page = 1,
+    page = 0,
   ): Promise<readonly HfCommit[]> {
     const url = `${this.baseUrl}/api/${type}/${encodeHubRepoPath(repoId)}/commits/${encodeURIComponent(ref)}?p=${page}`;
     const key = createCacheKey('commits', type, repoId, ref, page);
