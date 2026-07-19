@@ -11,7 +11,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { getBaseUrl, REGISTRY_METADATA, SERVER_CONFIG } from '../config/constants';
 import { CheckpointService } from '../services/checkpoint-service';
 import { ModuleService } from '../services/module-service';
-import { unescapePath } from '../utils/path-escaping';
+import { encodeModulePathForUrl, unescapePath } from '../utils/path-escaping';
 import { entityNotFound } from '../utils/xregistry-errors';
 
 const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE } = REGISTRY_METADATA;
@@ -70,9 +70,11 @@ export function createModuleRoutes(
             for (const p of paths) {
                 const catalogEntry = checkpointService.getModule(p);
                 const xp = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${p}`;
-                const selfUrl = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeURIComponent(p)}`;
+                const selfUrl = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeModulePathForUrl(p)}`;
                 modules[p] = {
                     moduleid: p,
+                    versionid: catalogEntry?.latestVersion,
+                    isdefault: true,
                     xid: xp,
                     name: p,
                     self: selfUrl,
@@ -88,18 +90,20 @@ export function createModuleRoutes(
 
             res.setHeader('X-Total-Count', String(totalKnown));
             if (hasMore) {
+                const nextQuery = new URLSearchParams({
+                    offset: String(nextOffset),
+                    limit: String(limit),
+                });
+                if (filterParam !== undefined) {
+                    nextQuery.set('filter', filterParam);
+                }
                 res.setHeader(
                     'Link',
-                    `<${collectionUrl}?offset=${nextOffset}&limit=${limit}>; rel="next"`
+                    `<${collectionUrl}?${nextQuery.toString()}>; rel="next"`
                 );
             }
 
-            res.json({
-                self: collectionUrl,
-                [`${RESOURCE_TYPE}count`]: totalKnown,
-                [`${RESOURCE_TYPE}url`]: collectionUrl,
-                ...modules,
-            });
+            res.json(modules);
         })
     );
 
@@ -159,7 +163,7 @@ export function createModuleRoutes(
                 }
 
                 const { versions, totalCount } = result;
-                const versionsUrl = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeURIComponent(modulePath)}/versions`;
+                const versionsUrl = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeModulePathForUrl(modulePath)}/versions`;
                 const nextOffset = offset + versions.length;
                 const hasMore = nextOffset < totalCount;
 
@@ -168,11 +172,7 @@ export function createModuleRoutes(
                     res.setHeader('Link', `<${versionsUrl}?offset=${nextOffset}&limit=${limit}>; rel="next"`);
                 }
 
-                const body: Record<string, unknown> = {
-                    self: versionsUrl,
-                    versionscount: totalCount,
-                    versionsurl: versionsUrl,
-                };
+                const body: Record<string, unknown> = {};
                 for (const v of versions) {
                     body[v.versionid] = v;
                 }

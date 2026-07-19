@@ -63,12 +63,14 @@ export interface GoCatalogModuleEntry {
 /** Simplified module record returned by the xRegistry service */
 export interface ModuleRecord {
     moduleid: string;
+    versionid: string;
+    isdefault: boolean;
     xid: string;
     name: string;
     self: string;
     epoch: number;
-    createdat: string;
-    modifiedat: string;
+    createdat?: string;
+    modifiedat?: string;
     versionsurl: string;
     versionscount: number;
     latest_version: string;
@@ -83,14 +85,15 @@ export interface ModuleRecord {
 /** xRegistry version record for a Go module version */
 export interface VersionRecord {
     versionid: string;
+    isdefault: boolean;
     xid: string;
     self: string;
     epoch: number;
-    createdat: string;
-    modifiedat: string;
+    createdat?: string;
+    modifiedat?: string;
     name: string;
     version: string;
-    timestamp: string;
+    timestamp?: string;
     info_url: string;
     mod_url: string;
     zip_url: string;

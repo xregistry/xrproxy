@@ -33,12 +33,13 @@ Each version resource keeps both the raw `number` and `platform` attributes.
 Supported query parameters on package collections:
 
 - `filter=name=rack`
+- `filter=name=rails*` (prefix search)
 - `inline=versions` or `inline=*`
 - `offset`
 - `limit` (max 100)
 - `search`
 
-Search is bounded to five upstream pages (`30` results per page). Version metadata is cached for one hour; search results are cached for five minutes.
+Search pages are loaded as needed (`30` upstream results per page), up to 20 pages. Search offsets above `499` return HTTP 400. Repeated/no-progress upstream pages are detected to prevent unbounded loops, and `Link` headers advertise `next` only while more results may exist. Version metadata is cached for one hour; search results are cached for five minutes.
 
 ## Configuration
 

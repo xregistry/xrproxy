@@ -103,7 +103,7 @@ export class RubyGemsService {
 
     async searchGems(query: string, page: number): Promise<RubyGemMetadata[]> {
         const trimmed = query.trim();
-        if (!trimmed || page < 1 || page > CACHE_CONFIG.MAX_SEARCH_PAGES) {
+        if (!trimmed || page < 1) {
             return [];
         }
         const key = createCacheKey('search', trimmed.toLowerCase(), page);

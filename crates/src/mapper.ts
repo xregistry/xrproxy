@@ -38,6 +38,8 @@ export interface XRegistryGroup {
 /** xRegistry resource document (one crate) */
 export interface XRegistryCrate {
   readonly crateid: string;
+  readonly versionid: string;
+  readonly isdefault: boolean;
   readonly self: string;
   readonly xid: string;
   readonly epoch: number;
@@ -105,7 +107,8 @@ export function mapRegistryRoot(baseUrl: string, groupsUrl: string): XRegistryRo
     modifiedat: new Date().toISOString(),
     description: 'xRegistry-compliant proxy for crates.io (Rust package registry)',
     specversion: SPEC_VERSION,
-    [`${GROUP_TYPE}url`]: groupsUrl
+    [`${GROUP_TYPE}url`]: groupsUrl,
+    [`${GROUP_TYPE}count`]: 1
   };
 }
 
@@ -126,8 +129,11 @@ export function mapGroup(baseUrl: string): XRegistryGroup {
 
 export function mapCrate(crate: CratesIoCrate, baseUrl: string): XRegistryCrate {
   const crateUrl = `${baseUrl}/${GROUP_TYPE}/${REGISTRY_ID}/${RESOURCE_TYPE}/${encodeURIComponent(crate.name)}`;
+  const defaultVersion = resolveDefaultVersion(crate);
   return {
     crateid: crate.name,
+    versionid: defaultVersion,
+    isdefault: true,
     self: crateUrl,
     xid: `/${GROUP_TYPE}/${REGISTRY_ID}/${RESOURCE_TYPE}/${crate.name}`,
     epoch: stableEpoch(crate.updated_at),
@@ -153,9 +159,13 @@ export function mapCrate(crate: CratesIoCrate, baseUrl: string): XRegistryCrate 
   };
 }
 
+export function resolveDefaultVersion(crate: CratesIoCrate): string {
+  return crate.max_stable_version ?? crate.max_version;
+}
+
 export function mapVersion(
   version: CratesIoVersion,
-  maxStableVersion: string | null,
+  defaultVersion: string,
   baseUrl: string
 ): XRegistryVersion {
   const versionUrl = `${baseUrl}/${GROUP_TYPE}/${REGISTRY_ID}/${RESOURCE_TYPE}/${encodeURIComponent(version.crate)}/versions/${encodeURIComponent(version.num)}`;
@@ -166,7 +176,7 @@ export function mapVersion(
     epoch: stableEpoch(version.updated_at),
     createdat: version.created_at,
     modifiedat: version.updated_at,
-    isdefault: version.num === (maxStableVersion ?? ''),
+    isdefault: version.num === defaultVersion,
     immutable: true,
     yanked: version.yanked,
     license: version.license,

@@ -49,6 +49,17 @@ export const FIXTURE_MODEL_GPT2: Readonly<Record<string, unknown>> = {
   gitalyDefaultBranch: 'main',
 };
 
+export const FIXTURE_MODEL_GOOGLE_SECOND: Readonly<Record<string, unknown>> = {
+  id: 'Google/second-model',
+  author: 'Google',
+  sha: '1111222233334444555566667777888899990000',
+  lastModified: '2024-02-01T00:00:00.000Z',
+  private: false,
+  gated: false,
+  tags: [],
+  gitalyDefaultBranch: 'main',
+};
+
 export const FIXTURE_DATASET_SQUAD: Readonly<Record<string, unknown>> = {
   id: 'rajpurkar/squad',
   author: 'rajpurkar',
@@ -137,6 +148,7 @@ export const FIXTURE_COMMITS_ALTBRANCH: ReadonlyArray<Readonly<Record<string, un
 export const FIXTURE_MODELS_LIST: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   FIXTURE_MODEL_BERT,
   FIXTURE_MODEL_GPT2,
+  FIXTURE_MODEL_GOOGLE_SECOND,
 ];
 
 export const FIXTURE_DATASETS_LIST: ReadonlyArray<Readonly<Record<string, unknown>>> = [

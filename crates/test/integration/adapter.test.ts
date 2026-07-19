@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { startFixtureServer } from '@xregistry/registry-core';
 import { CratesIoAdapter } from '../../src/adapter';
-import { FIXTURE_CRATE_SERDE, FIXTURE_LIST, FIXTURE_VERSIONS_SERDE } from '../../src/fixtures';
+import { FIXTURE_CRATE_SERDE, FIXTURE_LIST } from '../../src/fixtures';
 
 test('CratesIoAdapter lists crates from upstream', async () => {
   const fixture = await startFixtureServer([{
@@ -128,8 +128,8 @@ test('CratesIoAdapter respects rate-limit 429 with retry', async () => {
 test('CratesIoAdapter gets crate versions', async () => {
   const fixture = await startFixtureServer([{
     method: 'GET',
-    path: '/api/v1/crates/serde/versions',
-    responses: [{ body: FIXTURE_VERSIONS_SERDE }]
+    path: '/api/v1/crates/serde',
+    responses: [{ body: FIXTURE_CRATE_SERDE }]
   }]);
   try {
     const adapter = new CratesIoAdapter({
@@ -145,6 +145,7 @@ test('CratesIoAdapter gets crate versions', async () => {
       assert.equal(result.value.versions.length, 2);
       assert.equal(result.value.versions[0]?.num, '1.0.219');
     }
+    assert.equal(fixture.requests[0]?.path, '/api/v1/crates/serde');
   } finally {
     await fixture.close();
   }

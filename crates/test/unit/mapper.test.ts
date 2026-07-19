@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapCrate, mapGroup, mapRegistryRoot, mapVersion } from '../../src/mapper';
+import { mapCrate, mapGroup, mapRegistryRoot, mapVersion, resolveDefaultVersion } from '../../src/mapper';
 import { FIXTURE_CRATE_SERDE } from '../../src/fixtures';
 
 const BASE_URL = 'http://localhost:3700';
@@ -14,6 +14,7 @@ test('mapRegistryRoot has required xRegistry fields', () => {
   assert.ok(typeof root.createdat === 'string');
   assert.ok(typeof root.modifiedat === 'string');
   assert.equal(root.rustregistriesurl, `${BASE_URL}/rustregistries`);
+  assert.equal(root.rustregistriescount, 1);
 });
 
 test('mapGroup produces valid xRegistry group', () => {
@@ -28,6 +29,8 @@ test('mapGroup produces valid xRegistry group', () => {
 test('mapCrate uses crate name as crateid', () => {
   const crate = mapCrate(FIXTURE_CRATE_SERDE.crate, BASE_URL);
   assert.equal(crate.crateid, 'serde');
+  assert.equal(crate.versionid, '1.0.219');
+  assert.equal(crate.isdefault, true);
   assert.equal(crate.name, 'serde');
   assert.ok(crate.self.includes('/crates/serde'));
   assert.ok(crate.xid.includes('/crates/serde'));
@@ -66,4 +69,20 @@ test('mapVersion sets isdefault for max_stable_version', () => {
   const mapped2 = mapVersion(version2, '1.0.219', BASE_URL);
   assert.equal(mapped1.isdefault, true);
   assert.equal(mapped2.isdefault, false);
+});
+
+test('prerelease-only crates use max_version as the default version', () => {
+  const crate = {
+    ...FIXTURE_CRATE_SERDE.crate,
+    max_stable_version: null,
+    max_version: '2.0.0-beta.1'
+  };
+  const version = {
+    ...FIXTURE_CRATE_SERDE.versions[0]!,
+    num: '2.0.0-beta.1'
+  };
+  const mappedCrate = mapCrate(crate, BASE_URL);
+  const mappedVersion = mapVersion(version, resolveDefaultVersion(crate), BASE_URL);
+  assert.equal(mappedCrate.versionid, '2.0.0-beta.1');
+  assert.equal(mappedVersion.isdefault, true);
 });

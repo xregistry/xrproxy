@@ -19,7 +19,7 @@ Default: **4100**
 | GET | `/capabilities` | Capability advertisement |
 | GET | `/composerregistries` | List of Composer registries |
 | GET | `/composerregistries/packagist.org` | packagist.org group entity |
-| GET | `/composerregistries/packagist.org/packages` | Package list (supports `?q=`, `?page=`, `?filter=`, `?sort=`) |
+| GET | `/composerregistries/packagist.org/packages` | Package list (supports `?q=`, `?page=`, `?filter=name=<prefix>*`, `?sort=`) |
 | GET | `/composerregistries/packagist.org/packages/:id` | Package metadata (supports `?inline=versions`) |
 | GET | `/composerregistries/packagist.org/packages/:id/meta` | Package meta document |
 | GET | `/composerregistries/packagist.org/packages/:id/versions` | All versions |

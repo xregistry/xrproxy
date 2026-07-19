@@ -44,6 +44,21 @@ describe('RubyGemsService', () => {
         }
     });
 
+    test('search accepts pages beyond the former fixed five-page limit', async () => {
+        const fixture = await startFixtureServer([
+            { path: '/search.json', responses: [{ body: [RACK_GEM_FIXTURE] }] },
+        ]);
+        try {
+            const service = new RubyGemsService({ cacheDir, baseUrl: fixture.url });
+            const result = await service.searchGems('rack', 6);
+
+            expect(result).toEqual([RACK_GEM_FIXTURE]);
+            expect(fixture.requests).toHaveLength(1);
+        } finally {
+            await fixture.close();
+        }
+    });
+
     test('ruby platform produces a plain version ID (no suffix)', () => {
         expect(buildVersionId('1.0.0', 'ruby')).toBe('1.0.0');
     });

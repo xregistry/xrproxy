@@ -152,12 +152,21 @@ const VERSIONS_BY_NAME: Readonly<Record<string, CratesVersionsResult>> = {
 
 /** In-memory fixture adapter that replaces the real crates.io API adapter */
 export class FixtureAdapter {
-  async listCrates(_options: {
+  async listCrates(options: {
     readonly page?: number;
     readonly perPage?: number;
     readonly query?: string;
   } = {}): Promise<{ kind: 'value'; value: CratesListResult }> {
-    return { kind: 'value', value: FIXTURE_LIST };
+    const crates = FIXTURE_LIST.crates;
+    const perPage = options.perPage ?? crates.length;
+    const start = ((options.page ?? 1) - 1) * perPage;
+    return {
+      kind: 'value',
+      value: {
+        crates: crates.slice(start, start + perPage),
+        meta: { total: crates.length }
+      }
+    };
   }
 
   async getCrate(name: string): Promise<{ kind: 'value'; value: CratesGetResult } | { kind: 'not-found' }> {

@@ -59,6 +59,41 @@ export interface HfCommit {
 export interface ListOptions {
   readonly limit?: number;
   readonly skip?: number;
+  readonly search?: string;
+}
+
+export interface RepoPage {
+  readonly items: readonly HfRepoListEntry[];
+  readonly hasMore: boolean;
+}
+
+const PREFIX_SCAN_PAGE_SIZE = 100;
+export const MAX_FILTERED_SKIP = 500;
+export const PREFIX_SCAN_MAX_REQUESTS = 10;
+
+export class PrefixSearchLimitError extends Error {
+  constructor() {
+    super(`Hugging Face prefix search exceeded the ${PREFIX_SCAN_MAX_REQUESTS}-request scan budget`);
+    this.name = 'PrefixSearchLimitError';
+  }
+}
+
+/** Encode an HF repo ID as path segments while preserving its namespace separator. */
+export function encodeHubRepoPath(repoId: string): string {
+  return repoId.split('/').map(segment => encodeURIComponent(segment)).join('/');
+}
+
+export function buildHubListUrl(
+  baseUrl: string,
+  type: ResourceType,
+  opts: Required<Pick<ListOptions, 'limit' | 'skip'>> & Pick<ListOptions, 'search'>,
+): string {
+  const params = new URLSearchParams({
+    limit: String(opts.limit),
+    skip: String(opts.skip),
+  });
+  if (opts.search !== undefined) params.set('search', opts.search);
+  return `${baseUrl.replace(/\/$/, '')}/api/${type}?${params.toString()}`;
 }
 
 /** Derive the default branch from repo info: gitalyDefaultBranch, or 'main'. */
@@ -162,8 +197,12 @@ export class HuggingFaceClient {
   async listRepos(type: ResourceType, opts: ListOptions = {}): Promise<readonly HfRepoListEntry[]> {
     const limit = opts.limit ?? 20;
     const skip = opts.skip ?? 0;
-    const url = `${this.baseUrl}/api/${type}?limit=${limit}&skip=${skip}`;
-    const key = createCacheKey('list', type, limit, skip);
+    const url = buildHubListUrl(this.baseUrl, type, {
+      limit,
+      skip,
+      ...(opts.search !== undefined ? { search: opts.search } : {}),
+    });
+    const key = createCacheKey('list', type, limit, skip, opts.search ?? '');
 
     const result = await this.mutableCache.get<HfRepoListEntry[]>(key, async ctx => {
       const res = await this.http.getJson<HfRepoListEntry[]>(url, {
@@ -176,8 +215,62 @@ export class HuggingFaceClient {
     return result.kind === 'value' ? (result.value ?? []) : [];
   }
 
+  /**
+   * Apply exact, case-insensitive prefix filtering over the Hub's broader
+   * search results. Upstream pages are scanned from the beginning so skip and
+   * limit apply to matching IDs rather than to broad-search results.
+   */
+  async listReposByPrefix(
+    type: ResourceType,
+    prefix: string,
+    opts: ListOptions = {},
+  ): Promise<RepoPage> {
+    const limit = opts.limit ?? 20;
+    const skip = opts.skip ?? 0;
+    const needed = skip + limit + 1;
+    const normalizedPrefix = prefix.toLowerCase();
+    const matches: HfRepoListEntry[] = [];
+    const seenRepoIds = new Set<string>();
+    let upstreamSkip = 0;
+    let requests = 0;
+    let exhausted = false;
+
+    while (matches.length < needed && requests < PREFIX_SCAN_MAX_REQUESTS) {
+      const page = await this.listRepos(type, {
+        limit: PREFIX_SCAN_PAGE_SIZE,
+        skip: upstreamSkip,
+        search: prefix,
+      });
+      requests += 1;
+
+      let newRepoCount = 0;
+      for (const repo of page) {
+        const normalizedId = repo.id.toLowerCase();
+        if (seenRepoIds.has(normalizedId)) continue;
+        seenRepoIds.add(normalizedId);
+        newRepoCount += 1;
+        if (repo.id.toLowerCase().startsWith(normalizedPrefix)) matches.push(repo);
+      }
+
+      if (page.length < PREFIX_SCAN_PAGE_SIZE || newRepoCount === 0) {
+        exhausted = true;
+        break;
+      }
+      upstreamSkip += page.length;
+    }
+
+    if (matches.length < needed && !exhausted && requests >= PREFIX_SCAN_MAX_REQUESTS) {
+      throw new PrefixSearchLimitError();
+    }
+
+    return {
+      items: matches.slice(skip, skip + limit),
+      hasMore: matches.length > skip + limit,
+    };
+  }
+
   async getRepo(type: ResourceType, repoId: string): Promise<HfRepoInfo | null> {
-    const url = `${this.baseUrl}/api/${type}/${encodeURIComponent(repoId)}`;
+    const url = `${this.baseUrl}/api/${type}/${encodeHubRepoPath(repoId)}`;
     const key = createCacheKey('repo', type, repoId);
 
     const result = await this.mutableCache.get<HfRepoInfo>(key, async ctx => {
@@ -197,7 +290,7 @@ export class HuggingFaceClient {
   }
 
   async getRefs(type: ResourceType, repoId: string): Promise<HfRefs | null> {
-    const url = `${this.baseUrl}/api/${type}/${encodeURIComponent(repoId)}/refs`;
+    const url = `${this.baseUrl}/api/${type}/${encodeHubRepoPath(repoId)}/refs`;
     const key = createCacheKey('refs', type, repoId);
 
     const result = await this.mutableCache.get<HfRefs>(key, async ctx => {
@@ -227,7 +320,7 @@ export class HuggingFaceClient {
     ref: string,
     page = 1,
   ): Promise<readonly HfCommit[]> {
-    const url = `${this.baseUrl}/api/${type}/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(ref)}?p=${page}`;
+    const url = `${this.baseUrl}/api/${type}/${encodeHubRepoPath(repoId)}/commits/${encodeURIComponent(ref)}?p=${page}`;
     const key = createCacheKey('commits', type, repoId, ref, page);
 
     const result = await this.mutableCache.get<HfCommit[]>(key, async ctx => {
@@ -268,7 +361,7 @@ export class HuggingFaceClient {
     const key = createCacheKey('commit-sha', type, repoId, sha);
 
     const result = await this.immutableCache.get<HfCommit>(key, async () => {
-      const url = `${this.baseUrl}/api/${type}/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(sha)}`;
+      const url = `${this.baseUrl}/api/${type}/${encodeHubRepoPath(repoId)}/commits/${encodeURIComponent(sha)}`;
       try {
         const res = await this.http.getJson<HfCommit[]>(url);
         if ('notModified' in res) return notModifiedResult<HfCommit>();

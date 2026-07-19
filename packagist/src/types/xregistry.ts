@@ -30,6 +30,8 @@ export interface XRegistryVersion extends XRegistryEntity {
 
 export interface XRegistryResource extends XRegistryEntity {
     packageid: string;
+    versionid?: string;
+    isdefault?: boolean;
     versionsurl?: string;
     versionscount?: number;
 }

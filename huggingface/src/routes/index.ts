@@ -3,7 +3,11 @@ import type { HfConfig } from '../config';
 import type { HuggingFaceClient } from '../hf-client';
 import type { ResourceType } from '../hf-client';
 import { decodeRepoId, encodeRepoId, isValidEncodedRepoId } from '../repo-utils';
-import { defaultBranchOf } from '../hf-client';
+import {
+  defaultBranchOf,
+  MAX_FILTERED_SKIP,
+  PrefixSearchLimitError,
+} from '../hf-client';
 
 const SPEC_VERSION = '1.0-rc2';
 const REGISTRY_ID = 'huggingface-hub';
@@ -162,6 +166,13 @@ function rp(req: Request, name: string): string {
   return Array.isArray(v) ? (v[0] ?? '') : (v ?? '');
 }
 
+/** Map the viewer's name=<prefix>* filter to the Hub's search query. */
+function namePrefixFilter(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = /^name=([^*]+)\*$/.exec(value);
+  return match?.[1];
+}
+
 export function setupRoutes(app: Express, _config: HfConfig, client: HuggingFaceClient): void {
   // ─── Registry root ────────────────────────────────────────────────────────
   app.get('/', (req: Request, res: Response) => {
@@ -246,10 +257,27 @@ export function setupRoutes(app: Express, _config: HfConfig, client: HuggingFace
     const type = resourceType as ResourceType;
     const limit = Math.min(parseInt((req.query['limit'] as string | undefined) ?? '20', 10) || 20, 100);
     const skip = parseInt((req.query['skip'] as string | undefined) ?? '0', 10) || 0;
+    const filter = req.query['filter'];
+    const search = namePrefixFilter(filter);
+    if (filter !== undefined && search === undefined) {
+      res.status(400).json(problem(400, 'Invalid filter', 'Supported filter syntax is name=<prefix>*'));
+      return;
+    }
+    if (search !== undefined && skip > MAX_FILTERED_SKIP) {
+      res.status(400).json(problem(
+        400,
+        'Filtered skip too large',
+        `Filtered collections support skip values up to ${MAX_FILTERED_SKIP}`,
+      ));
+      return;
+    }
     const base = getBaseUrl(req);
 
     try {
-      const items = await client.listRepos(type, { limit, skip });
+      const filteredPage = search !== undefined
+        ? await client.listReposByPrefix(type, search, { limit, skip })
+        : null;
+      const items = filteredPage?.items ?? await client.listRepos(type, { limit, skip });
       const collection: Record<string, unknown> = {};
       for (const item of items) {
         const encoded = encodeRepoId(item.id);
@@ -274,15 +302,30 @@ export function setupRoutes(app: Express, _config: HfConfig, client: HuggingFace
       }
 
       // Pagination Link header
-      if (items.length >= limit) {
+      if (filteredPage?.hasMore ?? items.length >= limit) {
         const nextSkip = skip + limit;
-        const nextUrl = `${base}/${GROUP_TYPE}/${GROUP_ID}/${type}?limit=${limit}&skip=${nextSkip}`;
-        res.setHeader('Link', `<${nextUrl}>; rel="next"`);
+        if (search === undefined || nextSkip <= MAX_FILTERED_SKIP) {
+          const nextParams = new URLSearchParams({
+            limit: String(limit),
+            skip: String(nextSkip),
+          });
+          if (typeof filter === 'string') nextParams.set('filter', filter);
+          const nextUrl = `${base}/${GROUP_TYPE}/${GROUP_ID}/${type}?${nextParams.toString()}`;
+          res.setHeader('Link', `<${nextUrl}>; rel="next"`);
+        }
       }
 
       setCacheMutable(res);
       res.json(collection);
     } catch (err) {
+      if (err instanceof PrefixSearchLimitError) {
+        res.status(400).json(problem(
+          400,
+          'Filtered search too broad',
+          'Use a more specific name prefix or a smaller skip value',
+        ));
+        return;
+      }
       console.error('[HF] listRepos error', err);
       res.status(502).json(problem(502, 'Bad Gateway', 'Failed to reach Hugging Face Hub API'));
     }
