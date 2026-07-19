@@ -14,6 +14,7 @@ import {
     modulePathToIdentity,
 } from '../utils/path-escaping';
 import { entityNotFound } from '../utils/xregistry-errors';
+import { buildPaginationLinkHeader } from '../utils/pagination';
 
 const { GROUP_TYPE, RESOURCE_TYPE } = REGISTRY_METADATA;
 
@@ -109,23 +110,15 @@ export function createModuleRoutes(
             }
 
             const collectionUrl = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_TYPE}`;
-            const nextOffset = offset + paths.length;
-            const hasMore = nextOffset < totalKnown;
-
             res.setHeader('X-Total-Count', String(totalKnown));
-            if (hasMore) {
-                const nextQuery = new URLSearchParams({
-                    offset: String(nextOffset),
-                    limit: String(limit),
-                });
-                if (filterParam !== undefined) {
-                    nextQuery.set('filter', filterParam);
-                }
-                res.setHeader(
-                    'Link',
-                    `<${collectionUrl}?${nextQuery.toString()}>; rel="next"`
-                );
-            }
+            const linkHeader = buildPaginationLinkHeader(
+                collectionUrl,
+                offset,
+                limit,
+                totalKnown,
+                { filter: filterParam }
+            );
+            if (linkHeader) res.setHeader('Link', linkHeader);
 
             res.json(modules);
         })
@@ -169,11 +162,14 @@ export function createModuleRoutes(
 
             const { versions, totalCount } = result;
             const versionsUrl = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_TYPE}/${encodeURIComponent(moduleId)}/versions`;
-            const nextOffset = offset + versions.length;
             res.setHeader('X-Total-Count', String(totalCount));
-            if (nextOffset < totalCount) {
-                res.setHeader('Link', `<${versionsUrl}?offset=${nextOffset}&limit=${limit}>; rel="next"`);
-            }
+            const linkHeader = buildPaginationLinkHeader(
+                versionsUrl,
+                offset,
+                limit,
+                totalCount
+            );
+            if (linkHeader) res.setHeader('Link', linkHeader);
 
             const body: Record<string, unknown> = {};
             for (const version of versions) {
