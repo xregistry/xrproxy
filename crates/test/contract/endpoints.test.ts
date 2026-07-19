@@ -100,8 +100,7 @@ test('GET / returns registry root', async () => {
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body['registryid'], 'crates.io');
     assert.ok(typeof body['rustregistriesurl'] === 'string');
-    // counts are not authoritative — must not be emitted at root
-    assert.equal(body['rustregistriescount'], undefined, 'root must not emit rustregistriescount');
+    assert.equal(body['rustregistriescount'], 1);
   } finally {
     await server.close();
   }
@@ -178,6 +177,8 @@ test('GET /rustregistries/crates.io/crates/serde returns crate', async () => {
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body['crateid'], 'serde');
+    assert.equal(body['versionid'], '1.0.219');
+    assert.equal(body['isdefault'], true);
     assert.equal(body['max_version'], '1.0.219');
     assert.equal(body['immutable'], undefined, 'crate-level should not have immutable flag');
     assert.ok(typeof body['versionsurl'] === 'string');
@@ -245,6 +246,71 @@ test('pagination params are bounded — limit above MAX_PAGE_SIZE returns max', 
   try {
     const response = await fetch(`${server.base}/rustregistries/crates.io/crates?limit=9999`);
     assert.equal(response.status, 200);
+  } finally {
+    await server.close();
+  }
+});
+
+test('crate collection honors offset pagination and emits navigation links', async () => {
+  const server = await startTestServer();
+  try {
+    const first = await fetch(`${server.base}/rustregistries/crates.io/crates?offset=0&limit=1`);
+    const second = await fetch(`${server.base}/rustregistries/crates.io/crates?offset=1&limit=1`);
+    const firstBody = await first.json() as Record<string, unknown>;
+    const secondBody = await second.json() as Record<string, unknown>;
+    assert.deepEqual(Object.keys(firstBody), ['serde']);
+    assert.deepEqual(Object.keys(secondBody), ['tokio']);
+    assert.match(first.headers.get('link') ?? '', /offset=1/);
+    assert.match(second.headers.get('link') ?? '', /rel="prev"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('crate collection supports name prefix filters', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?filter=name=ser*`);
+    const body = await response.json() as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body), ['serde']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('name prefix filtering paginates over matches rather than upstream pages', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?filter=name=tok*&offset=0&limit=1`);
+    const body = await response.json() as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body), ['tokio']);
+    assert.equal(response.headers.get('link'), null);
+  } finally {
+    await server.close();
+  }
+});
+
+test('name prefix filtering rejects offsets outside the crates.io search window', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?filter=name=tok*&offset=1000&limit=1`);
+    assert.equal(response.status, 400);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body['error'], 'invalid_offset');
+    assert.match(String(body['message']), /less than 1000/);
+    assert.equal(response.headers.get('link'), null);
+  } finally {
+    await server.close();
+  }
+});
+
+test('version collection honors offset pagination', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/serde/versions?offset=1&limit=1`);
+    const body = await response.json() as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body), ['1.0.218']);
+    assert.match(response.headers.get('link') ?? '', /rel="prev"/);
   } finally {
     await server.close();
   }

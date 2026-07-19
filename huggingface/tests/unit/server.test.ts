@@ -88,28 +88,28 @@ describe('Hugging Face xRegistry Server', () => {
   beforeAll(async () => {
     fixture = await startFixtureServer([
       { method: 'GET', path: '/api/models', responses: [{ body: FIXTURE_MODELS_LIST }] },
-      { method: 'GET', path: '/api/models/google%2Fbert-base-uncased', responses: [{ body: FIXTURE_MODEL_BERT }] },
-      { method: 'GET', path: '/api/models/openai-community%2Fgpt2', responses: [{ body: FIXTURE_MODEL_GPT2 }] },
-      { method: 'GET', path: '/api/models/google%2Fbert-base-uncased/refs', responses: [{ body: FIXTURE_REFS_BERT }] },
-      { method: 'GET', path: '/api/models/google%2Fbert-base-uncased/commits/main', responses: [{ body: FIXTURE_COMMITS_BERT }] },
+      { method: 'GET', path: '/api/models/google/bert-base-uncased', responses: [{ body: FIXTURE_MODEL_BERT }] },
+      { method: 'GET', path: '/api/models/openai-community/gpt2', responses: [{ body: FIXTURE_MODEL_GPT2 }] },
+      { method: 'GET', path: '/api/models/google/bert-base-uncased/refs', responses: [{ body: FIXTURE_REFS_BERT }] },
+      { method: 'GET', path: '/api/models/google/bert-base-uncased/commits/main', responses: [{ body: FIXTURE_COMMITS_BERT }] },
       // Direct commit-SHA lookup – SHA used as the ref parameter (correct HF API usage)
-      { method: 'GET', path: '/api/models/google%2Fbert-base-uncased/commits/a86a4d9a4e7bfed432ab38a4462a66bc50f34f49', responses: [{ body: [FIXTURE_COMMITS_BERT[0]] }] },
+      { method: 'GET', path: '/api/models/google/bert-base-uncased/commits/a86a4d9a4e7bfed432ab38a4462a66bc50f34f49', responses: [{ body: [FIXTURE_COMMITS_BERT[0]] }] },
       // Deep commit (not on page 1 of main – proves no page-scan)
-      { method: 'GET', path: `/api/models/google%2Fbert-base-uncased/commits/${DEEP_COMMIT_SHA}`, responses: [{ body: FIXTURE_COMMITS_BERT_DEEP }] },
+      { method: 'GET', path: `/api/models/google/bert-base-uncased/commits/${DEEP_COMMIT_SHA}`, responses: [{ body: FIXTURE_COMMITS_BERT_DEEP }] },
       // Non-main default branch model
-      { method: 'GET', path: '/api/models/test-org%2Fmodel-with-master-branch', responses: [{ body: FIXTURE_MODEL_ALTBRANCH }] },
-      { method: 'GET', path: '/api/models/test-org%2Fmodel-with-master-branch/refs', responses: [{ body: FIXTURE_REFS_ALTBRANCH }] },
-      { method: 'GET', path: '/api/models/test-org%2Fmodel-with-master-branch/commits/master', responses: [{ body: FIXTURE_COMMITS_ALTBRANCH }] },
-      { method: 'GET', path: '/api/models/test-org%2Fmodel-with-master-branch/commits/bbbb2222cccc3333dddd4444eeee5555ffff6666', responses: [{ body: [FIXTURE_COMMITS_ALTBRANCH[0]] }] },
+      { method: 'GET', path: '/api/models/test-org/model-with-master-branch', responses: [{ body: FIXTURE_MODEL_ALTBRANCH }] },
+      { method: 'GET', path: '/api/models/test-org/model-with-master-branch/refs', responses: [{ body: FIXTURE_REFS_ALTBRANCH }] },
+      { method: 'GET', path: '/api/models/test-org/model-with-master-branch/commits/master', responses: [{ body: FIXTURE_COMMITS_ALTBRANCH }] },
+      { method: 'GET', path: '/api/models/test-org/model-with-master-branch/commits/bbbb2222cccc3333dddd4444eeee5555ffff6666', responses: [{ body: [FIXTURE_COMMITS_ALTBRANCH[0]] }] },
       // Datasets
       { method: 'GET', path: '/api/datasets', responses: [{ body: FIXTURE_DATASETS_LIST }] },
-      { method: 'GET', path: '/api/datasets/rajpurkar%2Fsquad', responses: [{ body: FIXTURE_DATASET_SQUAD }] },
-      { method: 'GET', path: '/api/datasets/rajpurkar%2Fsquad/refs', responses: [{ body: { branches: [{ name: 'main', targetCommit: 'c3a01e27bb9f5b7c5674c9878e8f28cb4b97f1ad' }], tags: [] } }] },
-      { method: 'GET', path: '/api/datasets/rajpurkar%2Fsquad/commits/main', responses: [{ body: [] }] },
+      { method: 'GET', path: '/api/datasets/rajpurkar/squad', responses: [{ body: FIXTURE_DATASET_SQUAD }] },
+      { method: 'GET', path: '/api/datasets/rajpurkar/squad/refs', responses: [{ body: { branches: [{ name: 'main', targetCommit: 'c3a01e27bb9f5b7c5674c9878e8f28cb4b97f1ad' }], tags: [] } }] },
+      { method: 'GET', path: '/api/datasets/rajpurkar/squad/commits/main', responses: [{ body: [] }] },
       // Spaces
       { method: 'GET', path: '/api/spaces', responses: [{ body: FIXTURE_SPACES_LIST }] },
-      { method: 'GET', path: '/api/spaces/gradio%2Fhello_world', responses: [{ body: FIXTURE_SPACE_GRADIO }] },
-      { method: 'GET', path: '/api/spaces/gradio%2Fhello_world/refs', responses: [{ body: { branches: [{ name: 'main', targetCommit: 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0' }], tags: [] } }] },
+      { method: 'GET', path: '/api/spaces/gradio/hello_world', responses: [{ body: FIXTURE_SPACE_GRADIO }] },
+      { method: 'GET', path: '/api/spaces/gradio/hello_world/refs', responses: [{ body: { branches: [{ name: 'main', targetCommit: 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0' }], tags: [] } }] },
       // 404
       { method: 'GET', path: '/api/models/unknown%2Fnonexistent', responses: [{ status: 404, body: { error: 'not found' } }] },
     ]);
@@ -221,6 +221,40 @@ describe('Hugging Face xRegistry Server', () => {
     expect(bert).toHaveProperty('modifiedat');
   });
 
+  it('viewer name-prefix filter preserves pagination', async () => {
+    const res = await supertest(app).get(
+      `/${GROUP}/${REGISTRY}/models?filter=name=google*&limit=1&skip=0`,
+    );
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body)).toEqual(['google~bert-base-uncased']);
+    expect(res.headers['link']).toContain('limit=1');
+    expect(res.headers['link']).toContain('skip=1');
+    expect(res.headers['link']).toContain('filter=name%3Dgoogle*');
+
+    const next = await supertest(app).get(
+      `/${GROUP}/${REGISTRY}/models?filter=name=google*&limit=1&skip=1`,
+    );
+    expect(next.status).toBe(200);
+    expect(Object.keys(next.body)).toEqual(['Google~second-model']);
+    expect(next.headers['link']).toBeUndefined();
+  });
+
+  it('rejects unsupported viewer filters', async () => {
+    const res = await supertest(app).get(`/${GROUP}/${REGISTRY}/models?filter=author=google`);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects deep filtered skips before calling the Hub', async () => {
+    const before = fixture.requests.filter(r => r.path === '/api/models').length;
+    const res = await supertest(app).get(
+      `/${GROUP}/${REGISTRY}/models?filter=name=google*&skip=501`,
+    );
+    const after = fixture.requests.filter(r => r.path === '/api/models').length;
+    expect(res.status).toBe(400);
+    expect(res.body.title).toBe('Filtered skip too large');
+    expect(after).toBe(before);
+  });
+
   // ── Slash ID round-trip (tilde collision-free proof) ─────────────────────
 
   it('tilde is collision-free: HF names never contain ~ (regression #5)', () => {
@@ -256,6 +290,10 @@ describe('Hugging Face xRegistry Server', () => {
     expect(res.body.refs.branches).toHaveLength(2);
     expect(res.body.refs.tags).toHaveLength(1);
     expect(res.body.pipeline_tag).toBe('fill-mask');
+    expect(new URL(res.body.self).pathname).toBe(
+      `/${GROUP}/${REGISTRY}/models/google~bert-base-uncased`,
+    );
+    expect((await supertest(app).get(new URL(res.body.self).pathname)).status).toBe(200);
   });
 
   it('model resource has mutable Cache-Control (not immutable)', async () => {
@@ -278,6 +316,11 @@ describe('Hugging Face xRegistry Server', () => {
     expect(v).toBeDefined();
     expect(v.sha).toBe('a86a4d9a4e7bfed432ab38a4462a66bc50f34f49');
     expect(v.isdefault).toBe(true);
+    const selfPath = new URL(v.self).pathname;
+    expect(selfPath).toBe(
+      `/${GROUP}/${REGISTRY}/models/google~bert-base-uncased/versions/${v.sha}`,
+    );
+    expect((await supertest(app).get(selfPath)).status).toBe(200);
   });
 
   it('version list has short-TTL mutable Cache-Control', async () => {
@@ -349,7 +392,7 @@ describe('Hugging Face xRegistry Server', () => {
   // ── Negative cache (regression #4) ────────────────────────────────────────
 
   it('404 repo is negatively cached: only one upstream request made', async () => {
-    const path = '/api/models/unknown%2Fnonexistent';
+    const path = '/api/models/unknown/nonexistent';
     const before = fixture.requests.filter(r => r.path === path).length;
     await supertest(app).get(`/${GROUP}/${REGISTRY}/models/unknown~nonexistent`);
     await supertest(app).get(`/${GROUP}/${REGISTRY}/models/unknown~nonexistent`);
@@ -360,7 +403,7 @@ describe('Hugging Face xRegistry Server', () => {
 
   it('immutable SHA version is cached: second request hits no upstream', async () => {
     const sha = 'a86a4d9a4e7bfed432ab38a4462a66bc50f34f49';
-    const urlPath = `/api/models/google%2Fbert-base-uncased/commits/${sha}`;
+    const urlPath = `/api/models/google/bert-base-uncased/commits/${sha}`;
     const before = fixture.requests.filter(r => r.path === urlPath).length;
     await supertest(app).get(`/${GROUP}/${REGISTRY}/models/google~bert-base-uncased/versions/${sha}`);
     await supertest(app).get(`/${GROUP}/${REGISTRY}/models/google~bert-base-uncased/versions/${sha}`);

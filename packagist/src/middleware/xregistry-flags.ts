@@ -12,6 +12,12 @@ export interface XRegistryFlags {
     epoch?: number;
 }
 
+export function getNamePrefixFilter(filter: string[][] | undefined): string | undefined {
+    if (filter?.length !== 1 || filter[0]?.length !== 1) return undefined;
+    const match = filter[0][0]?.match(/^name=(.+)\*$/i);
+    return match?.[1]?.trim() || undefined;
+}
+
 declare global {
     // eslint-disable-next-line @typescript-eslint/no-namespace
     namespace Express {
@@ -75,7 +81,10 @@ export function applyFilter<T extends Record<string, unknown>>(
                 const attrKey = (attr ?? '').trim();
                 const valStr = (val ?? '').trim().toLowerCase();
                 const itemVal = String(item[attrKey] ?? '').toLowerCase();
-                return neq ? itemVal !== valStr : itemVal.includes(valStr);
+                const matches = valStr.endsWith('*')
+                    ? itemVal.startsWith(valStr.slice(0, -1))
+                    : itemVal.includes(valStr);
+                return neq ? !matches : matches;
             }),
         ),
     );

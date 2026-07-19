@@ -49,6 +49,15 @@ export function unescapeVersion(escaped: string): string {
 }
 
 /**
+ * Encode a canonical module path for an xRegistry URL while preserving its
+ * slash-delimited structure. Encoding the whole path turns slashes into %2F,
+ * which clients may encode again when following self links.
+ */
+export function encodeModulePathForUrl(modulePath: string): string {
+    return modulePath.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
  * Validate that a module path is a syntactically valid Go module path.
  * This is a basic check; full validation is done by the Go toolchain.
  */

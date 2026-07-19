@@ -38,7 +38,7 @@ import {
 import { corsMiddleware } from './middleware/cors';
 import { createSimpleLogger } from './middleware/logging';
 import { asyncHandler, throwEntityNotFound } from './middleware/xregistry-error-handler';
-import { applyFilter, applySort, parseXRegistryFlags } from './middleware/xregistry-flags';
+import { applyFilter, applySort, getNamePrefixFilter, parseXRegistryFlags } from './middleware/xregistry-flags';
 import { PackagistService } from './services/packagist-service';
 import { EntityStateManager } from '../../shared/entity-state-manager';
 import { entityETag } from './utils/xregistry-utils';
@@ -252,11 +252,16 @@ const app: Express = createRegistryApp({
 
             const flags = req.xregistryFlags ?? {};
             const q = (req.query['q'] as string | undefined) ?? '';
+            const namePrefix = getNamePrefixFilter(flags.filter);
             const pageStr = req.query['page'] as string | undefined;
             const page = pageStr ? Math.max(1, parseInt(pageStr, 10)) : 1;
 
             const perPage = 15;
-            const { packages, total } = await packagistService.searchPackages(q, page, perPage);
+            const { packages, total } = namePrefix
+                ? await packagistService.searchPackagesByPrefix(namePrefix, page, perPage)
+                : q
+                    ? await packagistService.searchPackages(q, page, perPage)
+                : await packagistService.listPackages(page, perPage);
 
             const base = getBaseUrl(req);
 
@@ -334,7 +339,7 @@ const app: Express = createRegistryApp({
                 epoch: 1,
                 createdat: pkg['createdat'],
                 modifiedat: pkg['modifiedat'],
-                defaultversionid: pkg['currentVersion'],
+                defaultversionid: pkg['versionid'],
             };
             sendEntity(req, res, meta);
         }));

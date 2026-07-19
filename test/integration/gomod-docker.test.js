@@ -148,10 +148,12 @@ describe('Go Module Proxy Docker Integration Tests', function () {
     // -----------------------------------------------------------------------
     describe('Module collection', () => {
         it('GET /goregistries/pkg.go.dev/modules returns a collection', async () => {
-            const { data, status } = await loggedGet(`${baseUrl}/goregistries/pkg.go.dev/modules`);
+            const { data, headers, status } = await loggedGet(`${baseUrl}/goregistries/pkg.go.dev/modules`);
             expect(status).to.equal(200);
-            expect(data).to.have.property('modulescount');
-            expect(data).to.have.property('modulesurl');
+            expect(headers).to.have.property('x-total-count');
+            expect(data).not.to.have.property('modulescount');
+            expect(data).not.to.have.property('modulesurl');
+            expect(Object.keys(data)).not.to.include('self');
         });
 
         it('supports limit/offset pagination', async () => {

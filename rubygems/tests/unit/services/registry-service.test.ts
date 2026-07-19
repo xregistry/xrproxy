@@ -94,6 +94,108 @@ describe('RegistryService', () => {
         });
     });
 
+    test('maps a name prefix filter to RubyGems search', async () => {
+        rubygemsService.searchGems.mockResolvedValueOnce([
+            { ...RACK_GEM_FIXTURE, name: 'rails' },
+            { ...RACK_GEM_FIXTURE, name: 'rails-dom-testing' },
+            { ...RACK_GEM_FIXTURE, name: 'trailblazer' },
+        ]);
+
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { filter: 'name=rails*', offset: '0', limit: '10' },
+        );
+        const res = createResponse();
+
+        await registryService.getResources(req, res);
+
+        expect(rubygemsService.searchGems).toHaveBeenCalledWith('rails', 1);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+            rails: expect.objectContaining({ packageid: 'rails' }),
+            'rails-dom-testing': expect.objectContaining({ packageid: 'rails-dom-testing' }),
+        }));
+        const payload = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
+        expect(payload['trailblazer']).toBeUndefined();
+    });
+
+    test('emits a next link when a full upstream search page may have more results', async () => {
+        rubygemsService.searchGems.mockResolvedValueOnce(
+            Array.from({ length: 30 }, (_, index) => ({ ...RACK_GEM_FIXTURE, name: `rack-${index}` })),
+        );
+
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { search: 'rack', offset: '0', limit: '10' },
+        );
+        const res = createResponse();
+
+        await registryService.getResources(req, res);
+
+        expect(res.set).toHaveBeenCalledWith('Link', expect.stringContaining('rel="next"'));
+    });
+
+    test('rejects unsupported deep search offsets with HTTP 400 problem details', async () => {
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { search: 'rack', offset: '500', limit: '10' },
+        );
+        const res = createResponse();
+
+        await expect(registryService.getResources(req, res)).rejects.toMatchObject({
+            status: 400,
+            detail: expect.stringContaining('offsets greater than 499'),
+        });
+        expect(rubygemsService.searchGems).not.toHaveBeenCalled();
+    });
+
+    test('stops when RubyGems repeats a full search page without progress', async () => {
+        const repeatedPage = Array.from(
+            { length: 30 },
+            (_, index) => ({ ...RACK_GEM_FIXTURE, name: `rack-${index}` }),
+        );
+        rubygemsService.searchGems
+            .mockResolvedValueOnce(repeatedPage)
+            .mockResolvedValueOnce(repeatedPage);
+
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { search: 'rack', offset: '0', limit: '40' },
+        );
+        const res = createResponse();
+
+        await registryService.getResources(req, res);
+
+        expect(rubygemsService.searchGems).toHaveBeenCalledTimes(2);
+        expect(res.set).not.toHaveBeenCalledWith('Link', expect.stringContaining('rel="next"'));
+        expect(Object.keys((res.json as jest.Mock).mock.calls[0][0])).toHaveLength(30);
+    });
+
+    test('rejects searches that exceed the safe upstream page limit', async () => {
+        rubygemsService.searchGems.mockImplementation(async (_query, page) =>
+            Array.from(
+                { length: 30 },
+                (_, index) => ({ ...RACK_GEM_FIXTURE, name: `unrelated-${page}-${index}` }),
+            ),
+        );
+
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { filter: 'name=rails*', offset: '0', limit: '10' },
+        );
+        const res = createResponse();
+
+        await expect(registryService.getResources(req, res)).rejects.toMatchObject({
+            status: 400,
+            detail: expect.stringContaining('safe limit of 20 upstream pages'),
+        });
+        expect(rubygemsService.searchGems).toHaveBeenCalledTimes(20);
+    });
+
     test('returns a specific package', async () => {
         rubygemsService.getGem.mockResolvedValue(RACK_GEM_FIXTURE);
 
@@ -104,6 +206,8 @@ describe('RegistryService', () => {
 
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
             packageid: 'rack',
+            versionid: expect.any(String),
+            isdefault: true,
             versionsurl: 'https://registry.example.com/rubyregistries/rubygems.org/packages/rack/versions',
         }));
         // versionscount must NOT appear without inline=versions (no N+1 fetch)
@@ -160,9 +264,9 @@ describe('RegistryService', () => {
 
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
             versionid: '1.18.0-arm64-darwin',
+            isdefault: expect.any(Boolean),
             platform: 'arm64-darwin',
             number: '1.18.0',
         }));
     });
 });
-

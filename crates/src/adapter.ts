@@ -222,50 +222,24 @@ export class CratesIoAdapter {
     readonly etag?: string;
     readonly lastModified?: string;
   } = {}): Promise<CacheLoadResult<CratesVersionsResult>> {
-    const params = new URLSearchParams();
-    if (options.page !== undefined) params.set('page', String(options.page));
-    if (options.perPage !== undefined) params.set('per_page', String(options.perPage));
+    const result = await this.getCrate(name, {
+      ...(options.etag !== undefined ? { etag: options.etag } : {}),
+      ...(options.lastModified !== undefined ? { lastModified: options.lastModified } : {})
+    });
+    if (result.kind !== 'value') return result;
 
-    const url = `${this.baseUrl}/api/v1/crates/${encodeURIComponent(name)}/versions?${params.toString()}`;
-    const conditional = options.etag !== undefined || options.lastModified !== undefined
-      ? {
-          ...(options.etag !== undefined ? { etag: options.etag } : {}),
-          ...(options.lastModified !== undefined ? { lastModified: options.lastModified } : {})
-        }
-      : undefined;
-
-    try {
-      const response = await this.client.request<CratesVersionsResult>({
-        url,
-        headers: this.headers(),
-        ...(conditional !== undefined ? { conditional } : {}),
-        parse: async r => r.json() as Promise<CratesVersionsResult>
-      });
-
-      if ('notModified' in response && response.notModified) {
-        return {
-          kind: 'not-modified',
-          ...(response.etag !== undefined ? { etag: response.etag } : {}),
-          ...(response.lastModified !== undefined ? { lastModified: response.lastModified } : {})
-        };
-      }
-
-      if (!('value' in response)) {
-        return { kind: 'not-found' };
-      }
-
-      return {
-        kind: 'value',
-        value: response.value,
-        ...(response.etag !== undefined ? { etag: response.etag } : {}),
-        ...(response.lastModified !== undefined ? { lastModified: response.lastModified } : {})
-      };
-    } catch (error) {
-      if (error instanceof UpstreamError && error.code === 'not_found') {
-        return { kind: 'not-found' };
-      }
-      throw error;
-    }
+    const page = options.page ?? 1;
+    const perPage = options.perPage ?? result.value.versions.length;
+    const start = (page - 1) * perPage;
+    return {
+      kind: 'value',
+      value: {
+        versions: result.value.versions.slice(start, start + perPage),
+        meta: { total: result.value.versions.length }
+      },
+      ...(result.etag !== undefined ? { etag: result.etag } : {}),
+      ...(result.lastModified !== undefined ? { lastModified: result.lastModified } : {})
+    };
   }
 
   async getCrateDependencies(name: string, version: string, options: {

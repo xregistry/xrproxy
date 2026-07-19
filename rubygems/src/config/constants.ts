@@ -29,6 +29,7 @@ export const RESOURCE_CONFIG = {
 export const PAGINATION = {
     DEFAULT_LIMIT: 50,
     MAX_LIMIT: 100,
+    MAX_SEARCH_OFFSET: 499,
 } as const;
 
 export const CACHE_CONFIG = {
@@ -37,7 +38,7 @@ export const CACHE_CONFIG = {
     HTTP_TIMEOUT_MS: 10000,
     MAX_RETRIES: 1,
     CACHE_DIR: './cache',
-    MAX_SEARCH_PAGES: 5,
+    MAX_SEARCH_PAGES: 20,
     SEARCH_PER_PAGE: 30,
 } as const;
 

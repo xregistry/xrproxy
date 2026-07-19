@@ -32,6 +32,7 @@ import {
 import type {
     PackagistPackage,
     PackagistPackageInfo,
+    PackagistPackageListResult,
     PackagistSearchResult,
     PackagistVersion,
 } from '../types/packagist';
@@ -162,6 +163,14 @@ function mapPackage(
     const versions = Object.values(pkg.versions ?? {});
     const latestStable = versions.find(v => !isDevVersion(v.version));
     const displayVersion = latestStable?.version ?? versions[0]?.version;
+    const defaultVersion = latestStable ?? versions[0];
+    const defaultVersionId = defaultVersion
+        ? buildVersionId(
+            defaultVersion.version,
+            defaultVersion.version_normalized,
+            defaultVersion.source?.reference ?? defaultVersion.dist?.reference,
+        )
+        : undefined;
 
     const times = versions
         .map(v => (v.time ? new Date(v.time).getTime() : NaN))
@@ -179,6 +188,8 @@ function mapPackage(
         modifiedat,
         name: pkg.name,
         description: pkg.description,
+        versionid: defaultVersionId,
+        isdefault: true,
         versionsurl: `${self}/versions`,
         versionscount: versions.length,
         metaurl: `${self}/meta`,
@@ -305,6 +316,23 @@ export class PackagistService {
     // ─── Search ─────────────────────────────────────────────────────────────
 
     /**
+     * Return a page from Packagist's complete package-name list.
+     * This endpoint supports collection browsing without sending the invalid
+     * empty `q` parameter to `/search.json`.
+     */
+    async listPackages(
+        page = 1,
+        perPage = 15,
+    ): Promise<{ packages: PackageListEntry[]; total: number }> {
+        const names = await this.getPackageNames();
+        const start = (page - 1) * perPage;
+        return {
+            packages: names.slice(start, start + perPage).map(name => this.toPackageListEntry(name)),
+            total: names.length,
+        };
+    }
+
+    /**
      * Search Packagist for packages.
      */
     async searchPackages(
@@ -339,6 +367,55 @@ export class PackagistService {
         }
 
         return load();
+    }
+
+    /** Filter the complete Packagist name catalog, then paginate exact matches. */
+    async searchPackagesByPrefix(
+        prefix: string,
+        page = 1,
+        perPage = 15,
+    ): Promise<{ packages: PackageListEntry[]; total: number }> {
+        const normalizedPrefix = prefix.toLowerCase();
+        const matchingNames = (await this.getPackageNames())
+            .filter(name => name.toLowerCase().startsWith(normalizedPrefix));
+        const start = (page - 1) * perPage;
+        return {
+            packages: matchingNames.slice(start, start + perPage)
+                .map(name => this.toPackageListEntry(name)),
+            total: matchingNames.length,
+        };
+    }
+
+    private async getPackageNames(): Promise<string[]> {
+        const url = `${this.baseUrl}/packages/list.json`;
+        const load = async (): Promise<CacheLoadResult<PackagistPackageListResult>> => {
+            const resp = await this.http.getJson<PackagistPackageListResult>(url);
+            if ('notModified' in resp) return { kind: 'not-modified' };
+            return { kind: 'value', value: resp.value };
+        };
+
+        if (this.cache) {
+            const result = await this.cache.get<PackagistPackageListResult>(
+                createCacheKey('package-list'),
+                load,
+            );
+            return result.value?.packageNames ?? result.value?.packages ?? [];
+        }
+
+        const result = await load();
+        return result.kind === 'value'
+            ? result.value.packageNames ?? result.value.packages ?? []
+            : [];
+    }
+
+    private toPackageListEntry(name: string): PackageListEntry {
+        const packageid = encodePackageId(name);
+        return {
+            packageid,
+            name,
+            description: '',
+            xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${packageid}`,
+        };
     }
 
     // ─── xRegistry entity builders ──────────────────────────────────────────

@@ -66,6 +66,7 @@ export interface XRegistryEntity {
 
 export interface XRegistryVersion extends XRegistryEntity {
     versionid: string;
+    isdefault: boolean;
     number: string;
     platform: string;
     prerelease: boolean;
@@ -79,6 +80,8 @@ export interface XRegistryVersion extends XRegistryEntity {
 
 export interface XRegistryPackage extends XRegistryEntity {
     packageid: string;
+    versionid: string;
+    isdefault: boolean;
     info: string;
     version: string;
     authors: string;

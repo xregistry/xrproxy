@@ -5,7 +5,12 @@
 import { EntityStateManager } from '../../../shared/entity-state-manager';
 import { getBaseUrl, REGISTRY_METADATA } from '../config/constants';
 import { ModuleRecord, VersionRecord } from '../types/go';
-import { isPreRelease, isPseudoVersion, pseudoVersionTimestamp } from '../utils/path-escaping';
+import {
+    encodeModulePathForUrl,
+    isPreRelease,
+    isPseudoVersion,
+    pseudoVersionTimestamp,
+} from '../utils/path-escaping';
 import { CheckpointService } from './checkpoint-service';
 import { GoModuleService } from './go-module-service';
 import { Request } from 'express';
@@ -28,7 +33,7 @@ export class ModuleService {
     }
 
     private moduleBaseUrl(baseUrl: string, modulePath: string): string {
-        return `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeURIComponent(modulePath)}`;
+        return `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${encodeModulePathForUrl(modulePath)}`;
     }
 
     private inferRepository(modulePath: string): string {
@@ -68,12 +73,13 @@ export class ModuleService {
 
         return {
             [`${RESOURCE_TYPE_SINGULAR}id`]: modulePath,
+            versionid: latest,
+            isdefault: true,
             xid: xp,
             name: modulePath,
             self: selfUrl,
             epoch: this.entityState.getEpoch(xp),
-            createdat: this.entityState.getCreatedAt(xp),
-            modifiedat: info.Time || this.entityState.getModifiedAt(xp),
+            ...this.entityTimestampFields(info.Time),
             versionsurl: `${selfUrl}/versions`,
             versionscount: allVersions.length,
             latest_version: latest,
@@ -97,8 +103,29 @@ export class ModuleService {
     private versionBaseUrl(baseUrl: string, modulePath: string, version: string): string {
         return (
             `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/` +
-            `${encodeURIComponent(modulePath)}/versions/${encodeURIComponent(version)}`
+            `${encodeModulePathForUrl(modulePath)}/versions/${encodeURIComponent(version)}`
         );
+    }
+
+    private entityTimestampFields(timestamp: string | null | undefined): {
+        createdat?: string;
+        modifiedat?: string;
+    } {
+        if (!timestamp || Number.isNaN(Date.parse(timestamp))) return {};
+        return {
+            createdat: timestamp,
+            modifiedat: timestamp,
+        };
+    }
+
+    private versionTimestampFields(timestamp: string | null | undefined): {
+        createdat?: string;
+        modifiedat?: string;
+        timestamp?: string;
+    } {
+        const entityFields = this.entityTimestampFields(timestamp);
+        if (!entityFields.createdat) return {};
+        return { ...entityFields, timestamp: entityFields.createdat };
     }
 
     /**
@@ -115,20 +142,20 @@ export class ModuleService {
 
         const xp = this.versionXPath(modulePath, version);
         const selfUrl = this.versionBaseUrl(baseUrl, modulePath, version);
-
-        // Prefer the timestamp from the .info response; fall back to pseudo-version extraction.
-        const ts = info.Time || pseudoVersionTimestamp(version) || new Date().toISOString();
+        const catalogEntry = this.checkpoint.getModule(modulePath);
+        const defaultVersion = catalogEntry?.latestVersion
+            ?? (await this.goService.getLatest(modulePath))?.Version;
+        const ts = info.Time || pseudoVersionTimestamp(version);
 
         return {
             versionid: version,
+            isdefault: version === defaultVersion,
             xid: xp,
             self: selfUrl,
             epoch: this.entityState.getEpoch(xp),
-            createdat: ts,
-            modifiedat: ts,
+            ...this.versionTimestampFields(ts),
             name: modulePath,
             version: info.Version,
-            timestamp: ts,
             info_url: this.goService.proxyUrl(modulePath, version, 'info'),
             mod_url: this.goService.proxyUrl(modulePath, version, 'mod'),
             zip_url: this.goService.proxyUrl(modulePath, version, 'zip'),
@@ -163,24 +190,25 @@ export class ModuleService {
 
         const page = allVersions.slice(offset, offset + limit);
         const records: VersionRecord[] = [];
+        const defaultVersion = catalogEntry?.latestVersion
+            ?? (await this.goService.getLatest(modulePath))?.Version;
 
         for (const version of page) {
             const info = await this.goService.getVersionInfo(modulePath, version);
             if (!info) continue;
             const xp = this.versionXPath(modulePath, version);
             const selfUrl = this.versionBaseUrl(baseUrl, modulePath, version);
-            const ts = info.Time || pseudoVersionTimestamp(version) || new Date().toISOString();
+            const ts = info.Time || pseudoVersionTimestamp(version);
 
             records.push({
                 versionid: version,
+                isdefault: version === defaultVersion,
                 xid: xp,
                 self: selfUrl,
                 epoch: this.entityState.getEpoch(xp),
-                createdat: ts,
-                modifiedat: ts,
+                ...this.versionTimestampFields(ts),
                 name: modulePath,
                 version: info.Version,
-                timestamp: ts,
                 info_url: this.goService.proxyUrl(modulePath, version, 'info'),
                 mod_url: this.goService.proxyUrl(modulePath, version, 'mod'),
                 zip_url: this.goService.proxyUrl(modulePath, version, 'zip'),

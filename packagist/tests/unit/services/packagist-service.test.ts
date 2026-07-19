@@ -212,6 +212,65 @@ describe('PackagistService', () => {
             expect(result!.versionsurl).toBeDefined();
             expect(result!.versionscount).toBeGreaterThan(0);
         });
+
+        it('identifies the default package version', async () => {
+            const http = getHttpMock();
+            mockV1Only(http, laravelFixture);
+
+            const result = await service.getPackageResource('laravel/framework', BASE_URL);
+
+            expect(result).toEqual(expect.objectContaining({
+                versionid: expect.any(String),
+                isdefault: true,
+            }));
+        });
+    });
+
+    describe('package collections', () => {
+        it('uses the package list endpoint for an unfiltered page', async () => {
+            const http = getHttpMock();
+            http.getJson.mockResolvedValueOnce(ok({
+                packageNames: ['acme/one', 'acme/two', 'acme/three'],
+            }));
+
+            const result = await service.listPackages(1, 2);
+
+            expect(http.getJson).toHaveBeenCalledWith('https://packagist.org/packages/list.json');
+            expect(result.total).toBe(3);
+            expect(result.packages.map(pkg => pkg.name)).toEqual(['acme/one', 'acme/two']);
+        });
+
+        it('sends a prefix query to Packagist search', async () => {
+            const http = getHttpMock();
+            http.getJson.mockResolvedValueOnce(ok({
+                results: [{ name: 'symfony/console', description: 'Console tools' }],
+                total: 1,
+            }));
+
+            const result = await service.searchPackages('symfony/', 1, 15);
+
+            expect(http.getJson).toHaveBeenCalledWith(
+                'https://packagist.org/search.json?q=symfony%2F&page=1&per_page=15',
+            );
+            expect(result.packages[0]?.name).toBe('symfony/console');
+        });
+
+        it('paginates prefix matches from the complete package-name catalog', async () => {
+            const http = getHttpMock();
+            const packageNames = Array.from({ length: 350 }, (_, index) => `vendor/package-${index}`);
+            packageNames.splice(25, 0, 'symfony/console');
+            packageNames.splice(325, 0, 'symfony/http-foundation', 'symfony/routing');
+            http.getJson.mockResolvedValueOnce(ok({ packageNames }));
+
+            const result = await service.searchPackagesByPrefix('symfony/', 2, 2);
+
+            expect(http.getJson).toHaveBeenCalledTimes(1);
+            expect(http.getJson).toHaveBeenCalledWith('https://packagist.org/packages/list.json');
+            expect(result).toEqual({
+                packages: [expect.objectContaining({ name: 'symfony/routing' })],
+                total: 3,
+            });
+        });
     });
 
     describe('buildGroupEntity', () => {

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import modelData from '../../model.json';
-import { CACHE_CONFIG, getBaseUrl, GROUP_CONFIG, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
+import { CACHE_CONFIG, getBaseUrl, GROUP_CONFIG, PAGINATION, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
 import { throwEntityNotFound, throwInvalidData, throwServiceUnavailable, isProblemDetailsError } from '../middleware/xregistry-error-handler';
 import { includesInline, parseRequestFlags, XRegistryRequestFlags } from '../middleware/xregistry-flags';
 import { RubyGemDependencies, RubyGemMetadata, RubyGemVersion, XRegistryPackage, XRegistryVersion } from '../types/xregistry';
@@ -29,6 +29,12 @@ const DEFAULT_PACKAGE_NAMES = [
     'concurrent-ruby',
     'bootsnap',
 ] as const;
+
+interface PackageCollection {
+    items: Record<string, XRegistryPackage>;
+    total?: number;
+    hasMore: boolean;
+}
 
 export class RegistryService {
     private readonly serviceCreatedAt = new Date().toISOString();
@@ -87,7 +93,16 @@ export class RegistryService {
 
         try {
             const collection = await this.loadPackages(baseUrl, flags);
-            this.applyPaginationHeaders(req, res, collection.total, flags.offset, flags.limit);
+            const maxOffset = flags.search || flags.filter ? PAGINATION.MAX_SEARCH_OFFSET : undefined;
+            this.applyPaginationHeaders(
+                req,
+                res,
+                collection.total,
+                collection.hasMore,
+                flags.offset,
+                flags.limit,
+                maxOffset,
+            );
             res.json(collection.items);
         } catch (error) {
             if (isProblemDetailsError(error)) {
@@ -197,46 +212,95 @@ export class RegistryService {
         };
     }
 
-    private async loadPackages(baseUrl: string, flags: XRegistryRequestFlags): Promise<{ items: Record<string, XRegistryPackage>; total: number }> {
+    private async loadPackages(baseUrl: string, flags: XRegistryRequestFlags): Promise<PackageCollection> {
         if (flags.filter) {
-            const match = flags.filter.match(/^name=(.+)$/);
+            const match = flags.filter.match(/^name=(.+?)(\*)?$/);
             if (!match?.[1]) {
-                throwInvalidData('/rubyregistries/rubygems.org/packages', 'filter', 'Only filter=name=<gem> is supported.');
+                throwInvalidData('/rubyregistries/rubygems.org/packages', 'filter', 'Only filter=name=<gem> or filter=name=<prefix>* is supported.');
+            }
+            if (match[2]) {
+                const prefix = match[1];
+                return this.loadSearchPackages(
+                    prefix,
+                    baseUrl,
+                    flags,
+                    (gem) => gem.name.toLowerCase().startsWith(prefix.toLowerCase()),
+                );
             }
             const gem = await this.rubygemsService.getGem(match[1]);
             if (!gem) {
-                return { items: {}, total: 0 };
+                return { items: {}, total: 0, hasMore: false };
             }
             const entity = await this.toPackageEntity(gem, baseUrl, flags);
-            return { items: { [gem.name]: entity }, total: 1 };
+            return { items: { [gem.name]: entity }, total: 1, hasMore: false };
         }
 
         if (flags.search) {
-            const results = await this.collectSearchResults(flags.search);
-            const paged = results.slice(flags.offset, flags.offset + flags.limit);
-            const items = await this.packagesFromMetadata(paged, baseUrl, flags);
-            return { items, total: results.length };
+            return this.loadSearchPackages(flags.search, baseUrl, flags);
         }
 
         const selectedNames = DEFAULT_PACKAGE_NAMES.slice(flags.offset, flags.offset + flags.limit);
         const packages = await Promise.all(selectedNames.map(async (name) => this.rubygemsService.getGem(name)));
         const metadata = packages.filter((item): item is RubyGemMetadata => item !== null);
         const items = await this.packagesFromMetadata(metadata, baseUrl, flags);
-        return { items, total: DEFAULT_PACKAGE_NAMES.length };
+        return { items, total: DEFAULT_PACKAGE_NAMES.length, hasMore: flags.offset + flags.limit < DEFAULT_PACKAGE_NAMES.length };
     }
 
-    private async collectSearchResults(query: string): Promise<RubyGemMetadata[]> {
-        const pages = Array.from({ length: CACHE_CONFIG.MAX_SEARCH_PAGES }, (_, index) => index + 1);
-        const results = await Promise.all(pages.map(async (page) => this.rubygemsService.searchGems(query, page)));
+    private async loadSearchPackages(
+        query: string,
+        baseUrl: string,
+        flags: XRegistryRequestFlags,
+        predicate: (gem: RubyGemMetadata) => boolean = () => true,
+    ): Promise<PackageCollection> {
+        if (flags.offset > PAGINATION.MAX_SEARCH_OFFSET) {
+            throwInvalidData(
+                '/rubyregistries/rubygems.org/packages',
+                'offset',
+                `Search offsets greater than ${PAGINATION.MAX_SEARCH_OFFSET} are not supported.`,
+            );
+        }
+
+        const targetCount = flags.offset + flags.limit + 1;
         const deduped = new Map<string, RubyGemMetadata>();
-        for (const pageResults of results) {
+        const seenUpstreamNames = new Set<string>();
+        let page = 1;
+        let exhausted = false;
+
+        while (deduped.size < targetCount) {
+            if (page > CACHE_CONFIG.MAX_SEARCH_PAGES) {
+                throwInvalidData(
+                    '/rubyregistries/rubygems.org/packages',
+                    'offset',
+                    `Search requires more than the safe limit of ${CACHE_CONFIG.MAX_SEARCH_PAGES} upstream pages.`,
+                );
+            }
+
+            const pageResults = await this.rubygemsService.searchGems(query, page);
+            const seenBefore = seenUpstreamNames.size;
             for (const result of pageResults) {
-                if (!deduped.has(result.name)) {
+                seenUpstreamNames.add(result.name);
+                if (predicate(result) && !deduped.has(result.name)) {
                     deduped.set(result.name, result);
                 }
             }
+            if (seenUpstreamNames.size === seenBefore) {
+                exhausted = true;
+                break;
+            }
+            if (pageResults.length < CACHE_CONFIG.SEARCH_PER_PAGE) {
+                exhausted = true;
+                break;
+            }
+            page += 1;
         }
-        return Array.from(deduped.values());
+
+        const results = Array.from(deduped.values());
+        const paged = results.slice(flags.offset, flags.offset + flags.limit);
+        return {
+            items: await this.packagesFromMetadata(paged, baseUrl, flags),
+            ...(exhausted ? { total: results.length } : {}),
+            hasMore: results.length > flags.offset + flags.limit || !exhausted,
+        };
     }
 
     private async packagesFromMetadata(metadata: RubyGemMetadata[], baseUrl: string, flags: XRegistryRequestFlags): Promise<Record<string, XRegistryPackage>> {
@@ -260,6 +324,8 @@ export class RegistryService {
             createdat: createdAt,
             modifiedat: createdAt,
             name: gem.name,
+            versionid: buildVersionId(gem.version, gem.platform),
+            isdefault: true,
             info: gem.info ?? '',
             version: gem.version,
             authors: gem.authors ?? '',
@@ -315,6 +381,7 @@ export class RegistryService {
 
         return {
             versionid: versionId,
+            isdefault: latestVersionId === versionId,
             xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}/versions/${encodedVersionId}`,
             self,
             epoch: 1,
@@ -348,11 +415,15 @@ export class RegistryService {
         return Number.isNaN(parsed) ? this.serviceCreatedAt : new Date(parsed).toISOString();
     }
 
-    private applyPaginationHeaders(req: Request, res: Response, total: number, offset: number, limit: number): void {
-        if (total <= 0) {
-            return;
-        }
-
+    private applyPaginationHeaders(
+        req: Request,
+        res: Response,
+        total: number | undefined,
+        hasMore: boolean,
+        offset: number,
+        limit: number,
+        maxOffset?: number,
+    ): void {
         const baseUrl = getBaseUrl(req);
         const buildQueryString = (nextOffset: number): string => {
             const params = new URLSearchParams();
@@ -377,9 +448,11 @@ export class RegistryService {
             const prevOffset = Math.max(0, offset - limit);
             links.push(`<${baseUrl}${req.path}?${buildQueryString(prevOffset)}>; rel="prev"`);
         }
-        if (offset + limit < total) {
+        if (hasMore || (total !== undefined && offset + limit < total)) {
             const nextOffset = offset + limit;
-            links.push(`<${baseUrl}${req.path}?${buildQueryString(nextOffset)}>; rel="next"`);
+            if (maxOffset === undefined || nextOffset <= maxOffset) {
+                links.push(`<${baseUrl}${req.path}?${buildQueryString(nextOffset)}>; rel="next"`);
+            }
         }
 
         if (links.length > 0) {
