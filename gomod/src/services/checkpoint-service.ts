@@ -150,11 +150,13 @@ export class CheckpointService {
     }
 
     /** Retrieve sorted, paginated module-path namespace IDs. */
-    listGroupIds(offset: number, limit: number): {
+    listGroupIds(offset: number, limit: number, pattern?: string): {
         groupIds: string[];
         totalKnown: number;
     } {
-        const groupIds = this.getGroupIds();
+        const groupIds = pattern
+            ? this.filterValues(this.getGroupIds(), pattern)
+            : this.getGroupIds();
         return {
             groupIds: groupIds.slice(offset, offset + limit),
             totalKnown: groupIds.length,
@@ -203,13 +205,7 @@ export class CheckpointService {
             .sort();
         let matched = inGroup;
         if (pattern) {
-            if (pattern.includes('*')) {
-                const re = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
-                matched = inGroup.filter(modulePath => re.test(modulePath));
-            } else {
-                const lower = pattern.toLowerCase();
-                matched = inGroup.filter(modulePath => modulePath.toLowerCase().includes(lower));
-            }
+            matched = this.filterValues(inGroup, pattern);
         }
         return {
             paths: matched.slice(offset, offset + limit),
@@ -234,13 +230,7 @@ export class CheckpointService {
     } {
         const all = Object.keys(this.catalog.modules).sort();
         let matched: string[];
-        if (pattern.includes('*')) {
-            const re = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
-            matched = all.filter((p) => re.test(p));
-        } else {
-            const lower = pattern.toLowerCase();
-            matched = all.filter((p) => p.toLowerCase().includes(lower));
-        }
+        matched = this.filterValues(all, pattern);
         return {
             paths: matched.slice(offset, offset + limit),
             totalMatched: matched.length,
@@ -251,5 +241,15 @@ export class CheckpointService {
         return [...new Set(
             Object.keys(this.catalog.modules).map(modulePath => modulePathToIdentity(modulePath).groupId)
         )].sort();
+    }
+
+    private filterValues(values: string[], pattern: string): string[] {
+        if (!pattern.includes('*')) {
+            const lower = pattern.toLowerCase();
+            return values.filter(value => value.toLowerCase().includes(lower));
+        }
+        const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`^${escaped.replace(/\\\*/g, '.*')}$`, 'i');
+        return values.filter(value => regex.test(value));
     }
 }

@@ -146,4 +146,16 @@ describe('CheckpointService', () => {
         const { totalMatched } = svc.filterModulePaths('github.com/*/mux', 0, 10);
         expect(totalMatched).toBe(1);
     });
+
+    it('treats non-wildcard regex characters literally in filters', () => {
+        svc.mergeEntries([
+            { path: 'github.com/a.b/module', version: 'v1.0.0', timestamp: '2020-01-01T00:00:00Z' },
+            { path: 'github.com/acb/module', version: 'v1.0.0', timestamp: '2020-01-01T00:00:00Z' },
+        ]);
+
+        expect(svc.listGroupModulePaths('github.com', 'github.com/a.b/*', 0, 10).paths).toEqual([
+            'github.com/a.b/module',
+        ]);
+        expect(svc.listGroupModulePaths('github.com', '*[*', 0, 10).paths).toEqual([]);
+    });
 });

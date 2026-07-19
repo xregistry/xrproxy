@@ -57,11 +57,11 @@ export class RegistryService {
         };
     }
 
-    getGroups(baseUrl: string, offset: number, limit: number): {
+    getGroups(baseUrl: string, offset: number, limit: number, pattern?: string): {
         groups: Record<string, unknown>;
         totalCount: number;
     } {
-        const { groupIds, totalKnown } = this.checkpoint.listGroupIds(offset, limit);
+        const { groupIds, totalKnown } = this.checkpoint.listGroupIds(offset, limit, pattern);
         const groups: Record<string, unknown> = {};
         for (const groupId of groupIds) {
             const groupPath = `/${GROUP_TYPE}/${groupId}`;

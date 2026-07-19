@@ -28,4 +28,10 @@ describe('Go module xRegistry identity', () => {
         });
         expect(identityToModulePath('example.com', '@')).toBe('example.com');
     });
+
+    it('rejects slash-bearing and non-canonical route identities', () => {
+        expect(() => identityToModulePath('github.com/pkg', 'errors')).toThrow();
+        expect(() => identityToModulePath('github.com', 'pkg/errors')).toThrow();
+        expect(() => identityToModulePath('github.com', 'pkg::errors')).toThrow();
+    });
 });

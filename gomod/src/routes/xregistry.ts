@@ -33,18 +33,28 @@ export function createXRegistryRoutes(registryService: RegistryService): Router 
             SERVER_CONFIG.MAX_PAGE_LIMIT
         );
         const offset = Math.max(parseInt(String(req.query['offset'] ?? '0'), 10), 0);
+        const filterParam = req.query['filter'] as string | undefined;
         if (isNaN(limit) || limit <= 0) {
             res.status(400).json({ type: 'about:blank', title: 'limit must be > 0', status: 400, instance: req.originalUrl });
             return;
         }
-        const { groups, totalCount } = registryService.getGroups(getBaseUrl(req), offset, limit);
+        const filterMatch = filterParam?.match(/(?:name|goregistryid)=(.+)/i);
+        const pattern = filterParam ? (filterMatch ? filterMatch[1] : filterParam) : undefined;
+        const { groups, totalCount } = registryService.getGroups(
+            getBaseUrl(req),
+            offset,
+            limit,
+            pattern
+        );
         const nextOffset = offset + Object.keys(groups).length;
         res.setHeader('X-Total-Count', String(totalCount));
         if (nextOffset < totalCount) {
-            res.setHeader(
-                'Link',
-                `<${getBaseUrl(req)}/${GROUP_TYPE}?offset=${nextOffset}&limit=${limit}>; rel="next"`
-            );
+            const nextQuery = new URLSearchParams({
+                offset: String(nextOffset),
+                limit: String(limit),
+            });
+            if (filterParam !== undefined) nextQuery.set('filter', filterParam);
+            res.setHeader('Link', `<${getBaseUrl(req)}/${GROUP_TYPE}?${nextQuery}>; rel="next"`);
         }
         res.json(groups);
     });

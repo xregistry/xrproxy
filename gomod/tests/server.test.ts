@@ -191,6 +191,16 @@ describe('Go Module Proxy Server', () => {
         expect(headers.get('x-total-count')).toBe('2');
     });
 
+    it('GET /goregistries supports filtered pagination', async () => {
+        const filter = 'goregistryid=github.*';
+        const { data, headers } = await getJson(
+            `${baseUrl}/goregistries?filter=${encodeURIComponent(filter)}&limit=1`
+        );
+        expect(Object.keys(data)).toEqual(['github.com']);
+        expect(headers.get('x-total-count')).toBe('1');
+        expect(headers.get('link')).toBeNull();
+    });
+
     it('GET /goregistries/github.com returns namespace detail', async () => {
         const { data, status } = await getJson(`${baseUrl}/goregistries/github.com`);
         expect(status).toBe(200);

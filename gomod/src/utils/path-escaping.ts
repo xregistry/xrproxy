@@ -79,12 +79,25 @@ export function modulePathToIdentity(modulePath: string): ModuleIdentity {
 
 /** Reconstruct a canonical Go module path from its xRegistry identity. */
 export function identityToModulePath(groupId: string, moduleId: string): string {
-    if (!groupId || !moduleId || (moduleId !== '@' && (
-        moduleId.includes('@') || moduleId.split(':').some(segment => !segment)
-    ))) {
+    if (
+        !groupId ||
+        groupId.includes('/') ||
+        groupId.includes(':') ||
+        groupId.includes('@') ||
+        !moduleId ||
+        moduleId.includes('/') ||
+        (moduleId !== '@' && (
+            moduleId.includes('@') || moduleId.split(':').some(segment => !segment)
+        ))
+    ) {
         throw new Error(`Invalid Go module identity: ${groupId}/${moduleId}`);
     }
-    return moduleId === '@' ? groupId : `${groupId}/${moduleId.replace(/:/g, '/')}`;
+    const modulePath = moduleId === '@' ? groupId : `${groupId}/${moduleId.replace(/:/g, '/')}`;
+    const roundTrip = modulePathToIdentity(modulePath);
+    if (roundTrip.groupId !== groupId || roundTrip.moduleId !== moduleId) {
+        throw new Error(`Non-canonical Go module identity: ${groupId}/${moduleId}`);
+    }
+    return modulePath;
 }
 
 /**
