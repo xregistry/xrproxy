@@ -84,7 +84,7 @@
     "build:rubygems": "node scripts/service-manifest.mjs run build --service rubygems",
     "start:rubygems": "cd rubygems && npm start",
     "test:rubygems:server": "npm run build:rubygems && cd rubygems && npm test",
-    "test:models": "npm run build:registry-core && mocha \"test/unit/xregistry-native-*-contract.test.js\" --timeout 10000 --exit"
+    "test:models": "npm run registry-core:install && npm run build:registry-core && mocha \"test/unit/xregistry-native-*-contract.test.js\" --timeout 10000 --exit"
   },
   "keywords": [
     "xregistry",
