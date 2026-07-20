@@ -94,7 +94,7 @@ export class ProxyService {
 
                 // Remove /registry prefix if present
                 const apiPrefix = process.env.API_PATH_PREFIX || '';
-                if (apiPrefix && cleanPath.startsWith(apiPrefix)) {
+                if (apiPrefix && (cleanPath === apiPrefix || cleanPath.startsWith(`${apiPrefix}/`))) {
                     cleanPath = cleanPath.substring(apiPrefix.length) || '/';
                 }
 
