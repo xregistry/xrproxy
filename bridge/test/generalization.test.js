@@ -134,6 +134,44 @@ test('one backend serves multiple groups and forwards nested encoded identifiers
   assert.equal(model.body.versionid, 'a3f18c9107d2f8f90ad3c0d9e8026a85c12e640b');
 });
 
+test('API prefix stripping does not alter dotted entity IDs with the same prefix text', async () => {
+  const downstream = express();
+  downstream.use((req, res) => res.json({ path: req.url }));
+  const downstreamUrl = await listen(downstream);
+  const backend = { url: downstreamUrl };
+  const modelService = new ModelService(logger);
+  modelService.rebuildConsolidatedModel(new Map([[
+    downstreamUrl,
+    activeState(backend, {
+      terraformregistries: group('terraformregistries', {
+        providers: { plural: 'providers', singular: 'provider' }
+      })
+    })
+  ]]));
+
+  const previousPrefix = process.env.API_PATH_PREFIX;
+  process.env.API_PATH_PREFIX = '/registry';
+  try {
+    const bridge = express();
+    setupDynamicProxyRoutes(bridge, modelService, new ProxyService(logger), logger, '/registry');
+    const response = await request(
+      `${await listen(bridge)}/registry/terraformregistries/registry.terraform.io/providers/hashicorp~aws`
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.body.path,
+      '/terraformregistries/registry.terraform.io/providers/hashicorp~aws'
+    );
+  } finally {
+    if (previousPrefix === undefined) {
+      delete process.env.API_PATH_PREFIX;
+    } else {
+      process.env.API_PATH_PREFIX = previousPrefix;
+    }
+  }
+});
+
 test('nested inline requests are delegated to the owning backend', async () => {
   let receivedUrl;
   const downstream = express();
