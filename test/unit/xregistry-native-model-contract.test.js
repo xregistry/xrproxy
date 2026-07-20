@@ -10,7 +10,7 @@ const root = path.resolve(__dirname, "../..");
 const { expandRegistryModel } = require(path.join(root, "shared", "registry-core", "dist", "src"));
 const affectedModels = ["packagist", "rubygems", "pubdev", "huggingface", "terraform"];
 const schemaPath = path.join(root, "test", "fixtures", "xregistry-model-v1.0-rc2.schema.json");
-const expectedSchemaSha256 = "6916828e0a68176c3f15e5ec4f5db6c6331d1b664397841408710be62e5e4c24";
+const expectedSchemaSha256 = "fe1f00a4dfc7ce3b11b95a0ad890a88acb2ad3794fc5263ff0fec1aa6d4ac60a";
 // Official source, pinned by tag and commit:
 // https://github.com/xregistry/spec/blob/dbcbeac1dce9a0653ea39ea504f52edde2dc00a2/core/model.schema.json
 
@@ -37,15 +37,15 @@ function assertStructuredObjects(definition, path) {
 }
 
 describe("affected xRegistry model contracts", () => {
-  const schemaBytes = fs.readFileSync(schemaPath);
-  const actualHash = crypto.createHash("sha256").update(schemaBytes).digest("hex");
+  const schemaText = fs.readFileSync(schemaPath, "utf8").replace(/\r\n/g, "\n");
+  const actualHash = crypto.createHash("sha256").update(schemaText).digest("hex");
   assert.equal(actualHash, expectedSchemaSha256, "the vendored schema must remain the official v1.0-rc2 schema");
 
   const ajv = new Ajv({ allErrors: true, strict: false });
   const draft7 = require("ajv/dist/refs/json-schema-draft-07.json");
   ajv.addMetaSchema(draft7, "https://json-schema.org/draft-07/schema#");
   addFormats(ajv);
-  const validate = ajv.compile(JSON.parse(schemaBytes.toString("utf8")));
+  const validate = ajv.compile(JSON.parse(schemaText));
 
   for (const service of affectedModels) {
     it(`${service} validates against the official xRegistry 1.0-rc2 model schema`, () => {
