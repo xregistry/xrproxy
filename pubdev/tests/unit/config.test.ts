@@ -2,10 +2,20 @@
  * Unit tests for configuration constants
  */
 
+import { createServer } from "node:http";
+import * as path from "node:path";
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FALLBACK_PACKAGES, REGISTRY_METADATA, CAPABILITIES } from '../../src/config/constants';
+import { FALLBACK_PACKAGES, REGISTRY_METADATA, CAPABILITIES, MODEL } from '../../src/config/constants';
+import { createRegistryApp } from "@xregistry/registry-core";
 import { parsePubDevConfig } from '../../src/config/constants';
+
+const repositoryRoot = path.basename(process.cwd()).toLowerCase() === "pubdev"
+  ? path.resolve(process.cwd(), "..")
+  : process.cwd();
+const { assertCapabilitiesConform } = require(
+  path.join(repositoryRoot, "test/helpers/xregistry-capability-conformance.cjs"),
+);
 
 test('REGISTRY_METADATA has correct group type and port', () => {
   assert.equal(REGISTRY_METADATA.GROUP_TYPE, 'dartregistries');
@@ -34,13 +44,31 @@ test('FALLBACK_PACKAGES are unique and non-empty strings', () => {
   }
 });
 
-test('CAPABILITIES has mutable=false and pagination=true', () => {
-  assert.equal(CAPABILITIES.mutable, false);
-  assert.equal(CAPABILITIES.pagination, true);
-  assert.equal(CAPABILITIES.filter, true);
+test("CAPABILITIES is the complete rc2 contract", () => {
+  assertCapabilitiesConform(CAPABILITIES, { flags: ["filter", "sort"], versionmodes: ["manual"] });
 });
 
-test('model.json groups has dartregistries with versions', () => {
+test("runtime capability and model endpoints preserve exact JSON keys", async () => {
+  const app = createRegistryApp({ model: MODEL, capabilities: CAPABILITIES });
+  const server = createServer(app);
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}`;
+    const capabilities = await (await fetch(`${base}/capabilities`)).json();
+    assertCapabilitiesConform(capabilities, { flags: ["filter", "sort"], versionmodes: ["manual"] });
+    const source = await (await fetch(`${base}/modelsource`)).json() as Record<string, unknown>;
+    const full = await (await fetch(`${base}/model`)).json() as Record<string, unknown>;
+    assert.deepEqual(Object.keys(source).sort(), Object.keys(MODEL).sort());
+    assert.equal(Object.hasOwn(source, "default"), false);
+    assert.equal(Object.hasOwn(full, "default"), false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('model.json uses built-in Resource versions', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const model = require('../../model.json') as Record<string, unknown>;
   const groups = model['groups'] as Record<string, unknown>;
@@ -49,7 +77,12 @@ test('model.json groups has dartregistries with versions', () => {
   const resources = dr['resources'] as Record<string, unknown>;
   assert.ok('packages' in resources);
   const pkgs = resources['packages'] as Record<string, unknown>;
-  assert.ok('versions' in pkgs);
+  assert.equal(pkgs['maxversions'], 0);
+  assert.equal(pkgs['setversionid'], true);
+  assert.equal(pkgs['setdefaultversionsticky'], false);
+  assert.equal(pkgs['versionmode'], 'manual');
+  assert.equal('versions' in pkgs, false);
+  assert.equal('resources' in pkgs, false);
 });
 
 

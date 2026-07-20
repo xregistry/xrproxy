@@ -81,10 +81,10 @@
     "docker:test": "bash test-docker.sh",
     "docker:compose": "docker-compose up unified",
     "docker:compose:dev": "docker-compose up pypi npm",
-    "start:gomod": "cd gomod && npm start",
     "build:rubygems": "node scripts/service-manifest.mjs run build --service rubygems",
     "start:rubygems": "cd rubygems && npm start",
-    "test:rubygems:server": "npm run build:rubygems && cd rubygems && npm test"
+    "test:rubygems:server": "npm run build:rubygems && cd rubygems && npm test",
+    "test:models": "npm run registry-core:install && npm run build:registry-core && mocha \"test/unit/xregistry-native-*-contract.test.js\" --timeout 10000 --exit"
   },
   "keywords": [
     "xregistry",
@@ -108,6 +108,8 @@
   },
   "devDependencies": {
     "@sinonjs/referee-sinon": "^12.0.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "chai": "^4.3.10",
     "jsverify": "^0.8.4",
     "knuth-shuffle": "^1.0.8",

@@ -2,8 +2,9 @@
  * Configuration constants for Terraform Registry xRegistry server
  */
 
+import { createRegistryCapabilities } from "@xregistry/registry-core";
 import { Request } from 'express';
-import * as modelData from '../../model.json';
+import modelData from "../../model.json";
 
 /**
  * Get the actual base URL from the request.
@@ -39,7 +40,8 @@ export const REGISTRY_METADATA = {
     REGISTRY_ID: 'terraform-registry-wrapper',
     GROUP_TYPE: 'terraformregistries',
     GROUP_TYPE_SINGULAR: 'terraformregistry',
-    GROUP_ID: 'registry.terraform.io',
+    REGISTRY_HOST: 'registry.terraform.io',
+    LEGACY_GROUP_ID: 'registry.terraform.io',
     PROVIDER_RESOURCE_TYPE: 'providers',
     PROVIDER_RESOURCE_TYPE_SINGULAR: 'provider',
     MODULE_RESOURCE_TYPE: 'modules',
@@ -50,6 +52,11 @@ export const REGISTRY_METADATA = {
 /**
  * Terraform Registry API endpoints
  */
+/** xRegistry 1.0-rc2 runtime features implemented by this proxy. */
+export const CAPABILITIES = createRegistryCapabilities({
+    versionmodes: ["manual", "semver"],
+});
+
 export const TERRAFORM_API = {
     REGISTRY_URL: 'https://registry.terraform.io',
     /** Provider versions list */
@@ -77,34 +84,74 @@ export const TERRAFORM_API = {
 } as const;
 
 /**
- * ID encoding / decoding helpers.
+ * Native Terraform identity mapping.
  *
- * Provider ID:  namespace~type         (e.g. hashicorp~aws)
- * Module ID:    namespace~name~provider (e.g. hashicorp~consul~aws)
- *
- * The tilde (~) is URL-safe, never appears in Terraform registry names,
- * and provides collision-safe segmentation within a single URL path segment.
+ * Group ID: namespace
+ * Provider resource ID: provider type
+ * Module resource ID: name~provider. Terraform registry identifiers are
+ * restricted to alphanumerics, hyphens and underscores, so `~` is a
+ * collision-free reversible separator.
  */
 export const ID_SEP = '~';
+const TERRAFORM_IDENTIFIER = /^[0-9A-Za-z_][0-9A-Za-z_-]*$/;
 
-export function encodeProviderId(namespace: string, type: string): string {
-    return `${namespace}${ID_SEP}${type}`;
+export function isTerraformIdentifier(value: string): boolean {
+    return Boolean(value) && value.length <= 128 && TERRAFORM_IDENTIFIER.test(value) && !value.includes('/');
 }
 
-export function decodeProviderId(id: string): { namespace: string; type: string } | null {
+export function providerIdentity(namespace: string, type: string): { groupId: string; resourceId: string } {
+    if (!isTerraformIdentifier(namespace) || !isTerraformIdentifier(type)) {
+        throw new Error(`Invalid Terraform provider identity: ${namespace}/${type}`);
+    }
+    return { groupId: namespace, resourceId: type };
+}
+
+export function decodeProviderIdentity(groupId: string, resourceId: string): { namespace: string; type: string } | null {
+    try {
+        const identity = providerIdentity(groupId, resourceId);
+        return { namespace: identity.groupId, type: identity.resourceId };
+    } catch {
+        return null;
+    }
+}
+
+export function encodeModuleId(name: string, provider: string): string {
+    if (!isTerraformIdentifier(name) || !isTerraformIdentifier(provider)) {
+        throw new Error(`Invalid Terraform module identity: ${name}/${provider}`);
+    }
+    const id = `${name}${ID_SEP}${provider}`;
+    if (id.length > 128) throw new Error('Terraform module resource ID exceeds the xRegistry 128-character limit');
+    return id;
+}
+
+export function decodeModuleId(id: string): { name: string; provider: string } | null {
     const parts = id.split(ID_SEP);
     if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-    return { namespace: parts[0], type: parts[1] };
+    if (!isTerraformIdentifier(parts[0]) || !isTerraformIdentifier(parts[1])) return null;
+    return { name: parts[0], provider: parts[1] };
 }
 
-export function encodeModuleId(namespace: string, name: string, provider: string): string {
-    return `${namespace}${ID_SEP}${name}${ID_SEP}${provider}`;
+export function decodeModuleIdentity(groupId: string, resourceId: string): { namespace: string; name: string; provider: string } | null {
+    if (!isTerraformIdentifier(groupId)) return null;
+    const module = decodeModuleId(resourceId);
+    return module ? { namespace: groupId, ...module } : null;
 }
 
-export function decodeModuleId(id: string): { namespace: string; name: string; provider: string } | null {
+/** Decode old namespace~type provider IDs for a 410 migration hint. */
+export function decodeLegacyProviderId(id: string): { namespace: string; type: string } | null {
     const parts = id.split(ID_SEP);
-    if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return null;
-    return { namespace: parts[0], name: parts[1], provider: parts[2] };
+    return parts.length === 2 ? decodeProviderIdentity(parts[0] ?? '', parts[1] ?? '') : null;
+}
+
+/** Decode old namespace~name~provider module IDs for a migration hint. */
+export function decodeLegacyModuleId(id: string): { namespace: string; name: string; provider: string } | null {
+    const parts = id.split(ID_SEP);
+    if (parts.length !== 3 || !parts[0]) return null;
+    try {
+        return decodeModuleIdentity(parts[0], encodeModuleId(parts[1] ?? '', parts[2] ?? ''));
+    } catch {
+        return null;
+    }
 }
 
 /**

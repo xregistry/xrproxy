@@ -96,7 +96,7 @@ export function applyFilter<T extends Record<string, unknown>>(
                 const itemVal = String(item[attrKey] ?? '').toLowerCase();
                 const matches = valStr.endsWith('*')
                     ? itemVal.startsWith(valStr.slice(0, -1))
-                    : itemVal.includes(valStr);
+                    : itemVal === valStr;
                 return neq ? !matches : matches;
             }),
         ),

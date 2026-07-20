@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/xregistry/xrproxy/test/fixtures/xregistry-capabilities-v1.0-rc2.schema.json",
+  "$comment": "Derived from xRegistry Core v1.0-rc2, Registry Capabilities.",
+  "title": "xRegistry 1.0-rc2 capability map used by native proxies",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apis",
+    "flags",
+    "mutable",
+    "pagination",
+    "schemas",
+    "shortself",
+    "specversions",
+    "sticky",
+    "versionmodes"
+  ],
+  "properties": {
+    "apis": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^/"
+      }
+    },
+    "flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "collections",
+          "doc",
+          "epoch",
+          "filter",
+          "inline",
+          "nodefaultversionid",
+          "nodefaultversionsticky",
+          "noepoch",
+          "noreadonly",
+          "offered",
+          "schema",
+          "setdefaultversionid",
+          "sort",
+          "specversion"
+        ]
+      }
+    },
+    "mutable": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "capabilities",
+          "entities",
+          "modelsource"
+        ]
+      }
+    },
+    "pagination": {
+      "type": "boolean"
+    },
+    "schemas": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "contains": {
+        "const": "xRegistry-json/1.0-rc2"
+      }
+    },
+    "shortself": {
+      "type": "boolean"
+    },
+    "specversions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "contains": {
+        "const": "1.0-rc2"
+      }
+    },
+    "sticky": {
+      "type": "boolean"
+    },
+    "versionmodes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "createdat",
+          "modifiedat",
+          "semver"
+        ]
+      },
+      "contains": {
+        "const": "manual"
+      }
+    }
+  }
+}

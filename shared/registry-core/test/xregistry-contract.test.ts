@@ -41,10 +41,16 @@ test('standard xRegistry bootstrap endpoints follow their response contracts', a
     const address = running.server.address();
     assert.ok(address && typeof address !== 'string');
     const base = `http://127.0.0.1:${address.port}`;
+    const fullModelResponse = await fetch(`${base}/model`);
+    assert.equal(fullModelResponse.status, 200);
+    const fullModel = await fullModelResponse.json() as Record<string, unknown>;
+    assert.ok((fullModel['attributes'] as Record<string, unknown>)['specversion']);
+    assert.ok(((fullModel['groups'] as any).packages.attributes as Record<string, unknown>)['packagesid']);
+
     const expectations = [
       ['/health', 200, { status: 'ok' }],
       ['/ready', 200, { status: 'ready' }],
-      ['/model', 200, model],
+      ['/modelsource', 200, model],
       ['/capabilities', 200, capabilities],
       ['/mapped-error', 429, { error: 'rate_limited', retryAfterMs: 1000 }],
       ['/default-error', 500, { error: 'internal_server_error' }]

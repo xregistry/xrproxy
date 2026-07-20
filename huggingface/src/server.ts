@@ -14,7 +14,8 @@ import {
   HttpUpstreamClient,
   listenWithGracefulShutdown,
 } from '@xregistry/registry-core';
-import * as modelData from '../model.json';
+import modelData from "../model.json";
+import { CAPABILITIES } from "./capabilities";
 import { parseHfConfig } from './config';
 import { HuggingFaceClient } from './hf-client';
 import { setupRoutes } from './routes/index';
@@ -64,13 +65,7 @@ const hfClient = HuggingFaceClient.withFileCache(
 
 const app = createRegistryApp({
   model: modelData,
-  capabilities: {
-    apis: ['/capabilities', '/model', '/health', '/ready'],
-    flags: ['inline', 'filter', 'sort'],
-    mutable: false,
-    pagination: true,
-    specversions: ['1.0-rc2'],
-  },
+  capabilities: CAPABILITIES,
   configure(expressApp: express.Express) {
     // 1. Reject any credentialed request before routing
     expressApp.use(requireAnonymous);

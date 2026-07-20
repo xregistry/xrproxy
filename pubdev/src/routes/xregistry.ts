@@ -14,7 +14,6 @@ export function createXRegistryRoutes(registryService: RegistryService): Router 
   router.get('/', (req: Request, res: Response) => res.json(registryService.getRoot(getBaseUrl(req))));
   router.get('/model', (req: Request, res: Response) => res.json(registryService.getModel(getBaseUrl(req))));
   router.get('/capabilities', (_req: Request, res: Response) => res.json(registryService.getCapabilities()));
-  router.get('/export', (_req: Request, res: Response) => res.redirect(302, '/?doc&inline=*,capabilities,modelsource'));
   router.get(`/${GROUP_TYPE}`, (req: Request, res: Response) => res.json(registryService.getGroups(getBaseUrl(req))));
   router.get(`/${GROUP_TYPE}/${GROUP_ID}`, (req: Request, res: Response) => res.json(registryService.getGroupDetails(getBaseUrl(req))));
 

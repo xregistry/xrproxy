@@ -41,7 +41,7 @@ function badRequest(instance: string, detail: string): never {
 export function createPackageRoutes(
   packageService: PackageService,
   searchService: SearchService,
-  entityState: EntityStateManager,
+  _entityState: EntityStateManager,
 ): Router {
   const router = Router();
 
@@ -85,22 +85,12 @@ export function createPackageRoutes(
 
     const total = names.length;
     const page  = names.slice(offset, offset + limit);
-    const base  = `${baseUrl}${BASE}`;
 
     const packages: Record<string, unknown> = {};
+    // A collection item is the same complete Resource representation as an
+    // exact read; package-name summaries are never serialized as Resources.
     for (const name of page) {
-      const rPath = `${BASE}/${name}`;
-      packages[name] = {
-        packageid:   name,
-        xid:         rPath,
-        name,
-        epoch:       entityState.getEpoch(rPath),
-        createdat:   entityState.getCreatedAt(rPath),
-        modifiedat:  entityState.getModifiedAt(rPath),
-        self:        `${base}/${name}`,
-        versionsurl: `${base}/${name}/versions`,
-        metaurl:     `${base}/${name}/meta`,
-      };
+      packages[name] = await packageService.getPackageMetadata(name, baseUrl);
     }
 
     if (total > 0) {

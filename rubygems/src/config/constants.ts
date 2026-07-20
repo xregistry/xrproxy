@@ -1,3 +1,4 @@
+import { createRegistryCapabilities } from "@xregistry/registry-core";
 import { Request } from 'express';
 
 export function getBaseUrl(req: Request): string {
@@ -15,6 +16,12 @@ export const REGISTRY_CONFIG = {
     SPEC_VERSION: '1.0-rc2',
 } as const;
 
+/** xRegistry 1.0-rc2 runtime features implemented by this proxy. */
+export const CAPABILITIES = createRegistryCapabilities({
+    flags: ["filter"],
+    versionmodes: ["manual", "createdat"],
+});
+
 export const GROUP_CONFIG = {
     TYPE: 'rubyregistries',
     TYPE_SINGULAR: 'rubyregistry',
@@ -27,8 +34,8 @@ export const RESOURCE_CONFIG = {
 } as const;
 
 export const PAGINATION = {
-    DEFAULT_LIMIT: 50,
-    MAX_LIMIT: 100,
+    DEFAULT_LIMIT: 10,
+    MAX_LIMIT: 10,
     MAX_SEARCH_OFFSET: 499,
 } as const;
 

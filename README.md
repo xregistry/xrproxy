@@ -132,6 +132,24 @@ Once running, the unified bridge provides these endpoints at `http://localhost:8
 - **`GET /dotnetregistries`** - NuGet packages (.NET)
 - **`GET /containerregistries`** - OCI images (Containers)
 - **`GET /mcpproviders`** - MCP packages (Model Context Protocol)
+- **`GET /composerregistries`** - Packagist packages grouped by Composer vendor
+- **`GET /huggingfaceregistries`** - Hugging Face repositories grouped by owner
+- **`GET /terraformregistries`** - Terraform providers/modules grouped by namespace
+- **`GET /rubyregistries`** - RubyGems packages
+- **`GET /dartregistries`** - pub.dev packages
+
+### Native namespace paths
+
+Packagist, Hugging Face, and Terraform use upstream namespaces as xRegistry Group IDs. Their #203 public-path migration is intentional:
+
+```text
+symfony/console                    -> /composerregistries/symfony/packages/console
+google-bert/bert-base-uncased      -> /huggingfaceregistries/google-bert/models/bert-base-uncased
+hashicorp/aws                      -> /terraformregistries/hashicorp/providers/aws
+terraform-aws-modules/vpc/aws      -> /terraformregistries/terraform-aws-modules/modules/vpc~aws
+```
+
+Hugging Face truly bare authoritative repository IDs use the valid reserved `_` group; aliases such as `gpt2` resolve to their owner path. Unambiguous removed fixed-group paths under `packagist.org`, `huggingface.co`, and `registry.terraform.io` return HTTP 410 with migration hints that preserve meta/version suffixes. Packagist and Hugging Face enforce bounded upstream scans; Terraform marks its discovery snapshot incomplete, omits non-authoritative counts, and explicitly rejects unadvertised filter/sort operations. See each service README for exact contracts.
 
 ### Example Usage
 
@@ -165,6 +183,12 @@ The project uses a bridge architecture where:
    - Authentication management
 
 ## 🧪 Testing the Installation
+
+Changed native-registry models are validated in CI against the official xRegistry `v1.0-rc2` `core/model.schema.json` (pinned commit `dbcbeac1dce9a0653ea39ea504f52edde2dc00a2`):
+
+```bash
+npm run test:models
+```
 
 ### Quick Health Check
 

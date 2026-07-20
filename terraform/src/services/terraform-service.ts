@@ -10,6 +10,7 @@ import {
     HttpUpstreamClient,
     isUpstreamError,
     TtlCache,
+    UpstreamError,
     type CacheLoadResult,
     type HttpClientOptions,
 } from '@xregistry/registry-core';
@@ -18,10 +19,7 @@ import {
     FALLBACK_PROVIDERS,
     TERRAFORM_API,
 } from '../config/constants';
-import {
-    encodeModuleId,
-    encodeProviderId,
-} from '../config/constants';
+import { encodeModuleId } from '../config/constants';
 import {
     ModuleEntry,
     ProviderEntry,
@@ -135,7 +133,7 @@ export class TerraformService {
             return resp.data.map((d) => ({
                 namespace: d.attributes.namespace,
                 type: d.attributes.name,
-                id: encodeProviderId(d.attributes.namespace, d.attributes.name),
+                id: d.attributes.name,
             }));
         } catch {
             return this.fallbackProviders();
@@ -145,7 +143,7 @@ export class TerraformService {
     private fallbackProviders(): ProviderEntry[] {
         return FALLBACK_PROVIDERS.map((p) => ({
             ...p,
-            id: encodeProviderId(p.namespace, p.type),
+            id: p.type,
         }));
     }
 
@@ -153,7 +151,7 @@ export class TerraformService {
         const url = TERRAFORM_API.providerVersionsUrl(namespace, type);
         const data = await this.cachedGet<TFProviderVersionsResponse>(url);
         if (!data) {
-            throw new Error(`Provider ${namespace}/${type} not found`);
+            throw new UpstreamError({ code: 'not_found', status: 404, message: `Provider ${namespace}/${type} not found` });
         }
         return data;
     }
@@ -187,7 +185,7 @@ export class TerraformService {
                 namespace: m.namespace,
                 name: m.name,
                 provider: m.provider,
-                id: encodeModuleId(m.namespace, m.name, m.provider),
+                id: encodeModuleId(m.name, m.provider),
             }));
         } catch {
             return this.fallbackModules();
@@ -197,7 +195,7 @@ export class TerraformService {
     private fallbackModules(): ModuleEntry[] {
         return FALLBACK_MODULES.map((m) => ({
             ...m,
-            id: encodeModuleId(m.namespace, m.name, m.provider),
+            id: encodeModuleId(m.name, m.provider),
         }));
     }
 
@@ -205,7 +203,7 @@ export class TerraformService {
         const url = TERRAFORM_API.moduleVersionsUrl(namespace, name, provider);
         const data = await this.cachedGet<TFModuleVersionsResponse>(url);
         if (!data) {
-            throw new Error(`Module ${namespace}/${name}/${provider} not found`);
+            throw new UpstreamError({ code: 'not_found', status: 404, message: `Module ${namespace}/${name}/${provider} not found` });
         }
         return data;
     }
@@ -219,7 +217,7 @@ export class TerraformService {
         const url = TERRAFORM_API.moduleVersionUrl(namespace, name, provider, version);
         const data = await this.cachedGet<TFModuleVersionDetail>(url);
         if (!data) {
-            throw new Error(`Module version ${namespace}/${name}/${provider}@${version} not found`);
+            throw new UpstreamError({ code: 'not_found', status: 404, message: `Module version ${namespace}/${name}/${provider}@${version} not found` });
         }
         return data;
     }
@@ -228,8 +226,9 @@ export class TerraformService {
         try {
             await this.fetchProviderVersions(namespace, type);
             return true;
-        } catch {
-            return false;
+        } catch (error) {
+            if (isUpstreamError(error) && error.code === 'not_found') return false;
+            throw error;
         }
     }
 
@@ -237,9 +236,53 @@ export class TerraformService {
         try {
             await this.fetchModuleVersions(namespace, name, provider);
             return true;
-        } catch {
-            return false;
+        } catch (error) {
+            if (isUpstreamError(error) && error.code === 'not_found') return false;
+            throw error;
         }
+    }
+
+    /** Resolve a namespace independently of the bounded discovery snapshots. */
+    async findNamespace(namespace: string): Promise<string | null> {
+        const providerUrl = `${TERRAFORM_API.SEARCH_PROVIDERS}?filter[namespace]=${encodeURIComponent(namespace)}&page[size]=100`;
+        const moduleUrl = `${TERRAFORM_API.SEARCH_MODULES}/search?q=${encodeURIComponent(namespace)}&limit=100`;
+        const providerLookup = async (): Promise<string | null> => {
+            try {
+                const response = await this.cachedGet<TFV2ProvidersResponse>(providerUrl);
+                return response?.data
+                    ?.map(item => item.attributes.namespace)
+                    .find(candidate => candidate.toLowerCase() === namespace.toLowerCase()) ?? null;
+            } catch (error) {
+                if (isUpstreamError(error) && error.code === 'not_found') return null;
+                throw error;
+            }
+        };
+        const moduleLookup = async (): Promise<string | null> => {
+            try {
+                const response = await this.cachedGet<TFV1ModuleSearchResponse>(moduleUrl);
+                return response?.modules
+                    ?.map(item => item.namespace)
+                    .find(candidate => candidate.toLowerCase() === namespace.toLowerCase()) ?? null;
+            } catch (error) {
+                if (isUpstreamError(error) && error.code === 'not_found') return null;
+                throw error;
+            }
+        };
+        const results = await Promise.allSettled([providerLookup(), moduleLookup()]);
+        const candidates = results
+            .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+            .map(result => result.value)
+            .filter((value): value is string => value !== null);
+        if (candidates.length > 0) {
+            return candidates.sort((a, b) => {
+                const aLower = a === a.toLowerCase() ? 0 : 1;
+                const bLower = b === b.toLowerCase() ? 0 : 1;
+                return aLower - bLower || a.localeCompare(b);
+            })[0]!;
+        }
+        const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (rejected) throw rejected.reason;
+        return null;
     }
 
     async fetchProviderV2Attributes(namespace: string, type: string): Promise<{

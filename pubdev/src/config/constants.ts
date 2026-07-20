@@ -3,7 +3,7 @@
  */
 
 import { type Request } from 'express';
-import { parseConfig, proxyConfigSchema, type ParsedConfig } from '@xregistry/registry-core';
+import { createRegistryCapabilities, parseConfig, proxyConfigSchema, type ParsedConfig } from "@xregistry/registry-core";
 import model from '../../model.json';
 
 /**
@@ -79,11 +79,7 @@ export const MODEL = model;
 /**
  * Capabilities
  */
-export const CAPABILITIES = {
-  apis:       ['/capabilities', '/model', '/export'],
-  filter:     true,
-  sort:       true,
-  doc:        false,
-  mutable:    false,
-  pagination: true,
-} as const;
+export const CAPABILITIES = createRegistryCapabilities({
+  flags: ["filter", "sort"],
+  versionmodes: ["manual"],
+});

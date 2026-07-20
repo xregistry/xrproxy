@@ -19,6 +19,7 @@ export interface FixtureRoute {
 export interface FixtureRequest {
   readonly method: string;
   readonly path: string;
+  readonly url: string;
   readonly headers: Readonly<Record<string, string | string[] | undefined>>;
   readonly body: string;
 }
@@ -117,10 +118,12 @@ export async function startFixtureServer(routes: readonly FixtureRoute[]): Promi
     for await (const chunk of request) {
       bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
-    const path = new URL(request.url ?? '/', 'http://fixture.local').pathname;
+    const requestUrl = new URL(request.url ?? '/', 'http://fixture.local');
+    const path = requestUrl.pathname;
     requests.push({
       method: request.method ?? 'GET',
       path,
+      url: `${requestUrl.pathname}${requestUrl.search}`,
       headers: { ...request.headers },
       body: Buffer.concat(bodyChunks).toString('utf8')
     });

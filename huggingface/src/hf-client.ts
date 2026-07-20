@@ -10,6 +10,7 @@ import {
   type CacheStore,
   type ConditionalRequest,
 } from '@xregistry/registry-core';
+import { repoIdToIdentity, UNNAMESPACED_GROUP_ID } from './repo-utils';
 
 export type ResourceType = 'models' | 'datasets' | 'spaces';
 
@@ -60,16 +61,33 @@ export interface ListOptions {
   readonly limit?: number;
   readonly skip?: number;
   readonly search?: string;
+  readonly author?: string;
 }
 
 export interface RepoPage {
   readonly items: readonly HfRepoListEntry[];
   readonly hasMore: boolean;
+  /** Present only when the upstream scan reached the end and is authoritative. */
+  readonly totalCount?: number;
+}
+
+export interface NamespaceRecord {
+  readonly id: string;
+  readonly counts: Readonly<Partial<Record<ResourceType, number>>>;
+}
+
+export interface NamespaceDiscovery {
+  readonly namespaces: readonly NamespaceRecord[];
+  readonly complete: boolean;
+  readonly completeTypes: Readonly<Record<ResourceType, boolean>>;
 }
 
 const PREFIX_SCAN_PAGE_SIZE = 100;
 export const MAX_FILTERED_SKIP = 500;
+/** Maximum exact repository documents hydrated for one detail-field filter. */
+export const MAX_DETAIL_FILTER_HYDRATIONS = 50;
 export const PREFIX_SCAN_MAX_REQUESTS = 10;
+export const MAX_DISCOVERY_ITEMS = PREFIX_SCAN_PAGE_SIZE * PREFIX_SCAN_MAX_REQUESTS;
 
 export class PrefixSearchLimitError extends Error {
   constructor() {
@@ -86,13 +104,14 @@ export function encodeHubRepoPath(repoId: string): string {
 export function buildHubListUrl(
   baseUrl: string,
   type: ResourceType,
-  opts: Required<Pick<ListOptions, 'limit' | 'skip'>> & Pick<ListOptions, 'search'>,
+  opts: Required<Pick<ListOptions, 'limit' | 'skip'>> & Pick<ListOptions, 'search' | 'author'>,
 ): string {
   const params = new URLSearchParams({
     limit: String(opts.limit),
     skip: String(opts.skip),
   });
   if (opts.search !== undefined) params.set('search', opts.search);
+  if (opts.author !== undefined) params.set('author', opts.author);
   return `${baseUrl.replace(/\/$/, '')}/api/${type}?${params.toString()}`;
 }
 
@@ -132,6 +151,19 @@ function notModifiedResult<T>(etag?: string, lastModified?: string): CacheLoadRe
 function notFoundResult<T>(): CacheLoadResult<T> {
   return { kind: 'not-found' };
 }
+
+function optionalEnrichmentUnavailable(error: unknown): boolean {
+  return error instanceof UpstreamError && (error.status === 401 || error.status === 403);
+}
+
+export interface CommitSnapshot {
+  readonly items: readonly HfCommit[];
+  readonly complete: boolean;
+  readonly unavailable: boolean;
+}
+
+export const HUB_COMMIT_PAGE_SIZE = 50;
+export const MAX_COMMIT_SNAPSHOT_PAGES = 10;
 
 /**
  * Thin client for the public, anonymous Hugging Face Hub REST API.
@@ -201,8 +233,9 @@ export class HuggingFaceClient {
       limit,
       skip,
       ...(opts.search !== undefined ? { search: opts.search } : {}),
+      ...(opts.author !== undefined ? { author: opts.author } : {}),
     });
-    const key = createCacheKey('list', type, limit, skip, opts.search ?? '');
+    const key = createCacheKey('list', type, limit, skip, opts.search ?? '', opts.author ?? '');
 
     const result = await this.mutableCache.get<HfRepoListEntry[]>(key, async ctx => {
       const res = await this.http.getJson<HfRepoListEntry[]>(url, {
@@ -215,43 +248,38 @@ export class HuggingFaceClient {
     return result.kind === 'value' ? (result.value ?? []) : [];
   }
 
-  /**
-   * Apply exact, case-insensitive prefix filtering over the Hub's broader
-   * search results. Upstream pages are scanned from the beginning so skip and
-   * limit apply to matching IDs rather than to broad-search results.
-   */
-  async listReposByPrefix(
+  private async scanMatchingRepos(
     type: ResourceType,
-    prefix: string,
-    opts: ListOptions = {},
+    search: string | undefined,
+    predicate: (repo: HfRepoListEntry) => boolean,
+    opts: ListOptions,
+    countAll = false,
   ): Promise<RepoPage> {
     const limit = opts.limit ?? 20;
     const skip = opts.skip ?? 0;
     const needed = skip + limit + 1;
-    const normalizedPrefix = prefix.toLowerCase();
     const matches: HfRepoListEntry[] = [];
     const seenRepoIds = new Set<string>();
     let upstreamSkip = 0;
     let requests = 0;
     let exhausted = false;
 
-    while (matches.length < needed && requests < PREFIX_SCAN_MAX_REQUESTS) {
+    while ((countAll || matches.length < needed) && requests < PREFIX_SCAN_MAX_REQUESTS) {
       const page = await this.listRepos(type, {
         limit: PREFIX_SCAN_PAGE_SIZE,
         skip: upstreamSkip,
-        search: prefix,
+        ...(search !== undefined ? { search } : {}),
+        ...(opts.author !== undefined ? { author: opts.author } : {}),
       });
       requests += 1;
-
       let newRepoCount = 0;
       for (const repo of page) {
         const normalizedId = repo.id.toLowerCase();
         if (seenRepoIds.has(normalizedId)) continue;
         seenRepoIds.add(normalizedId);
         newRepoCount += 1;
-        if (repo.id.toLowerCase().startsWith(normalizedPrefix)) matches.push(repo);
+        if (predicate(repo)) matches.push(repo);
       }
-
       if (page.length < PREFIX_SCAN_PAGE_SIZE || newRepoCount === 0) {
         exhausted = true;
         break;
@@ -259,13 +287,103 @@ export class HuggingFaceClient {
       upstreamSkip += page.length;
     }
 
-    if (matches.length < needed && !exhausted && requests >= PREFIX_SCAN_MAX_REQUESTS) {
-      throw new PrefixSearchLimitError();
-    }
-
+    // Only advertise a continuation when the bounded snapshot contains an
+    // actual sentinel item. An incomplete scan is not itself a resumable
+    // cursor; claiming otherwise creates an infinite chain of empty pages.
     return {
       items: matches.slice(skip, skip + limit),
       hasMore: matches.length > skip + limit,
+      ...(exhausted ? { totalCount: matches.length } : {}),
+    };
+  }
+
+  /** Exact prefix filtering over the Hub's broader search endpoint. */
+  async listReposByPrefix(type: ResourceType, prefix: string, opts: ListOptions = {}): Promise<RepoPage> {
+    const normalizedPrefix = prefix.toLowerCase();
+    return this.scanMatchingRepos(
+      type,
+      prefix,
+      repo => repo.id.toLowerCase().startsWith(normalizedPrefix),
+      opts,
+    );
+  }
+
+  /** List resources belonging to one native owner namespace. */
+  async listReposByOwner(
+    type: ResourceType,
+    groupId: string,
+    opts: ListOptions = {},
+    namePrefix?: string,
+    countAll = false,
+  ): Promise<RepoPage> {
+    const owner = groupId === UNNAMESPACED_GROUP_ID ? undefined : groupId;
+    const normalizedPrefix = namePrefix?.toLowerCase();
+    return this.scanMatchingRepos(
+      type,
+      normalizedPrefix,
+      repo => {
+        try {
+          const identity = repoIdToIdentity(repo.id);
+          const canonical = repo.id.toLowerCase();
+          const basename = identity.resourceId.toLowerCase();
+          return identity.groupId === groupId &&
+            (normalizedPrefix === undefined || canonical.startsWith(normalizedPrefix) || basename.startsWith(normalizedPrefix));
+        } catch {
+          return false;
+        }
+      },
+      { ...opts, ...(owner === undefined ? {} : { author: owner }) },
+      countAll,
+    );
+  }
+
+  /**
+   * Discover namespace groups from bounded scans of each independent Hub
+   * collection. `complete=false` means global counts are intentionally omitted.
+   */
+  async discoverNamespaces(): Promise<NamespaceDiscovery> {
+    const counts = new Map<string, Partial<Record<ResourceType, number>>>();
+    const completeTypes: Record<ResourceType, boolean> = {
+      models: false,
+      datasets: false,
+      spaces: false,
+    };
+
+    for (const type of ['models', 'datasets', 'spaces'] as const) {
+      const seen = new Set<string>();
+      for (let request = 0; request < PREFIX_SCAN_MAX_REQUESTS; request += 1) {
+        const page = await this.listRepos(type, {
+          limit: PREFIX_SCAN_PAGE_SIZE,
+          skip: request * PREFIX_SCAN_PAGE_SIZE,
+        });
+        let added = 0;
+        for (const repo of page) {
+          const canonicalKey = repo.id.toLowerCase();
+          if (seen.has(canonicalKey)) continue;
+          seen.add(canonicalKey);
+          added += 1;
+          try {
+            const { groupId } = repoIdToIdentity(repo.id);
+            const current = counts.get(groupId) ?? {};
+            current[type] = (current[type] ?? 0) + 1;
+            counts.set(groupId, current);
+          } catch {
+            // Ignore malformed upstream IDs rather than exposing invalid entities.
+          }
+        }
+        if (page.length < PREFIX_SCAN_PAGE_SIZE || added === 0) {
+          completeTypes[type] = true;
+          break;
+        }
+      }
+    }
+
+    return {
+      namespaces: [...counts.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, namespaceCounts]) => ({ id, counts: namespaceCounts })),
+      complete: Object.values(completeTypes).every(Boolean),
+      completeTypes,
     };
   }
 
@@ -302,6 +420,7 @@ export class HuggingFaceClient {
         return hitResult(res.value, res.etag, res.lastModified);
       } catch (err) {
         if (err instanceof UpstreamError && err.code === 'not_found') return notFoundResult<HfRefs>();
+        if (optionalEnrichmentUnavailable(err)) return notFoundResult<HfRefs>();
         throw err;
       }
     });
@@ -332,11 +451,36 @@ export class HuggingFaceClient {
         return hitResult(res.value, res.etag, res.lastModified);
       } catch (err) {
         if (err instanceof UpstreamError && err.code === 'not_found') return notFoundResult<HfCommit[]>();
+        if (optionalEnrichmentUnavailable(err)) return notFoundResult<HfCommit[]>();
         throw err;
       }
     });
 
     return result.kind === 'value' ? (result.value ?? []) : [];
+  }
+
+  /** Materialize one bounded, ID-sorted commit snapshot for stable xRegistry pagination. */
+  async getCommitSnapshot(type: ResourceType, repoId: string, ref: string): Promise<CommitSnapshot> {
+    const commits = new Map<string, HfCommit>();
+    let complete = false;
+    let unavailable = false;
+    for (let page = 0; page < MAX_COMMIT_SNAPSHOT_PAGES; page += 1) {
+      const items = await this.listCommits(type, repoId, ref, page);
+      const before = commits.size;
+      for (const commit of items) commits.set(commit.id, commit);
+      if (items.length === 0 && page === 0) unavailable = true;
+      if (items.length < HUB_COMMIT_PAGE_SIZE || commits.size === before) {
+        complete = true;
+        break;
+      }
+    }
+    return {
+      items: [...commits.values()].sort((a, b) =>
+        a.id.localeCompare(b.id, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id),
+      ),
+      complete,
+      unavailable,
+    };
   }
 
   /**
@@ -371,6 +515,7 @@ export class HuggingFaceClient {
         return hitResult(commit);
       } catch (err) {
         if (err instanceof UpstreamError && err.code === 'not_found') return notFoundResult<HfCommit>();
+        if (optionalEnrichmentUnavailable(err)) return notFoundResult<HfCommit>();
         throw err;
       }
     });

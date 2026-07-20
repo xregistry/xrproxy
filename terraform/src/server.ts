@@ -7,11 +7,12 @@
 import * as path from 'path';
 import {
     createRegistryApp,
+    isUpstreamError,
     listenWithGracefulShutdown,
     parseConfig,
 } from '@xregistry/registry-core';
 import { EntityStateManager } from '../../shared/entity-state-manager';
-import { CACHE_CONFIG } from './config/constants';
+import { CAPABILITIES, CACHE_CONFIG } from './config/constants';
 import { createModuleRoutes } from './routes/modules';
 import { createProviderRoutes } from './routes/providers';
 import { createXRegistryRoutes } from './routes/xregistry';
@@ -20,7 +21,7 @@ import { ProviderService } from './services/provider-service';
 import { RegistryService } from './services/registry-service';
 import { SearchService } from './services/search-service';
 import { TerraformService } from './services/terraform-service';
-import * as modelData from '../model.json';
+import modelData from "../model.json";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -68,14 +69,7 @@ const registryService = new RegistryService(searchService, entityState);
 // ---------------------------------------------------------------------------
 const app = createRegistryApp({
     model: modelData,
-    capabilities: {
-        apis: ['/capabilities', '/model', '/export'],
-        filter: true,
-        sort: true,
-        doc: false,
-        mutable: false,
-        pagination: true,
-    },
+    capabilities: CAPABILITIES,
     readiness: () => true,
     configure(express) {
         // Strip trailing slashes
@@ -150,37 +144,46 @@ const app = createRegistryApp({
         });
     },
     errorResponse: (error) => {
+        if (isUpstreamError(error)) {
+            const status = error.code === 'not_found' ? 404 : error.code === 'timeout' ? 504 : 502;
+            return {
+                status,
+                body: { type: 'about:blank', title: error.message, status },
+            };
+        }
         const err = error as Record<string, unknown>;
         if (typeof err['status'] === 'number' && err['type']) {
             return { status: err['status'] as number, body: error };
         }
-        return { status: 500, body: { error: 'internal_server_error' } };
+        return { status: 500, body: { type: 'about:blank', title: 'Internal Server Error', status: 500 } };
     },
 });
 
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
-listenWithGracefulShutdown(app, {
-    host: HOST,
-    port: PORT,
-    shutdownTimeoutMs: 10_000,
-    onShutdown: () => {
-        searchService.stopPeriodicRefresh();
-        console.log('[INFO] Background refresh stopped');
-    },
-}).then(({ server }) => {
+async function main(): Promise<void> {
+    // Build a coherent namespace snapshot before advertising readiness.
+    await searchService.initialize();
+    const { server } = await listenWithGracefulShutdown(app, {
+        host: HOST,
+        port: PORT,
+        shutdownTimeoutMs: 10_000,
+        onShutdown: () => {
+            searchService.stopPeriodicRefresh();
+            console.log('[INFO] Background refresh stopped');
+        },
+    });
     const addr = server.address();
     const port = addr && typeof addr !== 'string' ? addr.port : PORT;
     console.log(`[INFO] Terraform xRegistry server listening on ${HOST}:${port}`);
+}
 
-    // Non-blocking background initialisation
-    searchService.initialize().catch((err) => {
-        console.error('[ERROR] Background service initialisation failed:', err);
+if (require.main === module) {
+    main().catch((err) => {
+        console.error('[FATAL] Failed to start server:', err);
+        process.exit(1);
     });
-}).catch((err) => {
-    console.error('[FATAL] Failed to start server:', err);
-    process.exit(1);
-});
+}
 
 export default app;

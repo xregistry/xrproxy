@@ -4,28 +4,38 @@
 
 import {
     buildVersionId,
-    decodePackageId,
-    encodePackageId,
+    identityToPackageName,
+    packageNameToIdentity,
     isDevVersion,
     isValidPackageName,
 } from '../../../src/utils/package-utils';
 
-describe('encodePackageId / decodePackageId', () => {
-    it('replaces slash with tilde for vendor/package', () => {
-        expect(encodePackageId('symfony/console')).toBe('symfony~console');
+describe('Composer package xRegistry identity', () => {
+    it('maps vendor to group and package basename to resource', () => {
+        expect(packageNameToIdentity('symfony/console')).toEqual({
+            groupId: 'symfony', resourceId: 'console', canonicalName: 'symfony/console',
+        });
     });
 
-    it('handles nested-vendor-style names', () => {
-        expect(encodePackageId('league/oauth2-server')).toBe('league~oauth2-server');
+    it('reconstructs the canonical package path', () => {
+        expect(identityToPackageName('laravel', 'framework')).toBe('laravel/framework');
     });
 
-    it('round-trips correctly', () => {
-        const original = 'laravel/framework';
-        expect(decodePackageId(encodePackageId(original))).toBe(original);
+    it('normalizes authoritative upstream identity to lowercase', () => {
+        expect(packageNameToIdentity('Symfony/Console')).toEqual({
+            groupId: 'symfony', resourceId: 'console', canonicalName: 'symfony/console',
+        });
     });
 
-    it('handles names with dots', () => {
-        expect(encodePackageId('doctrine/dbal')).toBe('doctrine~dbal');
+    it('rejects slash-bearing entity IDs', () => {
+        expect(() => identityToPackageName('symfony/components', 'console')).toThrow();
+        expect(() => identityToPackageName('symfony', 'component/console')).toThrow();
+    });
+
+    it('rejects upstream names without exactly one slash', () => {
+        expect(() => packageNameToIdentity('console')).toThrow();
+        expect(() => packageNameToIdentity('vendor/nested/package')).toThrow();
+        expect(() => packageNameToIdentity(`vendor/${'x'.repeat(129)}`)).toThrow();
     });
 });
 
@@ -41,12 +51,13 @@ describe('isDevVersion', () => {
 describe('buildVersionId – dev-* collision safety', () => {
     it('generates source-reference-qualified ID for dev-main', () => {
         const id = buildVersionId('dev-main', 'dev-main', 'deadbeef1234567890abcdef');
-        expect(id).toBe('dev-main.deadbeef1234');
+        expect(id).toMatch(/^xv~d~/);
     });
 
-    it('uses "unknown" when no source reference supplied', () => {
+    it('reversibly represents an absent source reference without a sentinel collision', () => {
         const id = buildVersionId('dev-main', 'dev-main');
-        expect(id).toBe('dev-main.unknown');
+        expect(id).toMatch(/^xv~d~/);
+        expect(id.endsWith('~')).toBe(true);
     });
 
     it('generates stable ID for stable version (uses normalized)', () => {
@@ -63,6 +74,34 @@ describe('buildVersionId – dev-* collision safety', () => {
         const id1 = buildVersionId('dev-main', 'dev-main', 'aabbccdd1234567890000001');
         const id2 = buildVersionId('dev-main', 'dev-main', 'deadbeef1234567890000002');
         expect(id1).not.toBe(id2);
+    });
+
+    it('does not collide when full refs share the old 12-character prefix', () => {
+        const id1 = buildVersionId('dev-main', 'dev-main', 'deadbeef1234aaaaaaaa');
+        const id2 = buildVersionId('dev-main', 'dev-main', 'deadbeef1234bbbbbbbb');
+        expect(id1).not.toBe(id2);
+    });
+
+    it('does not collapse distinct aliases through underscore sanitization', () => {
+        const ref = 'deadbeef1234567890';
+        expect(buildVersionId('dev-feature/foo', 'dev-feature/foo', ref))
+            .not.toBe(buildVersionId('dev-feature_foo', 'dev-feature_foo', ref));
+    });
+
+    it('compacts long branch aliases within the xRegistry ID limit without collapsing them', () => {
+        const a = buildVersionId(
+            'dev-dependabot/github_actions/dot-github/workflows/shivammathur/setup-php-2.37.1',
+            'dev-long',
+            '7fb9a3221db596c65ed0cf1069d9806e5d1c2e68',
+        );
+        const b = buildVersionId(
+            'dev-dependabot/github_actions/dot-github/workflows/shivammathur/setup-php-2.37.2',
+            'dev-long',
+            '7fb9a3221db596c65ed0cf1069d9806e5d1c2e68',
+        );
+        expect(a).toMatch(/^xv~d~h~/);
+        expect(a.length).toBeLessThanOrEqual(128);
+        expect(a).not.toBe(b);
     });
 
     it('same dev-main at same commit produces identical ID (deterministic)', () => {
@@ -89,7 +128,7 @@ describe('dev-* ID mutation and collision properties', () => {
     });
 
     it('no stable release ID can collide with a dev-* ID', () => {
-        // Stable IDs do not contain "."+"unknown" or a hex suffix pattern
+        // Stable and dev IDs occupy disjoint encodings.
         const stable = buildVersionId('1.0.0', '1.0.0.0', 'abc123');
         const devIds = [
             buildVersionId('dev-main', 'dev-main', 'abc1230000000000000000'),

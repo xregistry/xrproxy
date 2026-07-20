@@ -1,29 +1,61 @@
-/** Encodes a Hugging Face repo ID for use as a single URL path segment.
- *
- * HF repo IDs have the form `{owner}/{name}` (e.g. `google/bert-base-uncased`).
- * A bare `/` is a reserved path separator in URLs so we map it to `~`.
- * Tilde is unreserved in URIs (RFC 3986 §2.3) and never used in HF repo names.
- *
- * Examples:
- *   `google/bert-base-uncased` → `google~bert-base-uncased`
- *   `gpt2`                     → `gpt2`
- */
-export function encodeRepoId(repoId: string): string {
-  return repoId.replace(/\//g, '~');
+/** Hugging Face native namespace/repository identity mapping. */
+
+export const UNNAMESPACED_GROUP_ID = '_';
+export const LEGACY_HF_GROUP_ID = 'huggingface.co';
+
+export interface HuggingFaceRepoIdentity {
+  readonly groupId: string;
+  readonly resourceId: string;
+  readonly canonicalId: string;
 }
 
-/** Decodes a URL path segment back to a Hugging Face repo ID. */
-export function decodeRepoId(segment: string): string {
-  return segment.replace(/~/g, '/');
+const PART = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$/;
+
+/** Map `owner/repo` to group/resource IDs; bare repos use the reserved `_` group. */
+export function repoIdToIdentity(repoId: string): HuggingFaceRepoIdentity {
+  const parts = repoId.split('/');
+  if (parts.length > 2 || parts.some(part => !isValidRepoPart(part))) {
+    throw new Error(`Invalid Hugging Face repository ID: ${repoId}`);
+  }
+  if (parts.length === 1) {
+    return { groupId: UNNAMESPACED_GROUP_ID, resourceId: parts[0]!, canonicalId: repoId };
+  }
+  if (parts[0] === UNNAMESPACED_GROUP_ID) {
+    throw new Error(`Reserved Hugging Face owner namespace: ${parts[0]}`);
+  }
+  return { groupId: parts[0]!, resourceId: parts[1]!, canonicalId: repoId };
 }
 
-/** Returns true if the segment is a syntactically valid encoded repo ID.
- *  Repo IDs may contain letters, digits, hyphens, underscores, dots and exactly
- *  one optional `~` (which represents the owner/name separator).
- */
-export function isValidEncodedRepoId(segment: string): boolean {
-  // Reject empty or path-traversal-like segments
-  if (!segment || segment === '.' || segment === '..') return false;
-  // Allow alphanumeric, hyphens, underscores, dots, tildes (for the slash)
-  return /^[A-Za-z0-9._~-]+$/.test(segment) && !segment.startsWith('.') && !segment.endsWith('.');
+/** Reconstruct an upstream ID from slash-free xRegistry entity IDs. */
+export function identityToRepoId(groupId: string, resourceId: string): string {
+  if (
+    !groupId || !resourceId || groupId.includes('/') || resourceId.includes('/') ||
+    groupId.includes('~') || resourceId.includes('~') ||
+    (groupId !== UNNAMESPACED_GROUP_ID && !isValidRepoPart(groupId)) ||
+    !isValidRepoPart(resourceId)
+  ) {
+    throw new Error(`Invalid Hugging Face xRegistry identity: ${groupId}/${resourceId}`);
+  }
+  const repoId = groupId === UNNAMESPACED_GROUP_ID ? resourceId : `${groupId}/${resourceId}`;
+  const roundTrip = repoIdToIdentity(repoId);
+  if (roundTrip.groupId !== groupId || roundTrip.resourceId !== resourceId) {
+    throw new Error(`Non-canonical Hugging Face xRegistry identity: ${groupId}/${resourceId}`);
+  }
+  return repoId;
+}
+
+export function isValidRepoPart(value: string): boolean {
+  return Boolean(value) && value.length <= 128 && value !== '.' && value !== '..' && !value.includes('~') && PART.test(value);
+}
+
+/** Decode the removed `owner~repo` resource identity for a migration hint. */
+export function decodeLegacyRepoId(value: string): HuggingFaceRepoIdentity | null {
+  const parts = value.split('~');
+  try {
+    if (parts.length === 1) return repoIdToIdentity(value);
+    if (parts.length === 2) return repoIdToIdentity(`${parts[0]}/${parts[1]}`);
+  } catch {
+    // Invalid legacy identity.
+  }
+  return null;
 }

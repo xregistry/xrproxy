@@ -1,3 +1,4 @@
+import { isUpstreamError } from '@xregistry/registry-core';
 import { Request, Response } from 'express';
 import modelData from '../../model.json';
 import { CACHE_CONFIG, getBaseUrl, GROUP_CONFIG, PAGINATION, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
@@ -36,6 +37,14 @@ interface PackageCollection {
     hasMore: boolean;
 }
 
+interface CanonicalVersionSnapshot {
+    versions: Record<string, XRegistryVersion>;
+    ordered: XRegistryVersion[];
+    defaultVersion: XRegistryVersion;
+    createdat: string;
+    modifiedat: string;
+}
+
 export class RegistryService {
     private readonly serviceCreatedAt = new Date().toISOString();
 
@@ -52,7 +61,6 @@ export class RegistryService {
             createdat: this.serviceCreatedAt,
             modifiedat: this.serviceCreatedAt,
             description: 'xRegistry proxy for the public RubyGems registry.',
-            model: `${baseUrl}/model`,
             [`${GROUP_CONFIG.TYPE}url`]: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
             [`${GROUP_CONFIG.TYPE}count`]: 1,
         });
@@ -121,7 +129,7 @@ export class RegistryService {
 
         try {
             const gem = await this.rubygemsService.getGem(name);
-            if (!gem) {
+            if (!gem || gem.name !== name) {
                 throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
             }
 
@@ -136,6 +144,51 @@ export class RegistryService {
         }
     }
 
+    async getMeta(req: Request, res: Response): Promise<void> {
+        const groupId = this.asParam(req.params['groupId']);
+        const name = this.asParam(req.params['name']);
+        if (groupId !== GROUP_CONFIG.ID) {
+            throwEntityNotFound(req.originalUrl, GROUP_CONFIG.TYPE_SINGULAR, groupId);
+        }
+
+        try {
+            const [gem, versions] = await Promise.all([
+                this.rubygemsService.getGem(name),
+                this.rubygemsService.getVersions(name),
+            ]);
+            if (!gem || gem.name !== name) {
+                throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
+            }
+            const snapshot = this.buildVersionSnapshot(name, versions, getBaseUrl(req), gem);
+            const encodedName = encodeGemName(name);
+            const resourcePath = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}`;
+            const resourceSelf = `${getBaseUrl(req)}${resourcePath}`;
+            res.json({
+                [`${RESOURCE_CONFIG.TYPE_SINGULAR}id`]: name,
+                xid: `${resourcePath}/meta`,
+                self: `${resourceSelf}/meta`,
+                epoch: 1,
+                createdat: snapshot.createdat,
+                modifiedat: snapshot.modifiedat,
+                readonly: true,
+                compatibility: 'none',
+                defaultversionid: snapshot.defaultVersion.versionid,
+                defaultversionurl: `${resourceSelf}/versions/${encodeURIComponent(snapshot.defaultVersion.versionid)}`,
+                defaultversionsticky: false,
+                ...(gem?.homepage_uri ? { homepage_uri: gem.homepage_uri } : {}),
+                ...(gem?.source_code_uri ? { source_code_uri: gem.source_code_uri } : {}),
+                ...(gem?.changelog_uri ? { changelog_uri: gem.changelog_uri } : {}),
+                ...(gem?.documentation_uri ? { documentation_uri: gem.documentation_uri } : {}),
+                ...(gem?.bug_tracker_uri ? { bug_tracker_uri: gem.bug_tracker_uri } : {}),
+                ...(gem?.project_uri ? { project_uri: gem.project_uri } : {}),
+                ...(gem ? { downloads: gem.downloads ?? 0 } : {}),
+            });
+        } catch (error) {
+            if (isProblemDetailsError(error)) throw error;
+            throwServiceUnavailable(req.originalUrl, error instanceof Error ? error.message : 'Failed to load package meta.');
+        }
+    }
+
     async getVersions(req: Request, res: Response): Promise<void> {
         const groupId = this.asParam(req.params['groupId']);
         const name = this.asParam(req.params['name']);
@@ -144,21 +197,16 @@ export class RegistryService {
         }
 
         try {
-            const versions = await this.rubygemsService.getVersions(name);
-            if (versions.length === 0) {
-                const gem = await this.rubygemsService.getGem(name);
-                if (!gem) {
-                    throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
-                }
+            const [versions, gem] = await Promise.all([
+                this.rubygemsService.getVersions(name),
+                this.rubygemsService.getGem(name),
+            ]);
+            if (!gem || gem.name !== name) {
+                throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
             }
-
-            const latestGem = await this.rubygemsService.getGem(name);
-            const payload = this.buildVersionMap(name, versions, getBaseUrl(req), latestGem);
-            res.json(payload);
+            res.json(this.buildVersionSnapshot(name, versions, getBaseUrl(req), gem).versions);
         } catch (error) {
-            if (isProblemDetailsError(error)) {
-                throw error;
-            }
+            if (isProblemDetailsError(error)) throw error;
             throwServiceUnavailable(req.originalUrl, error instanceof Error ? error.message : 'Failed to load package versions.');
         }
     }
@@ -172,23 +220,21 @@ export class RegistryService {
         }
 
         try {
-            const versions = await this.rubygemsService.getVersions(name);
-            if (versions.length === 0) {
+            const [versions, gem] = await Promise.all([
+                this.rubygemsService.getVersions(name),
+                this.rubygemsService.getGem(name),
+            ]);
+            if (!gem || gem.name !== name) {
                 throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
             }
-
-            parseVersionId(versionId, versions.map((version) => ({ number: version.number, platform: version.platform })));
-            const target = versions.find((version) => buildVersionId(version.number, version.platform) === versionId);
-            if (!target) {
-                throwEntityNotFound(req.originalUrl, 'version', versionId);
-            }
-
-            const latestGem = await this.rubygemsService.getGem(name);
-            res.json(this.toVersionEntity(name, target, getBaseUrl(req), latestGem));
+            const sourceVersions = versions.length > 0 ? versions : this.syntheticVersions(gem!);
+            parseVersionId(versionId, sourceVersions.map((version) => ({ number: version.number, platform: version.platform })));
+            const snapshot = this.buildVersionSnapshot(name, versions, getBaseUrl(req), gem);
+            const target = snapshot.versions[versionId];
+            if (!target) throwEntityNotFound(req.originalUrl, 'version', versionId);
+            res.json(target);
         } catch (error) {
-            if (isProblemDetailsError(error)) {
-                throw error;
-            }
+            if (isProblemDetailsError(error)) throw error;
             throwServiceUnavailable(req.originalUrl, error instanceof Error ? error.message : 'Failed to load version metadata.');
         }
     }
@@ -304,64 +350,107 @@ export class RegistryService {
     }
 
     private async packagesFromMetadata(metadata: RubyGemMetadata[], baseUrl: string, flags: XRegistryRequestFlags): Promise<Record<string, XRegistryPackage>> {
-        const items = await Promise.all(metadata.map(async (gem) => this.toPackageEntity(gem, baseUrl, flags)));
-        return items.reduce<Record<string, XRegistryPackage>>((accumulator, item) => {
-            accumulator[item.packageid] = item;
-            return accumulator;
-        }, {});
+        const settled = await Promise.allSettled(metadata.map(gem => this.toPackageEntity(gem, baseUrl, flags)));
+        const result: Record<string, XRegistryPackage> = {};
+        for (let index = 0; index < settled.length; index += 1) {
+            const item = settled[index]!;
+            if (item.status === 'fulfilled') {
+                result[item.value.packageid] = item.value;
+                continue;
+            }
+            const gem = metadata[index]!;
+            if (isUpstreamError(item.reason) && item.reason.code === 'rate_limited') {
+                // Preserve the collection page using the search/gem summary as
+                // a one-Version snapshot; one 429 never fans out more work or
+                // collapses unrelated hydrated Resources.
+                const fallback = await this.toPackageEntity(gem, baseUrl, flags, []);
+                result[fallback.packageid] = fallback;
+                continue;
+            }
+            throw item.reason;
+        }
+        return result;
     }
 
-    private async toPackageEntity(gem: RubyGemMetadata, baseUrl: string, flags: XRegistryRequestFlags): Promise<XRegistryPackage> {
+    private async toPackageEntity(
+        gem: RubyGemMetadata,
+        baseUrl: string,
+        flags: XRegistryRequestFlags,
+        versionsOverride?: RubyGemVersion[],
+    ): Promise<XRegistryPackage> {
         const encodedName = encodeGemName(gem.name);
         const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}`;
-        const createdAt = this.resolveTimestamp(gem.version_created_at);
-
-        const entity: XRegistryPackage = {
+        const snapshot = this.buildVersionSnapshot(
+            gem.name,
+            versionsOverride ?? await this.rubygemsService.getVersions(gem.name),
+            baseUrl,
+            gem,
+        );
+        const current = snapshot.defaultVersion;
+        const entity = {
+            ...current,
             packageid: gem.name,
             xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}`,
             self,
-            epoch: 1,
-            createdat: createdAt,
-            modifiedat: createdAt,
-            name: gem.name,
-            versionid: buildVersionId(gem.version, gem.platform),
-            isdefault: true,
-            info: gem.info ?? '',
-            version: gem.version,
-            authors: gem.authors ?? '',
-            licenses: gem.licenses ?? [],
-            downloads: gem.downloads ?? 0,
-            version_downloads: gem.version_downloads ?? 0,
-            platform: gem.platform ?? 'ruby',
-            sha: gem.sha ?? '',
-            dependencies: this.normalizeDependencies(gem.dependencies),
+            metaurl: `${self}/meta`,
             versionsurl: `${self}/versions`,
-        };
-
-        if (gem.homepage_uri) entity.homepage_uri = gem.homepage_uri;
-        if (gem.source_code_uri) entity.source_code_uri = gem.source_code_uri;
-        if (gem.changelog_uri) entity.changelog_uri = gem.changelog_uri;
-        if (gem.documentation_uri) entity.documentation_uri = gem.documentation_uri;
-        if (gem.bug_tracker_uri) entity.bug_tracker_uri = gem.bug_tracker_uri;
-        if (gem.gem_uri) entity.gem_uri = gem.gem_uri;
-        if (gem.project_uri) entity.project_uri = gem.project_uri;
-
-        if (includesInline(flags, 'versions')) {
-            const versions = await this.rubygemsService.getVersions(gem.name);
-            entity.versions = this.buildVersionMap(gem.name, versions, baseUrl, gem);
-            // Only set versionscount when we already have the list — no extra N+1 fetch.
-            entity.versionscount = versions.length;
-        }
-
+            versionscount: snapshot.ordered.length,
+            ...(includesInline(flags, 'versions') ? { versions: snapshot.versions } : {}),
+        } as XRegistryPackage;
         return entity;
     }
 
-    private buildVersionMap(name: string, versions: RubyGemVersion[], baseUrl: string, latestGem: RubyGemMetadata | null): Record<string, XRegistryVersion> {
-        return versions.reduce<Record<string, XRegistryVersion>>((accumulator, version) => {
-            const entity = this.toVersionEntity(name, version, baseUrl, latestGem);
-            accumulator[entity.versionid] = entity;
-            return accumulator;
-        }, {});
+    private syntheticVersions(gem: RubyGemMetadata): RubyGemVersion[] {
+        return [{
+            authors: gem.authors ?? '',
+            created_at: this.resolveTimestamp(gem.version_created_at),
+            downloads_count: gem.version_downloads ?? 0,
+            number: gem.version,
+            platform: gem.platform || 'ruby',
+            prerelease: false,
+            licenses: gem.licenses ?? [],
+            sha: gem.sha ?? '',
+        }];
+    }
+
+    private buildVersionSnapshot(
+        name: string,
+        versions: RubyGemVersion[],
+        baseUrl: string,
+        latestGem: RubyGemMetadata | null,
+    ): CanonicalVersionSnapshot {
+        const source = versions.length > 0
+            ? versions
+            : latestGem
+                ? this.syntheticVersions(latestGem)
+                : [];
+        const ordered = source
+            .map(version => this.toVersionEntity(name, version, baseUrl, latestGem))
+            .sort((a, b) =>
+                a.createdat.localeCompare(b.createdat) ||
+                a.versionid.localeCompare(b.versionid, undefined, { sensitivity: 'base' }) ||
+                a.versionid.localeCompare(b.versionid),
+            );
+        const defaultVersion = ordered.at(-1);
+        if (!defaultVersion) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${name}`, 'package', name);
+        }
+        ordered.forEach((version, index) => {
+            version.ancestor = index === 0 ? version.versionid : ordered[index - 1]!.versionid;
+            version.isdefault = version.versionid === defaultVersion.versionid;
+        });
+        return {
+            versions: Object.fromEntries([...ordered]
+                .sort((a, b) =>
+                    a.versionid.localeCompare(b.versionid, undefined, { sensitivity: 'base' }) ||
+                    a.versionid.localeCompare(b.versionid),
+                )
+                .map(entity => [entity.versionid, entity])),
+            ordered,
+            defaultVersion,
+            createdat: ordered[0]!.createdat,
+            modifiedat: defaultVersion.createdat,
+        };
     }
 
     private toVersionEntity(name: string, version: RubyGemVersion, baseUrl: string, latestGem: RubyGemMetadata | null): XRegistryVersion {
@@ -381,18 +470,25 @@ export class RegistryService {
 
         return {
             versionid: versionId,
-            isdefault: latestVersionId === versionId,
+            packageid: name,
+            isdefault: false,
+            ancestor: versionId,
             xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}/versions/${encodedVersionId}`,
             self,
             epoch: 1,
             createdat: createdAt,
             modifiedat: createdAt,
-            name: versionId,
+            name,
+            info: version.description ?? version.summary ?? (latestGem && latestVersionId === versionId ? latestGem.info : ''),
+            version: version.number,
+            authors: version.authors ?? '',
+            licenses: version.licenses ?? [],
             number: version.number,
             platform: version.platform || 'ruby',
             prerelease: Boolean(version.prerelease),
             created_at: createdAt,
             downloads_count: version.downloads_count ?? 0,
+            version_downloads: version.downloads_count ?? 0,
             gem_uri: gemUri,
             sha: version.sha ?? '',
             dependencies,

@@ -3,12 +3,12 @@
     "huggingfaceregistries": {
       "plural": "huggingfaceregistries",
       "singular": "huggingfaceregistry",
-      "description": "A Hugging Face Hub registry endpoint (e.g., huggingface.co).",
+      "description": "A Hugging Face owner namespace; _ is reserved for unnamespaced repositories.",
       "resources": {
         "models": {
           "plural": "models",
           "singular": "model",
-          "description": "A machine learning model hosted on Hugging Face Hub.",
+          "description": "A Hugging Face model whose resource ID is the repository basename within its owner group.",
           "hasdocument": false,
           "attributes": {
             "repoid": {
@@ -23,13 +23,32 @@
               "type": "string",
               "description": "Current HEAD commit SHA (default branch tip)."
             },
+            "repository": {
+              "type": "string",
+              "description": "Canonical owner/repository ID, or the bare ID for an unnamespaced repository."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Canonical owner namespace, or empty for an unnamespaced repository."
+            },
+            "message": {
+              "type": "string",
+              "description": "Commit title or message for a Version."
+            }
+          },
+          "maxversions": 0,
+          "setversionid": true,
+          "setdefaultversionsticky": false,
+          "versionmode": "manual",
+          "singleversionroot": false,
+          "metaattributes": {
             "private": {
               "type": "boolean",
               "description": "Whether the repository is private."
             },
             "gated": {
-              "type": "string",
-              "description": "Gated-access status: false, 'auto', or 'manual'."
+              "type": "any",
+              "description": "Gated-access status as returned by the Hub (false, 'auto', or 'manual')."
             },
             "downloads": {
               "type": "integer",
@@ -49,19 +68,51 @@
             },
             "tags": {
               "type": "array",
-              "item": { "type": "string" },
+              "item": {
+                "type": "string"
+              },
               "description": "Repository tags."
             },
             "refs": {
               "type": "object",
-              "description": "Mutable aliases: branches and tags with their target commit SHAs. Short TTL cache."
+              "attributes": {
+                "branches": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "targetcommit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "targetcommit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "description": "Mutable branch and tag aliases with their target commit SHAs."
             }
           }
         },
         "datasets": {
           "plural": "datasets",
           "singular": "dataset",
-          "description": "A dataset hosted on Hugging Face Hub.",
+          "description": "A Hugging Face dataset whose resource ID is the repository basename within its owner group.",
           "hasdocument": false,
           "attributes": {
             "repoid": {
@@ -76,13 +127,32 @@
               "type": "string",
               "description": "Current HEAD commit SHA (default branch tip)."
             },
+            "repository": {
+              "type": "string",
+              "description": "Canonical owner/repository ID, or the bare ID for an unnamespaced repository."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Canonical owner namespace, or empty for an unnamespaced repository."
+            },
+            "message": {
+              "type": "string",
+              "description": "Commit title or message for a Version."
+            }
+          },
+          "maxversions": 0,
+          "setversionid": true,
+          "setdefaultversionsticky": false,
+          "versionmode": "manual",
+          "singleversionroot": false,
+          "metaattributes": {
             "private": {
               "type": "boolean",
               "description": "Whether the repository is private."
             },
             "gated": {
-              "type": "string",
-              "description": "Gated-access status: false, 'auto', or 'manual'."
+              "type": "any",
+              "description": "Gated-access status as returned by the Hub (false, 'auto', or 'manual')."
             },
             "downloads": {
               "type": "integer",
@@ -94,19 +164,51 @@
             },
             "tags": {
               "type": "array",
-              "item": { "type": "string" },
+              "item": {
+                "type": "string"
+              },
               "description": "Repository tags."
             },
             "refs": {
               "type": "object",
-              "description": "Mutable aliases: branches and tags with their target commit SHAs. Short TTL cache."
+              "attributes": {
+                "branches": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "targetcommit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "targetcommit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "description": "Mutable branch and tag aliases with their target commit SHAs."
             }
           }
         },
         "spaces": {
           "plural": "spaces",
           "singular": "space",
-          "description": "A Hugging Face Space (interactive ML demo application).",
+          "description": "A Hugging Face space whose resource ID is the repository basename within its owner group.",
           "hasdocument": false,
           "attributes": {
             "repoid": {
@@ -121,28 +223,93 @@
               "type": "string",
               "description": "Current HEAD commit SHA (default branch tip)."
             },
+            "repository": {
+              "type": "string",
+              "description": "Canonical owner/repository ID, or the bare ID for an unnamespaced repository."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Canonical owner namespace, or empty for an unnamespaced repository."
+            },
+            "message": {
+              "type": "string",
+              "description": "Commit title or message for a Version."
+            }
+          },
+          "maxversions": 0,
+          "setversionid": true,
+          "setdefaultversionsticky": false,
+          "versionmode": "manual",
+          "singleversionroot": false,
+          "metaattributes": {
             "private": {
               "type": "boolean",
               "description": "Whether the space is private."
             },
-            "sdk": {
-              "type": "string",
-              "description": "Space SDK (gradio, streamlit, docker, static, etc.)."
+            "gated": {
+              "type": "any",
+              "description": "Gated-access status as returned by the Hub (false, 'auto', or 'manual')."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total download count (anonymously visible)."
             },
             "likes": {
               "type": "integer",
               "description": "Like count."
             },
+            "sdk": {
+              "type": "string",
+              "description": "Space SDK (gradio, streamlit, docker, static, etc.)."
+            },
             "tags": {
               "type": "array",
-              "item": { "type": "string" },
+              "item": {
+                "type": "string"
+              },
               "description": "Repository tags."
             },
             "refs": {
               "type": "object",
-              "description": "Mutable aliases: branches and tags with their target commit SHAs. Short TTL cache."
+              "attributes": {
+                "branches": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "targetcommit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "targetcommit": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "description": "Mutable branch and tag aliases with their target commit SHAs."
             }
           }
+        }
+      },
+      "attributes": {
+        "namespace": {
+          "type": "string",
+          "description": "Canonical Hugging Face owner namespace, or empty for the reserved _ group."
         }
       }
     }

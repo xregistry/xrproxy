@@ -4,9 +4,9 @@
  */
 
 export const FIXTURE_MODEL_BERT: Readonly<Record<string, unknown>> = {
-  id: 'google/bert-base-uncased',
+  id: 'google-bert/bert-base-uncased',
   modelId: 'bert-base-uncased',
-  author: 'google',
+  author: 'google-bert',
   sha: 'a86a4d9a4e7bfed432ab38a4462a66bc50f34f49',
   lastModified: '2021-05-10T08:44:05.000Z',
   private: false,
@@ -17,6 +17,21 @@ export const FIXTURE_MODEL_BERT: Readonly<Record<string, unknown>> = {
   pipeline_tag: 'fill-mask',
   library_name: 'transformers',
   tags: ['pytorch', 'tf', 'jax', 'bert', 'fill-mask', 'en'],
+  gitalyDefaultBranch: 'main',
+};
+
+
+export const FIXTURE_MODEL_UNNAMESPACED: Readonly<Record<string, unknown>> = {
+  id: 'true-bare-model',
+  sha: 'cccc3333dddd4444eeee5555ffff6666aaaa7777',
+  lastModified: '2023-03-28T14:22:11.000Z',
+  private: false,
+  gated: false,
+  downloads: 1000,
+  likes: 10,
+  pipeline_tag: 'text-generation',
+  library_name: 'transformers',
+  tags: ['transformers'],
   gitalyDefaultBranch: 'main',
 };
 
@@ -49,9 +64,33 @@ export const FIXTURE_MODEL_GPT2: Readonly<Record<string, unknown>> = {
   gitalyDefaultBranch: 'main',
 };
 
+export const FIXTURE_MODEL_DOTTED_OWNER: Readonly<Record<string, unknown>> = {
+  id: 'org.example/dotted-model',
+  author: 'org.example',
+  sha: '2222333344445555666677778888999900001111',
+  lastModified: '2024-03-01T00:00:00.000Z',
+  private: false,
+  gated: false,
+  tags: [],
+  gitalyDefaultBranch: 'main',
+};
+
+export const FIXTURE_MODEL_GATED: Readonly<Record<string, unknown>> = {
+  id: 'gated-org/public-metadata',
+  author: 'gated-org',
+  sha: '99990000aaaabbbbccccddddeeeeffff11112222',
+  lastModified: '2025-01-01T00:00:00.000Z',
+  private: false,
+  gated: true,
+  downloads: 12,
+  likes: 3,
+  tags: ['gated'],
+  gitalyDefaultBranch: 'main',
+};
+
 export const FIXTURE_MODEL_GOOGLE_SECOND: Readonly<Record<string, unknown>> = {
-  id: 'Google/second-model',
-  author: 'Google',
+  id: 'google-bert/second-model',
+  author: 'google-bert',
   sha: '1111222233334444555566667777888899990000',
   lastModified: '2024-02-01T00:00:00.000Z',
   private: false,
@@ -145,10 +184,20 @@ export const FIXTURE_COMMITS_ALTBRANCH: ReadonlyArray<Readonly<Record<string, un
   },
 ];
 
+function incompleteListSummary(repo: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const summary = { ...repo };
+  delete summary['author'];
+  delete summary['sha'];
+  return summary;
+}
+
 export const FIXTURE_MODELS_LIST: ReadonlyArray<Readonly<Record<string, unknown>>> = [
-  FIXTURE_MODEL_BERT,
+  incompleteListSummary(FIXTURE_MODEL_BERT),
   FIXTURE_MODEL_GPT2,
-  FIXTURE_MODEL_GOOGLE_SECOND,
+  incompleteListSummary(FIXTURE_MODEL_GOOGLE_SECOND),
+  FIXTURE_MODEL_DOTTED_OWNER,
+  FIXTURE_MODEL_GATED,
+  FIXTURE_MODEL_UNNAMESPACED,
 ];
 
 export const FIXTURE_DATASETS_LIST: ReadonlyArray<Readonly<Record<string, unknown>>> = [

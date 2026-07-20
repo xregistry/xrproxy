@@ -10,7 +10,7 @@
 import { UpstreamError } from '@xregistry/registry-core';
 import * as path from 'path';
 import * as fs from 'fs';
-import { PackagistService, type UpstreamHttp } from '../../../src/services/packagist-service';
+import { inflateMinifiedVersions, PackagistService, type UpstreamHttp } from '../../../src/services/packagist-service';
 import { isDevVersion } from '../../../src/utils/package-utils';
 import type { PackagistPackage, PackagistVersion } from '../../../src/types/packagist';
 
@@ -48,7 +48,8 @@ function notFound(): UpstreamError {
 /** Configure the mock to miss on v2 (empty packages) and hit on the v1 fallback. */
 function mockV1Only(http: HttpMock, fixture: { package: unknown }): void {
     http.getJson
-        .mockResolvedValueOnce(ok({ packages: {} }))   // v2 miss
+        .mockResolvedValueOnce(ok({ packages: {} }))   // stable v2 miss
+        .mockResolvedValueOnce(ok({ packages: {} }))   // development v2 miss
         .mockResolvedValueOnce(ok(fixture));           // v1 hit
 }
 
@@ -77,7 +78,8 @@ describe('PackagistService', () => {
         it('falls back to v1 when v2 returns empty packages', async () => {
             const http = getHttpMock();
             http.getJson
-                .mockResolvedValueOnce(ok({ packages: {} }))      // v2 miss
+                .mockResolvedValueOnce(ok({ packages: {} }))       // stable v2 miss
+                .mockResolvedValueOnce(ok({ packages: {} }))       // development v2 miss
                 .mockResolvedValueOnce(ok(symfonyConsoleFixture)); // v1 hit
 
             const result = await service.fetchPackage('symfony/console');
@@ -88,11 +90,50 @@ describe('PackagistService', () => {
         it('uses v2 data when packages key present', async () => {
             const http = getHttpMock();
             const v2Versions = Object.values(symfonyConsoleFixture.package.versions);
-            http.getJson.mockResolvedValueOnce(ok({ packages: { 'symfony/console': v2Versions } }));
+            http.getJson
+                .mockResolvedValueOnce(ok({ packages: { 'symfony/console': v2Versions } }))
+                .mockResolvedValueOnce(ok({ packages: {} }));
 
             const result = await service.fetchPackage('symfony/console');
             expect(result).not.toBeNull();
             expect(result!.name).toBe('symfony/console');
+        });
+
+
+        it('merges stable and development feeds, deduplicates overlap, and keeps injective IDs', async () => {
+            const stable: PackagistVersion = {
+                name: 'acme/pkg', version: '1.0.0', version_normalized: '1.0.0.0',
+                time: '2024-01-01T00:00:00+00:00',
+            };
+            const duplicateDev: PackagistVersion = {
+                name: 'acme/pkg', version: 'dev-main', version_normalized: 'dev-main',
+                time: '2024-02-01T00:00:00+00:00', source: { type: 'git', url: 'https://example.test/repo', reference: 'aaaabbbbcccc' },
+            };
+            const secondDev: PackagistVersion = {
+                ...duplicateDev,
+                version: 'dev-next',
+                version_normalized: 'dev-next',
+                source: { ...duplicateDev.source!, reference: 'dddd1111eeee' },
+                time: '2024-03-01T00:00:00+00:00',
+            };
+            const http = getHttpMock();
+            http.getJson
+                .mockResolvedValueOnce(ok({ packages: { 'acme/pkg': [stable, duplicateDev] } }))
+                .mockResolvedValueOnce(ok({ packages: { 'acme/pkg': [duplicateDev, secondDev] } }));
+
+            const versions = await service.getVersions('acme/pkg', BASE_URL);
+
+            expect(http.getJson).toHaveBeenNthCalledWith(1, 'https://packagist.org/p2/acme/pkg.json');
+            expect(http.getJson).toHaveBeenNthCalledWith(2, 'https://packagist.org/p2/acme/pkg~dev.json');
+            expect(versions.map(version => version.version)).toEqual(['1.0.0', 'dev-main', 'dev-next']);
+            expect(new Set(versions.map(version => version.versionid)).size).toBe(3);
+            expect(versions.filter(version => version.isdefault)).toHaveLength(1);
+            expect(versions.at(-1)?.isdefault).toBe(true);
+            expect(versions.map(version => version.ancestor)).toEqual([
+                versions[0]!.versionid,
+                versions[0]!.versionid,
+                versions[1]!.versionid,
+            ]);
         });
     });
 
@@ -108,14 +149,16 @@ describe('PackagistService', () => {
             expect(stable!.immutable).toBe(true);
         });
 
-        it('marks only the default stable version as isdefault', async () => {
+        it('marks only the newest merged version as isdefault', async () => {
             const http = getHttpMock();
             mockV1Only(http, symfonyConsoleFixture);
 
             const versions = await service.getVersions('symfony/console', BASE_URL);
 
             expect(versions.filter(v => v.isdefault)).toHaveLength(1);
-            expect(versions.find(v => v.isdefault)?.version).toBe('v7.1.0');
+            expect(versions.every(v => typeof v.ancestor === 'string')).toBe(true);
+            expect(versions.every(v => v.packageid === 'console')).toBe(true);
+            expect(versions.find(v => v.isdefault)?.version).toBe('dev-main');
         });
 
         it('marks dev-* versions as immutable=false', async () => {
@@ -129,15 +172,15 @@ describe('PackagistService', () => {
             expect(dev!.immutable).toBe(false);
         });
 
-        it('includes sourceReference in dev-* version entities', async () => {
+        it('includes sourcereference in dev-* version entities', async () => {
             const http = getHttpMock();
             mockV1Only(http, symfonyConsoleFixture);
 
             const versions = await service.getVersions('symfony/console', BASE_URL);
             const dev = versions.find(v => isDevVersion(v.version));
 
-            expect(dev!.sourceReference).toBeDefined();
-            expect(typeof dev!.sourceReference).toBe('string');
+            expect(dev!.sourcereference).toBeDefined();
+            expect(typeof dev!.sourcereference).toBe('string');
         });
 
         it('produces collision-safe versionid for dev-* that includes source ref', async () => {
@@ -147,8 +190,8 @@ describe('PackagistService', () => {
             const versions = await service.getVersions('symfony/console', BASE_URL);
             const dev = versions.find(v => isDevVersion(v.version));
 
-            // versionId must contain the first 12 chars of the commit SHA
-            expect(dev!.versionid).toContain('deadbeef1234');
+            expect(dev!.versionid).toMatch(/^xv~d~/);
+            expect(dev!.version).toBe('dev-main');
         });
 
         it('produces stable, opaque versionid for stable releases', async () => {
@@ -169,8 +212,8 @@ describe('PackagistService', () => {
             const versions = await service.getVersions('symfony/console', BASE_URL);
             const stable = versions.find(v => v.version === 'v7.1.0');
 
-            expect(stable!.xid).toMatch(/^\/composerregistries\/packagist\.org\/packages\/symfony~console\/versions\//);
-            expect(stable!.self).toMatch(/^http:\/\/localhost:4100\/composerregistries\/packagist\.org\/packages\/symfony~console\/versions\//);
+            expect(stable!.xid).toMatch(/^\/composerregistries\/symfony\/packages\/console\/versions\//);
+            expect(stable!.self).toMatch(/^http:\/\/localhost:4100\/composerregistries\/symfony\/packages\/console\/versions\//);
         });
     });
 
@@ -209,9 +252,10 @@ describe('PackagistService', () => {
 
             const result = await service.getPackageResource('laravel/framework', BASE_URL);
             expect(result).not.toBeNull();
-            expect(result!.xid).toBe('/composerregistries/packagist.org/packages/laravel~framework');
-            expect(result!.self).toBe(`${BASE_URL}/composerregistries/packagist.org/packages/laravel~framework`);
-            expect(result!.packageid).toBe('laravel~framework');
+            expect(result!.xid).toBe('/composerregistries/laravel/packages/framework');
+            expect(result!.self).toBe(`${BASE_URL}/composerregistries/laravel/packages/framework`);
+            expect(result!.packageid).toBe('framework');
+            expect(result!['packagepath']).toBe('laravel/framework');
         });
 
         it('exposes versionsurl and versionscount', async () => {
@@ -233,6 +277,50 @@ describe('PackagistService', () => {
                 versionid: expect.any(String),
                 isdefault: true,
             }));
+        });
+    });
+
+    describe('native vendor discovery', () => {
+        it('groups the complete catalogue by vendor with basename resource IDs', async () => {
+            const http = getHttpMock();
+            http.getJson.mockResolvedValueOnce(ok({
+                packageNames: ['laravel/framework', 'symfony/console', 'symfony/routing'],
+            }));
+
+            const vendors = await service.listVendors();
+
+            expect(vendors).toEqual([
+                { id: 'laravel', packagescount: 1 },
+                { id: 'symfony', packagescount: 2 },
+            ]);
+        });
+
+        it('lists only resources in the requested vendor and emits no slash IDs', async () => {
+            const http = getHttpMock();
+            http.getJson.mockResolvedValueOnce(ok({
+                packageNames: ['laravel/framework', 'symfony/console', 'symfony/routing'],
+            }));
+
+            const packages = await service.listVendorPackages('symfony');
+
+            expect(packages.map(pkg => pkg.packageid)).toEqual(['console', 'routing']);
+            expect(packages.every(pkg => !pkg.packageid.includes('/'))).toBe(true);
+            expect(packages.map(pkg => pkg.packagepath)).toEqual(['symfony/console', 'symfony/routing']);
+        });
+
+        it('keeps exact lookup independent from the discovery catalogue', async () => {
+            const http = getHttpMock();
+            http.getJson
+                .mockResolvedValueOnce(ok({
+                    packages: { 'symfony/console': Object.values(symfonyConsoleFixture.package.versions) },
+                }))
+                .mockResolvedValueOnce(ok({ packages: {} }));
+
+            const result = await service.getPackageResource('symfony/console', BASE_URL);
+
+            expect(result?.packageid).toBe('console');
+            expect(http.getJson).toHaveBeenCalledTimes(2);
+            expect(http.getJson).not.toHaveBeenCalledWith('https://packagist.org/packages/list.json');
         });
     });
 
@@ -320,27 +408,27 @@ describe('PackagistService', () => {
             modifiedat: '2026-01-01T00:00:00.000Z',
         };
 
-        it('returns a valid group entity for packagist.org', () => {
-            const group = service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS);
-            expect(group.xid).toBe('/composerregistries/packagist.org');
-            expect(group.self).toBe(`${BASE_URL}/composerregistries/packagist.org`);
-            expect(group['composerregistriesid']).toBe('packagist.org');
+        it('returns a valid group entity for a Composer vendor', () => {
+            const group = service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS);
+            expect(group.xid).toBe('/composerregistries/symfony');
+            expect(group.self).toBe(`${BASE_URL}/composerregistries/symfony`);
+            expect(group['composerregistryid']).toBe('symfony');
         });
 
-        it('does not emit a fabricated packagescount', () => {
-            const group = service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS);
-            expect(group['packagescount']).toBeUndefined();
+        it('emits the vendor package count', () => {
+            const group = service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS);
+            expect(group['packagescount']).toBe(2);
         });
 
         it('produces identical JSON across two calls with the same timestamps (stable ETag)', () => {
-            const group1 = service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS);
-            const group2 = service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS);
+            const group1 = service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS);
+            const group2 = service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS);
             expect(JSON.stringify(group1)).toBe(JSON.stringify(group2));
         });
 
         it('produces different JSON when timestamps differ (ETag changes on modification)', () => {
-            const group1 = service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS);
-            const group2 = service.buildGroupEntity(BASE_URL, {
+            const group1 = service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS);
+            const group2 = service.buildGroupEntity(BASE_URL, 'symfony', 2, {
                 createdat: STABLE_TIMESTAMPS.createdat,
                 modifiedat: '2026-07-01T00:00:00.000Z',
             });
@@ -348,8 +436,8 @@ describe('PackagistService', () => {
         });
 
         it('collection entity wrapping group also has stable JSON for given timestamps (regression: 304 on GET /composerregistries)', () => {
-            const collection1 = { ['packagist.org']: service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS) };
-            const collection2 = { ['packagist.org']: service.buildGroupEntity(BASE_URL, STABLE_TIMESTAMPS) };
+            const collection1 = { symfony: service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS) };
+            const collection2 = { symfony: service.buildGroupEntity(BASE_URL, 'symfony', 2, STABLE_TIMESTAMPS) };
             expect(JSON.stringify(collection1)).toBe(JSON.stringify(collection2));
         });
     });
@@ -380,9 +468,49 @@ describe('PackagistService', () => {
             packages: Record<string, PackagistVersion[]>;
         };
 
+        it('applies three or more deltas cumulatively to the previous expanded version', () => {
+            const inflated = inflateMinifiedVersions([
+                {
+                    name: 'acme/pkg', version: '4.0.0', version_normalized: '4.0.0.0',
+                    description: 'base description', license: ['MIT'],
+                },
+                {
+                    version: '3.0.0', version_normalized: '3.0.0.0',
+                    description: 'changed by the second entry',
+                    source: { type: 'git', url: 'https://example.test/acme/pkg', reference: 'second-ref' },
+                } as PackagistVersion,
+                { version: '2.0.0', version_normalized: '2.0.0.0' } as PackagistVersion,
+                { version: '1.0.0', version_normalized: '1.0.0.0', license: ['BSD-3-Clause'] } as PackagistVersion,
+            ]);
+
+            expect(inflated[2]).toMatchObject({
+                name: 'acme/pkg',
+                description: 'changed by the second entry',
+                license: ['MIT'],
+                source: { reference: 'second-ref' },
+            });
+            expect(inflated[3]).toMatchObject({
+                description: 'changed by the second entry',
+                license: ['BSD-3-Clause'],
+                source: { reference: 'second-ref' },
+            });
+        });
+
+        it('removes prototype fields marked with the Composer __unset sentinel', () => {
+            const inflated = inflateMinifiedVersions([
+                { name: 'acme/pkg', version: '1.0.0', version_normalized: '1.0.0.0', description: 'prototype', conflict: { old: '*' } },
+                { version: '0.9.0', version_normalized: '0.9.0.0', conflict: '__unset' } as unknown as PackagistVersion,
+            ]);
+            expect(inflated[1]?.name).toBe('acme/pkg');
+            expect(inflated[1]?.description).toBe('prototype');
+            expect(inflated[1]).not.toHaveProperty('conflict');
+        });
+
         it('inflates inherited fields from prototype into subsequent version entries', async () => {
             const http = getHttpMock();
-            http.getJson.mockResolvedValueOnce(ok(minifiedFixture));
+            http.getJson
+                .mockResolvedValueOnce(ok(minifiedFixture))
+                .mockResolvedValueOnce(ok({ packages: {} }));
 
             const result = await service.fetchPackage('symfony/console');
             expect(result).not.toBeNull();
@@ -402,14 +530,17 @@ describe('PackagistService', () => {
 
         it('generates collision-safe IDs for inflated dev-* entries', async () => {
             const http = getHttpMock();
-            http.getJson.mockResolvedValueOnce(ok(minifiedFixture));
+            http.getJson
+                .mockResolvedValueOnce(ok(minifiedFixture))
+                .mockResolvedValueOnce(ok({ packages: {} }));
 
             const versions = await service.getVersions('symfony/console', BASE_URL);
             const devVersion = versions.find(v => v.version === 'dev-main');
             expect(devVersion).toBeDefined();
             expect(devVersion!.immutable).toBe(false);
-            expect(devVersion!.versionid).toContain('deadbeef1234');
-            expect(devVersion!.sourceReference).toBe('deadbeef1234567890abcdef1234567890abcdef');
+            expect(devVersion!.versionid).toMatch(/^xv~d~/);
+            expect(devVersion!.version).toBe('dev-main');
+            expect(devVersion!.sourcereference).toBe('deadbeef1234567890abcdef1234567890abcdef');
         });
     });
 });

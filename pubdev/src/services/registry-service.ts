@@ -23,7 +23,6 @@ export class RegistryService {
       description:  'xRegistry-compliant read-only proxy for the pub.dev Dart/Flutter package registry.',
       documentation: `${baseUrl}/model`,
       capabilities:  CAPABILITIES,
-      model:         `${baseUrl}/model`,
       [`${GROUP_TYPE}url`]:   `${baseUrl}/${GROUP_TYPE}`,
       [`${GROUP_TYPE}count`]: 1,
       epoch:      this.entityState.getEpoch('/'),

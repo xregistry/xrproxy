@@ -14,6 +14,7 @@ const path = require('node:path');
 const { promisify } = require('node:util');
 
 const execAsync = promisify(exec);
+const { assertCapabilitiesConform } = require("../helpers/xregistry-capability-conformance.cjs");
 
 // ── Minimal fixture server (no external deps) ─────────────────────────────
 
@@ -47,6 +48,13 @@ const PACKAGE_BODY = JSON.stringify({
       published: '2022-06-01T00:00:00.000Z',
     },
     {
+      version: '1.1.0+build.1',
+      pubspec: { name: 'http', version: '1.1.0+build.1' },
+      archive_url: 'https://pub.dev/api/archives/http-1.1.0+build.1.tar.gz',
+      archive_sha256: 'sha_build',
+      published: '2023-01-01T00:00:00.000Z',
+    },
+    {
       version: '1.2.0',
       pubspec: { name: 'http', version: '1.2.0', description: 'A composable HTTP library.', environment: { sdk: '^3.0.0' } },
       archive_url: 'https://pub.dev/api/archives/http-1.2.0.tar.gz',
@@ -60,14 +68,24 @@ const SCORE_BODY = JSON.stringify({
   grantedPoints: 140, maxPoints: 160, likeCount: 5000, popularityScore: 0.98,
 });
 const PUBLISHER_BODY = JSON.stringify({ publisherId: 'dart.dev' });
-const NAMES_BODY = JSON.stringify({
-  packages: ['async', 'collection', 'http', 'meta', 'path', 'test'],
-});
+const PACKAGE_NAMES = ['async', 'collection', 'http', 'meta', 'path', 'test'];
+const NAMES_BODY = JSON.stringify({ packages: PACKAGE_NAMES });
+
+function packageBodyFor(name) {
+  const body = JSON.parse(PACKAGE_BODY);
+  body.name = name;
+  body.latest.pubspec.name = name;
+  body.versions = body.versions.map(version => ({
+    ...version,
+    pubspec: { ...version.pubspec, name },
+  }));
+  return JSON.stringify(body);
+}
 
 function startFixture() {
   const routes = new Map([
     ['GET /api/package-names',              { body: NAMES_BODY }],
-    ['GET /api/packages/http',              { body: PACKAGE_BODY }],
+    ...PACKAGE_NAMES.map(name => [`GET /api/packages/${name}`, { body: packageBodyFor(name) }]),
     ['GET /api/packages/http/score',        { body: SCORE_BODY }],
     ['GET /api/packages/http/publisher',    { body: PUBLISHER_BODY }],
   ]);
@@ -202,14 +220,23 @@ describe('pub.dev Docker Integration Tests (deterministic fixtures)', function (
     const data = await getJson(`${baseUrl}/model`);
     assert.ok(data.groups?.dartregistries, 'dartregistries group');
     assert.ok(data.groups.dartregistries.resources?.packages, 'packages resource');
-    assert.ok(data.groups.dartregistries.resources.packages.versions, 'versions defined');
+    const packages = data.groups.dartregistries.resources.packages;
+    assert.equal(packages.maxversions, 0, 'built-in versions enabled');
+    assert.equal(packages.versionmode, 'manual', 'opaque build-metadata IDs require manual mode');
+    assert.equal('versions' in packages, false, 'no unsupported resource-level versions model');
+    assert.equal('resources' in packages, false, 'no nested version resource');
+    assert.ok(packages.attributes.versionid, 'full model includes Version fields');
+    assert.ok(packages.resourceattributes.versionscount, 'full model includes Resource fields');
+    const source = await getJson(`${baseUrl}/modelsource`);
+    assert.deepEqual(Object.keys(source), ["description", "groups"]);
+    assert.equal(Object.hasOwn(source, "default"), false);
+    assert.equal(Object.hasOwn(data, "default"), false);
+    assert.equal('resourceattributes' in source.groups.dartregistries.resources.packages, false);
   });
 
-  it('GET /capabilities has filter=true and mutable=false', async () => {
+  it("GET /capabilities satisfies the rc2 schema and runtime profile", async () => {
     const data = await getJson(`${baseUrl}/capabilities`);
-    assert.equal(data.filter, true);
-    assert.equal(data.mutable, false);
-    assert.equal(data.pagination, true);
+    assertCapabilitiesConform(data, { flags: ["filter", "sort"], versionmodes: ["manual"] });
   });
 
   // ── Group endpoints ────────────────────────────────────────────────────
@@ -263,15 +290,19 @@ describe('pub.dev Docker Integration Tests (deterministic fixtures)', function (
     const data = await getJson(`${baseUrl}/dartregistries/pub.dev/packages/http`);
     assert.equal(data.packageid, 'http');
     assert.equal(data.versionid, '1.2.0');
-    assert.equal(data.publisher, 'dart.dev');
-    assert.equal(data.versionscount, 3);
-    assert.ok(typeof data.likes === 'number');
+    assert.equal(Object.hasOwn(data, 'publisher'), false);
+    assert.equal(data.versionscount, 4);
+    assert.ok(typeof data.ancestor === 'string');
+    assert.equal(Object.hasOwn(data, 'likes'), false);
   });
 
   it('GET /dartregistries/pub.dev/packages/http/meta returns meta', async () => {
     const data = await getJson(`${baseUrl}/dartregistries/pub.dev/packages/http/meta`);
     assert.equal(data.readonly, true);
     assert.equal(data.defaultversionid, '1.2.0');
+    assert.equal(data.publisher, 'dart.dev');
+    assert.ok(typeof data.likes === 'number');
+    assert.equal(Object.hasOwn(data, 'ancestor'), false);
   });
 
   it('GET .../packages/no-such-package-xyzabc123 returns 404', async () => {
@@ -286,16 +317,23 @@ describe('pub.dev Docker Integration Tests (deterministic fixtures)', function (
 
   // ── Version endpoints ──────────────────────────────────────────────────
 
-  it('GET .../packages/http/versions returns all 3 versions in semver order', async () => {
+  it('GET .../packages/http/versions returns all versions in deterministic pub.dev order', async () => {
     const data = await getJson(`${baseUrl}/dartregistries/pub.dev/packages/http/versions`);
     const keys = Object.keys(data);
-    assert.equal(keys.length, 3);
-    // All version keys match semver pattern
-    for (const k of keys) {
-      assert.match(k, /^\d+\.\d+\.\d+/, `"${k}" is semver`);
-    }
-    // Prerelease comes before stable
+    assert.equal(keys.length, 4);
+    const plusId = `xv~${Buffer.from('1.1.0+build.1').toString('base64url')}`;
+    assert.ok(keys.includes(plusId), 'build metadata uses an xRegistry-safe ID');
+    assert.ok(keys.every(k => /^[A-Za-z0-9_][A-Za-z0-9._~:@-]*$/.test(k)));
     assert.ok(keys.indexOf('1.0.0-beta.1') < keys.indexOf('1.2.0'), 'prerelease before stable');
+  });
+
+  it('encoded + version detail retains the raw pub.dev version', async () => {
+    const plusId = `xv~${Buffer.from('1.1.0+build.1').toString('base64url')}`;
+    const data = await getJson(`${baseUrl}/dartregistries/pub.dev/packages/http/versions/${plusId}`);
+    assert.equal(data.versionid, plusId);
+    assert.equal(data.version, '1.1.0+build.1');
+    assert.equal(data.packageid, 'http');
+    assert.ok(typeof data.ancestor === 'string');
   });
 
   it('version detail has archive_url, archive_sha256, published, isdefault', async () => {
