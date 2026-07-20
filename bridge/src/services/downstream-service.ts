@@ -5,7 +5,7 @@
 
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
-import { SERVER_HEALTH_TIMEOUT } from '../config/constants';
+import { ROOT_METADATA_TIMEOUT, SERVER_HEALTH_TIMEOUT } from '../config/constants';
 import { DownstreamConfig, ServerState, ServerTestResult } from '../types/bridge';
 
 export class DownstreamService {
@@ -77,19 +77,13 @@ export class DownstreamService {
                 traceHeaders: Object.keys(headers).filter(h => h.startsWith('x-') || h === 'traceparent')
             });
 
-            // First test root endpoint to get counts and general info
-            const rootResponse = await axios.get(server.url, {
-                headers,
-                timeout: SERVER_HEALTH_TIMEOUT
-            });
-
-            // Test /model endpoint specifically
+            // The model and capabilities define whether a downstream is routable.
             const modelResponse = await axios.get(`${server.url}/model`, {
                 headers,
                 timeout: SERVER_HEALTH_TIMEOUT
             });
 
-            // Try to get capabilities from dedicated endpoint, fall back to root response
+            let rootResponseData: any;
             let capabilitiesData;
             try {
                 const capabilitiesResponse = await axios.get(`${server.url}/capabilities`, {
@@ -98,14 +92,36 @@ export class DownstreamService {
                 });
                 capabilitiesData = capabilitiesResponse.data;
             } catch (capError) {
-                // If /capabilities endpoint doesn't exist, use capabilities from root response
-                if (rootResponse.data.capabilities) {
-                    capabilitiesData = rootResponse.data.capabilities;
+                // Legacy downstreams may expose capabilities only from the root.
+                const rootResponse = await axios.get(server.url, {
+                    headers,
+                    timeout: SERVER_HEALTH_TIMEOUT
+                });
+                rootResponseData = rootResponse.data;
+                if (rootResponseData.capabilities) {
+                    capabilitiesData = rootResponseData.capabilities;
                     this.logger.debug('Using capabilities from root response', {
                         serverUrl: server.url
                     });
                 } else {
                     throw new Error('No capabilities found in root response or /capabilities endpoint');
+                }
+            }
+
+            // Root counts are optional metadata. A slow catalogue computation must
+            // not remove an otherwise healthy downstream from the routing model.
+            if (rootResponseData === undefined) {
+                try {
+                    const rootResponse = await axios.get(server.url, {
+                        headers,
+                        timeout: ROOT_METADATA_TIMEOUT
+                    });
+                    rootResponseData = rootResponse.data;
+                } catch (rootError) {
+                    this.logger.warn('Optional downstream root metadata unavailable', {
+                        serverUrl: server.url,
+                        error: rootError instanceof Error ? rootError.message : String(rootError)
+                    });
                 }
             }
 
@@ -119,10 +135,10 @@ export class DownstreamService {
                 serverUrl: server.url,
                 duration,
                 modelGroups: Object.keys(groups).length,
-                rootEndpointInfo: Object.keys(rootResponse.data)
+                rootEndpointInfo: Object.keys(rootResponseData || {})
                     .filter(key => key.endsWith('count') || key.endsWith('url'))
                     .reduce((acc: Record<string, any>, key: string) => {
-                        acc[key] = rootResponse.data[key];
+                        acc[key] = rootResponseData[key];
                         return acc;
                     }, {}),
                 traceId: headers['x-trace-id'] || 'generated',
@@ -132,7 +148,7 @@ export class DownstreamService {
             return {
                 model: modelData,
                 capabilities: capabilitiesData,
-                rootResponse: rootResponse.data
+                rootResponse: rootResponseData
             };
         } catch (error) {
             const duration = Date.now() - startTime;

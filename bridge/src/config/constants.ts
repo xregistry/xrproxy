@@ -57,6 +57,7 @@ export const REQUIRED_GROUPS = process.env['REQUIRED_GROUPS']?.split(',') || [];
 export const STARTUP_WAIT_TIME = parseInt(process.env['STARTUP_WAIT_TIME'] || '60000'); // 60 seconds
 export const RETRY_INTERVAL = parseInt(process.env['RETRY_INTERVAL'] || '60000'); // 60 seconds
 export const SERVER_HEALTH_TIMEOUT = parseInt(process.env['SERVER_HEALTH_TIMEOUT'] || '10000'); // 10 seconds
+export const ROOT_METADATA_TIMEOUT = parseInt(process.env['ROOT_METADATA_TIMEOUT'] || '2000'); // 2 seconds
 
 // Downstream configuration
 export const CONFIG_FILE = process.env['BRIDGE_CONFIG_FILE'] || 'downstreams.json';
