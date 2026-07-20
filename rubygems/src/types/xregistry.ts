@@ -66,7 +66,9 @@ export interface XRegistryEntity {
 
 export interface XRegistryVersion extends XRegistryEntity {
     versionid: string;
+    packageid: string;
     isdefault: boolean;
+    ancestor: string;
     number: string;
     platform: string;
     prerelease: boolean;
@@ -78,28 +80,10 @@ export interface XRegistryVersion extends XRegistryEntity {
     yanked: boolean;
 }
 
-export interface XRegistryPackage extends XRegistryEntity {
-    packageid: string;
-    versionid: string;
-    isdefault: boolean;
-    info: string;
-    version: string;
-    authors: string;
-    licenses: string[];
-    homepage_uri?: string;
-    source_code_uri?: string;
-    changelog_uri?: string;
-    documentation_uri?: string;
-    bug_tracker_uri?: string;
-    gem_uri?: string;
-    project_uri?: string;
-    downloads: number;
-    version_downloads: number;
-    platform: string;
-    sha: string;
-    dependencies: RubyGemDependencies;
+export interface XRegistryPackage extends XRegistryVersion {
+    metaurl: string;
     versionsurl: string;
-    versionscount?: number;
+    versionscount: number;
     versions?: Record<string, XRegistryVersion>;
 }
 

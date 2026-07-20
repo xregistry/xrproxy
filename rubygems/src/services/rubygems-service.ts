@@ -22,6 +22,47 @@ export interface RubyGemsServiceOptions {
     readonly baseUrl?: string;
     /** Inject a custom fetch implementation (useful in tests). */
     readonly fetch?: typeof globalThis.fetch;
+    readonly rateLimitPerSecond?: number;
+    readonly maxConcurrency?: number;
+}
+
+class RequestGate {
+    private nextStart = 0;
+    private startTail: Promise<void> = Promise.resolve();
+    private active = 0;
+    private readonly waiters: Array<() => void> = [];
+
+    constructor(private readonly intervalMs: number, private readonly maxConcurrency: number) {}
+
+    private async acquire(): Promise<void> {
+        if (this.active < this.maxConcurrency) {
+            this.active += 1;
+            return;
+        }
+        await new Promise<void>(resolve => this.waiters.push(resolve));
+        this.active += 1;
+    }
+
+    private release(): void {
+        this.active -= 1;
+        this.waiters.shift()?.();
+    }
+
+    async run<T>(operation: () => Promise<T>): Promise<T> {
+        const turn = this.startTail.then(async () => {
+            const delay = Math.max(0, this.nextStart - Date.now());
+            if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+            this.nextStart = Date.now() + this.intervalMs;
+        });
+        this.startTail = turn.catch(() => undefined);
+        await turn;
+        await this.acquire();
+        try {
+            return await operation();
+        } finally {
+            this.release();
+        }
+    }
 }
 
 function toLoadResult<T>(res: ConditionalHttpResponse<T>): CacheLoadResult<T> {
@@ -46,9 +87,16 @@ export class RubyGemsService {
     private readonly gemCache: TtlCache;
     private readonly versionsCache: TtlCache;
     private readonly searchCache: TtlCache;
+    private readonly requestGate: RequestGate;
 
     constructor(options: RubyGemsServiceOptions = {}) {
         this.baseUrl = (options.baseUrl ?? RUBYGEMS_API.BASE_URL).replace(/\/$/, '');
+
+        const requestsPerSecond = Math.max(1, Math.min(options.rateLimitPerSecond ?? 10, 10));
+        this.requestGate = new RequestGate(
+            Math.ceil(1000 / requestsPerSecond) + 1,
+            Math.max(1, Math.min(options.maxConcurrency ?? 2, 10)),
+        );
 
         this.client = new HttpUpstreamClient({
             timeoutMs: CACHE_CONFIG.HTTP_TIMEOUT_MS,
@@ -78,24 +126,25 @@ export class RubyGemsService {
     }
 
     async getGem(name: string): Promise<RubyGemMetadata | null> {
-        const key = createCacheKey('gem', name.toLowerCase());
+        const key = createCacheKey('gem', name);
         const result = await this.gemCache.get<RubyGemMetadata>(key, async (ctx) => {
-            const res = await this.client.getJson<RubyGemMetadata>(
+            const res = await this.requestGate.run(() => this.client.getJson<RubyGemMetadata>(
                 `${this.baseUrl}/gems/${encodeURIComponent(name)}.json`,
                 { headers: { ...COMMON_HEADERS }, conditional: ctx },
-            );
+            ));
+            if (!("notModified" in res) && res.value.name !== name) return { kind: "not-found" };
             return toLoadResult(res);
         });
         return result.kind === 'value' ? (result.value ?? null) : null;
     }
 
     async getVersions(name: string): Promise<RubyGemVersion[]> {
-        const key = createCacheKey('versions', name.toLowerCase());
+        const key = createCacheKey('versions', name);
         const result = await this.versionsCache.get<RubyGemVersion[]>(key, async (ctx) => {
-            const res = await this.client.getJson<RubyGemVersion[]>(
+            const res = await this.requestGate.run(() => this.client.getJson<RubyGemVersion[]>(
                 `${this.baseUrl}/versions/${encodeURIComponent(name)}.json`,
                 { headers: { ...COMMON_HEADERS }, conditional: ctx },
-            );
+            ));
             return toLoadResult(res);
         });
         return result.kind === 'value' ? (result.value ?? []) : [];
@@ -112,7 +161,9 @@ export class RubyGemsService {
             url.searchParams.set('query', trimmed);
             url.searchParams.set('page', String(page));
             url.searchParams.set('per_page', String(CACHE_CONFIG.SEARCH_PER_PAGE));
-            const res = await this.client.getJson<RubyGemMetadata[]>(url, { headers: { ...COMMON_HEADERS } });
+            const res = await this.requestGate.run(() =>
+                this.client.getJson<RubyGemMetadata[]>(url, { headers: { ...COMMON_HEADERS } }),
+            );
             return toLoadResult(res);
         });
         return result.kind === 'value' ? (result.value ?? []) : [];

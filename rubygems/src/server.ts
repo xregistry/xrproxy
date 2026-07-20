@@ -1,7 +1,7 @@
 import { createRegistryApp, listenWithGracefulShutdown, parseConfig, ConfigSchema } from '@xregistry/registry-core';
 import { join } from 'node:path';
 import modelData from '../model.json';
-import { GROUP_CONFIG, REGISTRY_CONFIG, RESOURCE_CONFIG } from './config/constants';
+import { CAPABILITIES, GROUP_CONFIG } from "./config/constants";
 import { createCorsMiddleware } from './middleware/cors';
 import { createLoggingMiddleware } from './middleware/logging';
 import { xregistryErrorHandler } from './middleware/xregistry-error-handler';
@@ -22,15 +22,7 @@ async function main(): Promise<void> {
     const rubygemsService = new RubyGemsService({ cacheDir });
     const registryService = new RegistryService(rubygemsService);
 
-    const capabilities = {
-        specversion: REGISTRY_CONFIG.SPEC_VERSION,
-        registryid: REGISTRY_CONFIG.ID,
-        groups: {
-            [GROUP_CONFIG.TYPE]: {
-                resources: [RESOURCE_CONFIG.TYPE],
-            },
-        },
-    };
+    const capabilities = CAPABILITIES;
 
     const app = createRegistryApp({
         model: modelData,

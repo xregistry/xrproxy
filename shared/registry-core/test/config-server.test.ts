@@ -63,7 +63,9 @@ test('server bootstrap exposes standard endpoints and closes gracefully', async 
   assert.deepEqual(await (await fetch(`${url}/health`)).json(), { status: 'ok' });
   const ready = await fetch(`${url}/ready`);
   assert.equal(ready.status, 503);
-  assert.deepEqual(await (await fetch(`${url}/model`)).json(), { groups: {} });
+  const fullModel = await (await fetch(`${url}/model`)).json() as Record<string, unknown>;
+  assert.ok((fullModel['attributes'] as Record<string, unknown>)['specversion']);
+  assert.deepEqual(await (await fetch(`${url}/modelsource`)).json(), { groups: {} });
   assert.deepEqual(await (await fetch(`${url}/capabilities`)).json(), { filters: true });
 
   const closed = once(running.server, 'close');

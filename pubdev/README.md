@@ -17,6 +17,7 @@ This service exposes the pub.dev package registry as an xRegistry-compliant API,
 | `GET /` | xRegistry root with group counts |
 | `GET /health` | Health check |
 | `GET /model` | Registry model definition |
+| `GET /modelsource` | Sparse registry model source |
 | `GET /capabilities` | Server capabilities |
 | `GET /dartregistries` | All Dart registry groups |
 | `GET /dartregistries/pub.dev` | pub.dev group details |
@@ -33,13 +34,19 @@ This service exposes the pub.dev package registry as an xRegistry-compliant API,
 - `filter` — Filter expression (e.g., `name=http`, `name=flutter*`)
 - `sort` — Sort order (e.g., `name=asc`, `name=desc`)
 
+`GET /capabilities` emits the complete xRegistry 1.0-rc2 capability map. Only implemented `filter` and `sort` flags are advertised; `inline` is not. The service is read-only (`mutable: []`) and reports pagination, `manual` version mode, and the required `xRegistry-json/1.0-rc2` schema (Core, **Registry Capabilities**).
+
 ## Version Semantics
 
-- Versions are preserved exactly as published on pub.dev (semantic versioning, e.g., `1.4.0`, `1.0.0-beta.1`, `2.0.0+1`)
+The model uses xRegistry's built-in Resource Version mechanism (`maxversions: 0`, `setversionid: true`, `versionmode: manual`); Versions are not nested Resources. `manual` is required because reversible xRegistry IDs for versions containing build metadata are opaque and are not Semantic Versions.
+
+The highest Version in the deterministic pub.dev semantic ordering selects the default Version. The model sets `setdefaultversionsticky: false`, and Resource metadata emits `defaultversionsticky: false`; adding a newer ordered Version advances the default. Ancestors form one deterministic chain in that same order; the first Version points to itself and each later Version points to its predecessor.
+
+- The raw version is preserved exactly in `version` (for example `1.4.0`, `1.0.0-beta.1`, `2.0.0+1`)
 - Prereleases (e.g., `-alpha`, `-beta`, `-rc`) are preserved with their full prerelease identifier
-- Build metadata (e.g., `+1`, `+build.1`) is preserved
+- A raw version that is already an xRegistry-safe Entity ID remains unchanged. Versions containing `+` (or the reserved encoding prefix) use reversible `xv~<base64url(raw-version)>` IDs, because `+` is not permitted by xRegistry Core [`<SINGULAR>id` constraints](https://github.com/xregistry/spec/blob/v1.0-rc2/core/spec.md#singularid-id-attribute)
 - Versions are sorted oldest-first following pub.dev semver ordering
-- The latest stable (non-prerelease) version is marked `isdefault: true`
+- The highest deterministically ordered version is marked `isdefault: true`
 
 ## Package Attributes
 
@@ -56,15 +63,18 @@ Each package response includes:
 ## Version Attributes
 
 Each version response includes:
-- `versionid` — exact semver string as published
+- `versionid` — xRegistry-safe ID; usually the semver string, reversibly encoded when needed
+- `version` — exact raw pub.dev version
 - `published` — ISO 8601 publish timestamp
 - `archive_url` — download URL for the `.tar.gz` archive
 - `archive_sha256` — SHA-256 checksum of the archive (when available)
 - `pubspec` — raw pubspec.yaml as parsed JSON
 - `sdk_constraint`, `flutter_constraint`
 - `retracted` — whether the version has been retracted
-- `isdefault` — `true` for the latest stable version
-- `ancestor` — previous version in sequence
+- `isdefault` — `true` for the highest deterministically ordered version
+- `ancestor` — previous encoded Version ID in sequence
+
+Dependency XID model targets use the plural Resource collection path `/dartregistries/packages`, as required by the rc2 model target grammar.
 
 ## Running Locally
 

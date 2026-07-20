@@ -1,12 +1,12 @@
 {
   "groups": {
     "terraformregistries": {
-      "description": "A group representing a Terraform registry provider (e.g., registry.terraform.io).",
+      "description": "A Terraform namespace on the configured registry host.",
       "plural": "terraformregistries",
       "singular": "terraformregistry",
       "resources": {
         "providers": {
-          "description": "A Terraform provider. The resource ID is encoded as namespace~type (e.g., hashicorp~aws).",
+          "description": "A Terraform provider. The resource ID is its provider type within the namespace group.",
           "plural": "providers",
           "singular": "provider",
           "hasdocument": false,
@@ -21,12 +21,89 @@
             },
             "source": {
               "type": "string",
-              "description": "Fully-qualified provider source address (namespace/type)."
+              "description": "Canonical provider source address namespace/type."
             },
             "description": {
               "type": "string",
               "description": "Human-readable description of the provider."
             },
+            "registryhost": {
+              "type": "string",
+              "description": "Upstream Terraform registry host."
+            },
+            "protocols": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "Supported Terraform plugin protocol versions."
+            },
+            "platforms": {
+              "type": "array",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "os": {
+                    "type": "string"
+                  },
+                  "arch": {
+                    "type": "string"
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "download_url": {
+                    "type": "string"
+                  },
+                  "shasums_url": {
+                    "type": "string"
+                  },
+                  "shasums_signature_url": {
+                    "type": "string"
+                  },
+                  "shasum": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Supported platform summaries or enriched download distributions."
+            },
+            "signing_keys": {
+              "type": "object",
+              "attributes": {
+                "gpg_public_keys": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "key_id": {
+                        "type": "string"
+                      },
+                      "ascii_armor": {
+                        "type": "string"
+                      },
+                      "trust_signature": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "source_url": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "description": "Signing keys returned by provider download metadata."
+            }
+          },
+          "maxversions": 0,
+          "setversionid": true,
+          "versionmode": "semver",
+          "singleversionroot": true,
+          "setdefaultversionsticky": false,
+          "metaattributes": {
             "downloads": {
               "type": "integer",
               "description": "Total cumulative download count from the Terraform Registry."
@@ -41,7 +118,9 @@
             },
             "categories": {
               "type": "array",
-              "item": { "type": "string" },
+              "item": {
+                "type": "string"
+              },
               "description": "Categories that describe the provider's purpose."
             },
             "featured": {
@@ -58,13 +137,15 @@
             },
             "aliases": {
               "type": "array",
-              "item": { "type": "string" },
+              "item": {
+                "type": "string"
+              },
               "description": "Alternate source addresses for this provider."
             }
           }
         },
         "modules": {
-          "description": "A Terraform module. The resource ID is encoded as namespace~name~provider (e.g., hashicorp~consul~aws).",
+          "description": "A Terraform module. The resource ID is reversible name~provider within the namespace group.",
           "plural": "modules",
           "singular": "module",
           "hasdocument": false,
@@ -83,7 +164,7 @@
             },
             "source": {
               "type": "string",
-              "description": "Fully-qualified module source address (namespace/name/provider)."
+              "description": "Canonical module source address namespace/name/provider."
             },
             "description": {
               "type": "string",
@@ -97,15 +178,40 @@
               "type": "boolean",
               "description": "Whether the module is verified by HashiCorp."
             },
-            "trusted": {
-              "type": "boolean",
-              "description": "Whether the module publisher is trusted."
-            },
             "owner": {
               "type": "string",
               "description": "GitHub username or organisation that owns the module repository."
+            },
+            "registryhost": {
+              "type": "string",
+              "description": "Upstream Terraform registry host."
+            },
+            "published_at": {
+              "type": "timestamp",
+              "description": "UTC timestamp when this module Version was published."
+            }
+          },
+          "maxversions": 0,
+          "setversionid": true,
+          "versionmode": "semver",
+          "singleversionroot": true,
+          "setdefaultversionsticky": false,
+          "metaattributes": {
+            "trusted": {
+              "type": "boolean",
+              "description": "Whether the module publisher is trusted."
             }
           }
+        }
+      },
+      "attributes": {
+        "namespace": {
+          "type": "string",
+          "description": "Canonical Terraform namespace and xRegistry group ID."
+        },
+        "registryhost": {
+          "type": "string",
+          "description": "Upstream Terraform registry host (registry.terraform.io for this proxy)."
         }
       }
     }

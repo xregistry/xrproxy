@@ -6,9 +6,9 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 
 const execPromise = promisify(exec);
+const { assertCapabilitiesConform } = require("../helpers/xregistry-capability-conformance.cjs");
 
 const GROUP = 'huggingfaceregistries';
-const REGISTRY = 'huggingface.co';
 
 describe('Hugging Face Docker Integration Tests', function () {
   this.timeout(180_000);
@@ -75,13 +75,27 @@ describe('Hugging Face Docker Integration Tests', function () {
     const res = await axios.get(`${baseUrl}/model`);
     expect(res.status).to.equal(200);
     expect(res.data.groups).to.have.property('huggingfaceregistries');
+    const models = res.data.groups.huggingfaceregistries.resources.models;
+    expect(models.attributes).to.have.property('versionid');
+    expect(models.metaattributes).to.have.property('defaultversionurl');
+    const source = await axios.get(`${baseUrl}/modelsource`);
+    expect(Object.keys(source.data)).to.deep.equal(["groups"]);
+    expect(source.data).not.to.have.property("default");
+    expect(res.data).not.to.have.property("default");
+    expect(source.data.groups.huggingfaceregistries.resources.models).not.to.have.property('resourceattributes');
+  });
+
+  it("GET /capabilities satisfies the rc2 schema and runtime profile", async () => {
+    const res = await axios.get(`${baseUrl}/capabilities`);
+    expect(res.status).to.equal(200);
+    assertCapabilitiesConform(res.data, { flags: ["filter"], versionmodes: ["manual"] });
   });
 
   it('GET / → registry document with huggingfaceregistriesurl', async () => {
     const res = await axios.get(`${baseUrl}/`);
     expect(res.status).to.equal(200);
     expect(res.data).to.have.property('huggingfaceregistriesurl');
-    expect(res.data.huggingfaceregistriescount).to.equal(1);
+    if ('huggingfaceregistriescount' in res.data) expect(res.data.huggingfaceregistriescount).to.be.greaterThan(0);
   });
 
   it('GET / with Authorization header → 400', async () => {
@@ -93,20 +107,24 @@ describe('Hugging Face Docker Integration Tests', function () {
     }
   });
 
-  it(`GET /${GROUP} → group collection`, async () => {
-    const res = await axios.get(`${baseUrl}/${GROUP}`);
+  it(`GET /${GROUP} returns bounded native owner groups`, async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}?limit=2`);
     expect(res.status).to.equal(200);
-    expect(res.data).to.have.property(REGISTRY);
+    expect(Object.keys(res.data).length).to.be.at.most(2);
+    for (const [id, group] of Object.entries(res.data)) {
+      expect(group.huggingfaceregistryid).to.equal(id);
+    }
+    expect(res.headers).to.have.property('x-collection-complete');
   });
 
-  it(`GET /${GROUP}/${REGISTRY} → group document`, async () => {
-    const res = await axios.get(`${baseUrl}/${GROUP}/${REGISTRY}`);
+  it(`GET /${GROUP}/google-bert returns group detail`, async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}/google-bert`);
     expect(res.status).to.equal(200);
-    expect(res.data.huggingfaceregistryid).to.equal(REGISTRY);
+    expect(res.data.huggingfaceregistryid).to.equal('google-bert');
   });
 
-  it(`GET /${GROUP}/${REGISTRY}/models → 200 (live HF API)`, async () => {
-    const res = await axios.get(`${baseUrl}/${GROUP}/${REGISTRY}/models?limit=5`);
+  it(`GET /${GROUP}/google-bert/models → 200 (live HF API)`, async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}/google-bert/models?limit=5`);
     expect(res.status).to.equal(200);
     const keys = Object.keys(res.data);
     expect(keys.length).to.be.greaterThan(0);
@@ -115,20 +133,42 @@ describe('Hugging Face Docker Integration Tests', function () {
     expect(first).to.have.property('modelid');
     expect(first).to.have.property('xid');
     expect(first).to.have.property('repoid');
+    expect(first).to.have.property('versionid');
+    expect(first).to.have.property('ancestor');
+    expect(first).to.have.property('metaurl');
+    expect(first).not.to.have.property('defaultversionurl');
   });
 
-  it(`GET /${GROUP}/${REGISTRY}/models/bert-base-uncased → model doc`, async () => {
-    const res = await axios.get(`${baseUrl}/${GROUP}/${REGISTRY}/models/bert-base-uncased`);
+  it('resource meta follows the mutable upstream default', async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}/google-bert/models/bert-base-uncased/meta`);
+    expect(res.status).to.equal(200);
+    expect(res.data.defaultversionsticky).to.equal(false);
+    expect(res.data).to.have.property('defaultversionid');
+  });
+
+  it(`GET /${GROUP}/google-bert/models/bert-base-uncased → model doc`, async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}/google-bert/models/bert-base-uncased`);
     expect(res.status).to.equal(200);
     expect(res.data.modelid).to.equal('bert-base-uncased');
-    expect(res.data.repoid).to.equal('bert-base-uncased');
+    expect(res.data.repository).to.equal('google-bert/bert-base-uncased');
     expect(res.data).to.have.property('sha');
     expect(res.data).to.have.property('versionsurl');
+    expect(res.data).to.have.property('ancestor');
+  });
+
+  it('canonical bare aliases do not create an unnamespaced duplicate', async () => {
+    try {
+      await axios.get(`${baseUrl}/${GROUP}/_/models/gpt2`, { maxRedirects: 0, timeout: 30_000 });
+      throw new Error('Expected canonical redirect');
+    } catch (err) {
+      expect(err.response?.status).to.equal(308);
+      expect(new URL(err.response.headers.location).pathname).to.equal(`/${GROUP}/openai-community/models/gpt2`);
+    }
   });
 
   it('version list has mutable cache header (max-age <= 300)', async () => {
     const res = await axios.get(
-      `${baseUrl}/${GROUP}/${REGISTRY}/models/bert-base-uncased/versions`
+      `${baseUrl}/${GROUP}/google-bert/models/bert-base-uncased/versions`
     );
     expect(res.status).to.equal(200);
     const cc = res.headers['cache-control'] ?? '';
@@ -139,14 +179,33 @@ describe('Hugging Face Docker Integration Tests', function () {
     }
   });
 
-  it(`GET /${GROUP}/${REGISTRY}/datasets → 200`, async () => {
-    const res = await axios.get(`${baseUrl}/${GROUP}/${REGISTRY}/datasets?limit=3`);
+  it(`GET /${GROUP}/rajpurkar/datasets → 200`, async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}/rajpurkar/datasets?limit=3`);
     expect(res.status).to.equal(200);
   });
 
-  it(`GET /${GROUP}/${REGISTRY}/spaces → 200`, async () => {
-    const res = await axios.get(`${baseUrl}/${GROUP}/${REGISTRY}/spaces?limit=3`);
+  it(`GET /${GROUP}/gradio/spaces/hello_world → 200`, async () => {
+    const res = await axios.get(`${baseUrl}/${GROUP}/gradio/spaces/hello_world`);
     expect(res.status).to.equal(200);
+  });
+
+  it('returns 410 for removed fixed-group identities', async () => {
+    try {
+      await axios.get(`${baseUrl}/${GROUP}/huggingface.co/models/google-bert~bert-base-uncased`);
+      throw new Error('Expected 410');
+    } catch (err) {
+      expect(err.response?.status).to.equal(410);
+    }
+  });
+
+  it('encoded legacy paths still return 410', async () => {
+    try {
+      await axios.get(`${baseUrl}/${GROUP}/%68uggingface.co/models/google-bert%7Ebert-base-uncased/meta`);
+      throw new Error('Expected 410');
+    } catch (err) {
+      expect(err.response?.status).to.equal(410);
+      expect(err.response?.data.replacement).to.equal(`/${GROUP}/google-bert/models/bert-base-uncased/meta`);
+    }
   });
 
   it(`GET /${GROUP}/unknown → 404`, async () => {

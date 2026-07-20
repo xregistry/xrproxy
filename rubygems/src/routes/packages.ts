@@ -14,6 +14,10 @@ export function createPackageRoutes(registryService: RegistryService): Router {
         await registryService.getResource(req, res);
     }));
 
+    router.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}/:name/meta`, asyncHandler(async (req: Request, res: Response) => {
+        await registryService.getMeta(req, res);
+    }));
+
     router.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}/:name/versions`, asyncHandler(async (req: Request, res: Response) => {
         await registryService.getVersions(req, res);
     }));

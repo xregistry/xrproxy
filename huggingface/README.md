@@ -1,125 +1,84 @@
 # Hugging Face Hub xRegistry Proxy
 
-An xRegistry 1.0-rc2 compliant proxy for the public [Hugging Face Hub](https://huggingface.co/) API, exposing models, datasets, and spaces as xRegistry resources.
+Anonymous, read-only [xRegistry 1.0-rc2](https://github.com/xregistry/spec/blob/main/core/spec.md) access to public Hugging Face models, datasets, and spaces.
 
-## Security model (V1)
+## Native identity mapping
 
-**Anonymous-only.** This proxy:
+Owners/namespaces are xRegistry groups. Repository basenames are resources independently within `models`, `datasets`, and `spaces`:
 
-- **Never accepts** bearer tokens or any `Authorization` header from callers – requests with credentials are rejected with `400 Bad Request`.
-- **Never configures or forwards** any HF token to the upstream API.
-- Calls the HF Hub API **without any authentication**, returning only what is publicly visible.
-- For gated or private resources, the response reflects their **publicly visible status** (`gated: "auto"`, `private: true`) but never attempts a gated download.
+| Hugging Face ID | Group | Resource | xRegistry path |
+|---|---|---|---|
+| `google-bert/bert-base-uncased` | `google-bert` | `bert-base-uncased` | `/huggingfaceregistries/google-bert/models/bert-base-uncased` |
+| `rajpurkar/squad` | `rajpurkar` | `squad` | `/huggingfaceregistries/rajpurkar/datasets/squad` |
+| `gradio/hello_world` | `gradio` | `hello_world` | `/huggingfaceregistries/gradio/spaces/hello_world` |
+| alias `gpt2` | `openai-community` | `gpt2` | `/huggingfaceregistries/openai-community/models/gpt2` |
+| true bare ID `<repo>` | `_` | `<repo>` | `/huggingfaceregistries/_/models/<repo>` |
 
-## xRegistry structure
-
-| Layer | Value |
-|---|---|
-| Group type (plural) | `huggingfaceregistries` |
-| Group type (singular) | `huggingfaceregistry` |
-| Group ID | `huggingface.co` |
-| Resource types | `models`, `datasets`, `spaces` |
-| Version IDs | **Commit SHAs** (immutable) |
-| Mutable aliases | **Branches and tags** embedded in the `refs` attribute of each resource |
-
-### Repo ID encoding
-
-HF repo IDs are `{owner}/{name}` (e.g. `google/bert-base-uncased`). Since `/` is a URL path separator, the proxy maps `/` → `~` for URL segments:
-
-```
-google/bert-base-uncased  →  google~bert-base-uncased
-gpt2                      →  gpt2          (unchanged)
-```
-
-The original repo ID is always preserved in the `repoid` attribute.
-
-### Cache policy
-
-| Content | TTL | `Cache-Control` |
-|---|---|---|
-| Resource lists, group docs, registry root | 5 min | `public, max-age=300, s-maxage=300` |
-| Individual resources (model/dataset/space) | 5 min | `public, max-age=300, s-maxage=300` |
-| Version lists (commit lists) | 1 min | `public, max-age=60` |
-| Individual versions (commit SHAs) | **Immutable** | `public, max-age=31536000, immutable` |
-
-Commit SHAs are content-addressed and never change, so they receive a 1-year immutable cache header. Branch/tag aliases live in the resource document and inherit the 5-minute TTL.
+`_` is a valid xRegistry Entity ID and is reserved only for an upstream `repoInfo.id` that is truly bare. Public aliases such as `gpt2` are not duplicated there: exact lookup derives identity from authoritative `repoInfo.id` and returns HTTP 308 to the canonical owner path. A request that differs only by entity-ID casing returns 404 rather than being treated as an alias. Group/resource IDs never contain `/`; canonical upstream identity is retained in `name`, `repository`, and `repoid`. Exact repository and commit-SHA lookup calls the Hub directly and does not depend on discovery. See xRegistry Core, [`<SINGULAR>id` constraints](https://github.com/xregistry/spec/blob/v1.0-rc2/core/spec.md#singularid-id-attribute).
 
 ## Endpoints
 
-```
-GET /                                                          Registry root
-GET /health                                                    Health check
-GET /ready                                                     Readiness check
-GET /model                                                     xRegistry model
-GET /capabilities                                              Capabilities
-
-GET /huggingfaceregistries                                     Group collection
-GET /huggingfaceregistries/huggingface.co                      Group document
-
-GET /huggingfaceregistries/huggingface.co/models               Model list
-GET /huggingfaceregistries/huggingface.co/models/:id           Model resource
-GET /huggingfaceregistries/huggingface.co/models/:id/meta      Model meta
-GET /huggingfaceregistries/huggingface.co/models/:id/versions  Version list
-GET /huggingfaceregistries/huggingface.co/models/:id/versions/:sha  Version
-
-GET /huggingfaceregistries/huggingface.co/datasets/...         (same structure)
-GET /huggingfaceregistries/huggingface.co/spaces/...           (same structure)
+```text
+GET /
+GET /model
+GET /modelsource
+GET /capabilities
+GET /health
+GET /ready
+GET /huggingfaceregistries
+GET /huggingfaceregistries/{owner}
+GET /huggingfaceregistries/{owner}/{models|datasets|spaces}
+GET /huggingfaceregistries/{owner}/{type}/{repository}
+GET /huggingfaceregistries/{owner}/{type}/{repository}/meta
+GET /huggingfaceregistries/{owner}/{type}/{repository}/versions
+GET /huggingfaceregistries/{owner}/{type}/{repository}/versions/{sha}
 ```
 
-All list endpoints support `?limit` and `?skip` (models/datasets/spaces) or `?page` (versions).
+Group and resource collections accept `limit` and `offset` (`skip` remains an input alias). Filters retain the requested field (for example, `modelid=...` is not rewritten to `name=...`). List summaries can omit `author` and `sha`, so those filters hydrate at most 50 exact repositories before evaluation; offsets beyond that detail-filter budget receive HTTP 400. Other discovery scans remain capped at 1,000 items. `sort` is not advertised and receives HTTP 400.
 
-## Configuration
+`GET /capabilities` returns the complete xRegistry 1.0-rc2 capability map. This read-only proxy advertises only the `filter` flag, `manual` version mode, pagination, and `xRegistry-json/1.0-rc2`; unsupported `inline` is omitted (Core, **Registry Capabilities**).
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `4300` | Listen port |
-| `HOST` | `0.0.0.0` | Listen host |
-| `HF_API_URL` | `https://huggingface.co` | HF Hub base URL |
-| `UPSTREAM_TIMEOUT_MS` | `10000` | Per-attempt HTTP timeout |
-| `UPSTREAM_OPERATION_TIMEOUT_MS` | `30000` | Total operation timeout |
-| `UPSTREAM_MAX_ATTEMPTS` | `3` | HTTP retry count |
-| `UPSTREAM_CONCURRENCY` | `16` | Max concurrent upstream requests |
-| `CACHE_DIR` | `./cache` | Disk cache directory |
-| `MUTABLE_CACHE_TTL_MS` | `300000` | TTL for mutable content (5 min) |
-| `IMMUTABLE_CACHE_TTL_MS` | `31536000000` | TTL for immutable commits (1 year) |
+Responses include a `next` link only when the scanned snapshot contains a real sentinel item. An exhausted bounded snapshot never manufactures an infinite continuation: it emits `X-Collection-Complete: false`, omits an unknown total, and has no `next`. `X-Total-Count` and `{plural}count` appear only after an authoritative end-of-scan (xRegistry Core, **Collection Serialization** and **Filter Flag**; Pagination, **next Link**).
 
-**Note:** No `HF_TOKEN` or credential environment variable is accepted.
+## Public path migration (#203)
 
-## Running locally
+```text
+OLD /huggingfaceregistries/huggingface.co/models/google-bert~bert-base-uncased
+NEW /huggingfaceregistries/google-bert/models/bert-base-uncased
+```
+
+All paths below the removed fixed `huggingface.co` group return **HTTP 410 Gone** with a replacement hint using the actual resource type and retaining `/meta`, `/versions`, or Version suffixes. There is no redirect or fallback to slash-bearing identities.
+
+## Versions and caching
+
+Resource default versions and version IDs are immutable commit SHAs. Resource and Version lineage is emitted through the rc2 `ancestor` attribute. Branches/tags remain mutable pointers in the Resource Meta `refs` attribute. The model uses xRegistry's built-in Resource Version mechanism (`maxversions: 0`, `versionmode: manual`). The current upstream HEAD is a non-sticky default (`defaultversionsticky: false`).
+
+If anonymous refs or commit enrichment returns HTTP 401/403 while repository metadata still exposes a SHA, that SHA is materialized as a minimal Version. Resource, Meta, Versions collection, and exact Version reads therefore retain one resolvable default.
+
+| Content | Cache policy |
+|---|---|
+| Discovery and resources | 5 minutes |
+| Commit lists | 1 minute |
+| Commit SHA | `max-age=31536000, immutable` |
+
+## Security
+
+The proxy never configures or forwards a Hub token. Incoming `Authorization` headers are rejected with HTTP 400, so only anonymously visible data is exposed.
+
+## Configuration and validation
+
+| Variable | Default |
+|---|---|
+| `PORT` | `4300` |
+| `HOST` | `0.0.0.0` |
+| `HF_API_URL` | `https://huggingface.co` |
+| `CACHE_DIR` | `./cache` |
+| `MUTABLE_CACHE_TTL_MS` | `300000` |
+| `IMMUTABLE_CACHE_TTL_MS` | `31536000000` |
 
 ```bash
 cd huggingface
 npm ci
 npm run build
-npm start
+npm test
 ```
-
-Open `http://localhost:4300/huggingfaceregistries/huggingface.co/models?limit=5`.
-
-## Running with Docker
-
-```bash
-# From repo root
-docker build -f huggingface.Dockerfile -t xregistry-hf .
-docker run -p 4300:4300 xregistry-hf
-```
-
-## Running tests
-
-```bash
-# Unit tests (no network required)
-cd huggingface && npm test
-
-# Integration tests (requires running server or Docker)
-cd test && npm run test:huggingface
-```
-
-## Design notes
-
-### Why branches/tags are not modelled as versions
-
-xRegistry versions are meant to be stable, addressable snapshots. Branches and tags are **mutable pointers** to commits that change over time. Including them in the versions collection would violate the immutability expectation for versioned resources. Instead they are embedded as the `refs` attribute (short cache TTL) on the resource document, allowing callers to discover the commit SHA a branch or tag resolves to and then request the immutable version directly.
-
-### Count fields
-
-`versionscount` is **omitted** from resource documents because the HF Hub API does not expose an authoritative total commit count. Displaying an inaccurate count would be misleading. Per the xRegistry spec, counts should only be present when they are authoritative.

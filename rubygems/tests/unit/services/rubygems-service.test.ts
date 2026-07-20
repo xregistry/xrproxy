@@ -59,6 +59,35 @@ describe('RubyGemsService', () => {
         }
     });
 
+    test('bounds upstream concurrency and starts no more than ten requests per rolling second', async () => {
+        let active = 0;
+        let maxActive = 0;
+        const starts: number[] = [];
+        const fetchMock: typeof fetch = async () => {
+            starts.push(Date.now());
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await new Promise(resolve => setTimeout(resolve, 180));
+            active -= 1;
+            return new Response(JSON.stringify(RACK_GEM_FIXTURE), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            });
+        };
+        const service = new RubyGemsService({
+            cacheDir,
+            baseUrl: 'https://rubygems.example.test',
+            fetch: fetchMock,
+            rateLimitPerSecond: 10,
+            maxConcurrency: 2,
+        });
+        await Promise.all(Array.from({ length: 11 }, (_, index) => service.getGem(`gem-${index}`)));
+        expect(maxActive).toBeLessThanOrEqual(2);
+        for (const startedAt of starts) {
+            expect(starts.filter(candidate => candidate >= startedAt && candidate < startedAt + 1000).length).toBeLessThanOrEqual(10);
+        }
+    });
+
     test('ruby platform produces a plain version ID (no suffix)', () => {
         expect(buildVersionId('1.0.0', 'ruby')).toBe('1.0.0');
     });
@@ -119,6 +148,25 @@ describe('RubyGemsService', () => {
             await service.getGem('rack');
             // Only one upstream request due to in-flight dedup + cache
             expect(fixture.requests).toHaveLength(1);
+        } finally {
+            await fixture.close();
+        }
+    });
+
+    test("does not reuse a lowercase canonical entity for a wrong-case request", async () => {
+        const fixture = await startFixtureServer([
+            { path: "/gems/rack.json", responses: [{ body: RACK_GEM_FIXTURE }] },
+            { path: "/gems/Rack.json", responses: [{ body: RACK_GEM_FIXTURE }] },
+        ]);
+        try {
+            const service = new RubyGemsService({ cacheDir, baseUrl: fixture.url });
+            await expect(service.getGem("rack")).resolves.toEqual(RACK_GEM_FIXTURE);
+            await expect(service.getGem("Rack")).resolves.toBeNull();
+            await expect(service.getGem("Rack")).resolves.toBeNull();
+            expect(fixture.requests.map(request => request.path)).toEqual([
+                "/gems/rack.json",
+                "/gems/Rack.json",
+            ]);
         } finally {
             await fixture.close();
         }

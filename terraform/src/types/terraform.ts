@@ -10,7 +10,7 @@
 export interface ProviderEntry {
     namespace: string;
     type: string;
-    id: string; // encoded as namespace~type
+    id: string; // provider type; namespace is the xRegistry group ID
 }
 
 /** Raw response from GET /v1/providers/{ns}/{type}/versions */
@@ -75,7 +75,7 @@ export interface ModuleEntry {
     namespace: string;
     name: string;
     provider: string;
-    id: string; // encoded as namespace~name~provider
+    id: string; // encoded as name~provider within the namespace group
 }
 
 /** Raw response from GET /v1/modules/{ns}/{name}/{provider}/versions */

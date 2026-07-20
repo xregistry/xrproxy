@@ -5,6 +5,11 @@ describe('xRegistry package filters', () => {
         expect(getNamePrefixFilter([['name=symfony/*']])).toBe('symfony/');
     });
 
+    test('keeps non-wildcard filters exact on the requested field', () => {
+        const groups = [{ name: 'symfony' }, { name: 'friendsofsymfony' }];
+        expect(applyFilter(groups, [['name=symfony']])).toEqual([{ name: 'symfony' }]);
+    });
+
     test('applies trailing-star filters as prefixes', () => {
         const packages = [
             { name: 'symfony/console' },

@@ -4,13 +4,12 @@ import {
   encodeHubRepoPath,
   HuggingFaceClient,
   PREFIX_SCAN_MAX_REQUESTS,
-  PrefixSearchLimitError,
   type HfRepoListEntry,
 } from '../../src/hf-client';
 
 describe('Hugging Face Hub URL construction', () => {
   it.each([
-    ['models', 'google/bert-base-uncased'],
+    ['models', 'google-bert/bert-base-uncased'],
     ['datasets', 'rajpurkar/squad'],
     ['spaces', 'gradio/hello_world'],
   ])('preserves the namespace separator for %s IDs', (_type, repoId) => {
@@ -31,6 +30,19 @@ describe('Hugging Face Hub URL construction', () => {
     expect(url.searchParams.get('search')).toBe('meta-llama/');
     expect(url.searchParams.get('limit')).toBe('25');
     expect(url.searchParams.get('skip')).toBe('50');
+  });
+
+  it('uses the exact author parameter for owner lookup, including dotted owners', async () => {
+    const getJson = jest.fn().mockResolvedValue({ value: [{ id: 'org.example/model' }] });
+    const client = new HuggingFaceClient({
+      http: { getJson } as unknown as HttpUpstreamClient,
+      baseUrl: 'https://huggingface.co',
+    });
+    const page = await client.listReposByOwner('models', 'org.example', { limit: 1 });
+    expect(page.items.map(item => item.id)).toEqual(['org.example/model']);
+    const url = new URL(getJson.mock.calls[0][0] as string);
+    expect(url.searchParams.get('author')).toBe('org.example');
+    expect(url.searchParams.has('search')).toBe(false);
   });
 
   it('uses the Hub commit API zero-based first page', async () => {
@@ -95,7 +107,47 @@ describe('Hugging Face Hub URL construction', () => {
     expect(getJson).toHaveBeenCalledTimes(2);
   });
 
-  it('fails safely after the prefix scan request budget', async () => {
+  it('returns a full boundary page without requiring an extra sentinel request', async () => {
+    const getJson = jest.fn().mockImplementation((url: string) => {
+      const parsed = new URL(url);
+      const skip = Number(parsed.searchParams.get('skip'));
+      const all = Array.from({ length: 1_100 }, (_, i) => ({ id: `owner/model-${i}` }));
+      return Promise.resolve({ value: all.slice(skip, skip + 100) });
+    });
+    const client = new HuggingFaceClient({
+      http: { getJson } as unknown as HttpUpstreamClient,
+      baseUrl: 'https://huggingface.co',
+    });
+
+    const page = await client.listReposByOwner('models', 'owner', { skip: 900, limit: 100 });
+
+    expect(page.items).toHaveLength(100);
+    expect(page.hasMore).toBe(false);
+    expect(page.totalCount).toBeUndefined();
+    expect(getJson).toHaveBeenCalledTimes(PREFIX_SCAN_MAX_REQUESTS);
+  });
+
+  it('marks namespace discovery beyond 1000 entries as incomplete', async () => {
+    const getJson = jest.fn().mockImplementation((url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname !== '/api/models') return Promise.resolve({ value: [] });
+      const skip = Number(parsed.searchParams.get('skip'));
+      const all = Array.from({ length: 1_100 }, (_, i) => ({ id: `owner-${i}/model` }));
+      return Promise.resolve({ value: all.slice(skip, skip + 100) });
+    });
+    const client = new HuggingFaceClient({
+      http: { getJson } as unknown as HttpUpstreamClient,
+      baseUrl: 'https://huggingface.co',
+    });
+
+    const discovery = await client.discoverNamespaces();
+
+    expect(discovery.namespaces).toHaveLength(1_000);
+    expect(discovery.complete).toBe(false);
+    expect(discovery.completeTypes.models).toBe(false);
+  });
+
+  it('terminates an incomplete deep scan without inventing a continuation', async () => {
     const getJson = jest.fn().mockImplementation((url: string) => {
       const skip = Number(new URL(url).searchParams.get('skip'));
       return Promise.resolve({
@@ -109,8 +161,10 @@ describe('Hugging Face Hub URL construction', () => {
       baseUrl: 'https://huggingface.co',
     });
 
-    await expect(client.listReposByPrefix('models', 'google/', { limit: 1 }))
-      .rejects.toBeInstanceOf(PrefixSearchLimitError);
+    const page = await client.listReposByPrefix('models', 'google/', { skip: 5_000, limit: 1 });
+    expect(page.items).toEqual([]);
+    expect(page.hasMore).toBe(false);
+    expect(page.totalCount).toBeUndefined();
     expect(getJson).toHaveBeenCalledTimes(PREFIX_SCAN_MAX_REQUESTS);
   });
 });

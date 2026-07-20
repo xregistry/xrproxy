@@ -2,6 +2,7 @@
  * Application constants for the Packagist xRegistry wrapper
  */
 
+import { createRegistryCapabilities } from "@xregistry/registry-core";
 import { Request } from 'express';
 
 /**
@@ -30,10 +31,17 @@ export const REGISTRY_CONFIG = {
     SPEC_VERSION: '1.0-rc2',
 } as const;
 
+/** xRegistry 1.0-rc2 runtime features implemented by this proxy. */
+export const CAPABILITIES = createRegistryCapabilities({
+    flags: ["filter", "sort"],
+    versionmodes: ["manual", "createdat"],
+});
+
 export const GROUP_CONFIG = {
     TYPE: 'composerregistries',
     TYPE_SINGULAR: 'composerregistry',
-    ID: 'packagist.org',
+    /** Pre-#203 fixed group, reserved for explicit migration responses. */
+    LEGACY_ID: 'packagist.org',
 } as const;
 
 export const RESOURCE_CONFIG = {

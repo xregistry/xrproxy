@@ -1,5 +1,6 @@
 import express, { type Express, type RequestHandler } from 'express';
 import type { Server } from 'node:http';
+import { cloneModelSource, expandRegistryModel, type RegistryModel } from './model';
 
 type JsonProvider = unknown | (() => unknown | Promise<unknown>);
 
@@ -22,15 +23,25 @@ export interface ListenOptions {
   readonly onShutdown?: () => void | Promise<void>;
 }
 
-function jsonRoute(provider: JsonProvider): RequestHandler {
+async function resolveJsonProvider(provider: JsonProvider): Promise<unknown> {
+  return typeof provider === 'function' ? provider() : provider;
+}
+
+function jsonRoute(provider: JsonProvider, transform: (value: unknown) => unknown = value => value): RequestHandler {
   return async (_request, response, next) => {
     try {
-      const value = typeof provider === 'function' ? await provider() : provider;
-      response.json(value);
+      response.json(transform(await resolveJsonProvider(provider)));
     } catch (error) {
       next(error);
     }
   };
+}
+
+function asRegistryModel(value: unknown): RegistryModel {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('The xRegistry model source must be a JSON object');
+  }
+  return value as RegistryModel;
 }
 
 export function createRegistryApp(options: RegistryAppOptions): Express {
@@ -45,7 +56,8 @@ export function createRegistryApp(options: RegistryAppOptions): Express {
       next(error);
     }
   });
-  app.get('/model', jsonRoute(options.model));
+  app.get('/model', jsonRoute(options.model, value => expandRegistryModel(asRegistryModel(value))));
+  app.get('/modelsource', jsonRoute(options.model, value => cloneModelSource(asRegistryModel(value))));
   app.get('/capabilities', jsonRoute(options.capabilities));
   options.configure?.(app);
   app.use(((error, _request, response, _next) => {

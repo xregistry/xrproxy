@@ -19,6 +19,7 @@ The package `prepare` lifecycle builds TypeScript automatically when npm install
 ```ts
 import {
   createCacheKey,
+  createRegistryCapabilities,
   createRegistryApp,
   HttpUpstreamClient,
   MemoryCacheStore,
@@ -49,7 +50,7 @@ const result = await cache.get(key, async conditional => {
 
 const app = createRegistryApp({
   model: { groups: {} },
-  capabilities: { filter: false },
+  capabilities: createRegistryCapabilities({ flags: ["filter"], versionmodes: ["manual"] }),
   configure(expressApp) {
     expressApp.get('/resources/:id', (_request, response) => response.json(result));
   }
@@ -62,5 +63,7 @@ const app = createRegistryApp({
 - `TtlCache`: positive/negative TTLs, immutable values, stale-if-error, validator refresh on `304`, and per-key single-flight loading.
 - `MemoryCacheStore` / `FileSystemCacheStore`: pluggable cache storage using bounded Base64URL-safe keys. Filesystem values must be JSON-serializable.
 - `parseConfig` / `parseProxyConfig`: typed environment parsing with aggregated validation errors.
-- `createRegistryApp` / `listenWithGracefulShutdown`: standard health, readiness, model, and capabilities endpoints.
+- `createRegistryCapabilities`: emits every known xRegistry 1.0-rc2 capability with the required types and fixed rc2 schema/spec-version entries; callers opt in only to implemented APIs and flags.
+- `createRegistryApp` / `listenWithGracefulShutdown`: standard health, readiness, capabilities, `/modelsource` (the sparse input), and `/model` (the fully expanded rc2 model) endpoints.
+- `expandRegistryModel`: adds the specification-defined Registry, Group, Version, Resource, and Meta attributes without mutating the model source.
 - `startFixtureServer`: deterministic local HTTP fixtures with response sequences, validator handling, and request capture.

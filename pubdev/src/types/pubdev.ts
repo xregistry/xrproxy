@@ -19,6 +19,7 @@ export interface Pubspec {
   repository?: string | { url?: string };
   issue_tracker?: string;
   documentation?: string;
+  license?: string;
   environment?: PubspecEnvironment;
   dependencies?: Record<string, unknown>;
   dev_dependencies?: Record<string, unknown>;

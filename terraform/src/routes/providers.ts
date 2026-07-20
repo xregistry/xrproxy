@@ -1,178 +1,112 @@
-/**
- * Provider routes
- * /terraformregistries/registry.terraform.io/providers/*
- */
+/** Terraform provider routes grouped by canonical upstream namespace. */
 
 import { NextFunction, Request, Response, Router } from 'express';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import {
-    decodeProviderId,
-    getBaseUrl,
-    REGISTRY_METADATA,
-    SERVER_CONFIG,
-} from '../config/constants';
+import { getBaseUrl, isTerraformIdentifier, REGISTRY_METADATA } from '../config/constants';
 import { ProviderService } from '../services/provider-service';
 import { SearchService } from '../services/search-service';
-import { entityNotFound } from '../utils/xregistry-errors';
+import { parsePagination, setPaginationHeaders } from '../utils/collection';
+import { entityNotFound, invalidData } from '../utils/xregistry-errors';
 
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) =>
-    (req: Request, res: Response, next: NextFunction): void => {
-        Promise.resolve(fn(req, res, next)).catch(next);
-    };
-
-/** Simple wildcard filter on a string field */
-function matchesFilter(value: string, pattern: string): boolean {
-    if (pattern.includes('*')) {
-        const re = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
-        return re.test(value);
-    }
-    return value.toLowerCase() === pattern.toLowerCase();
-}
+    (req: Request, res: Response, next: NextFunction): void => { void Promise.resolve(fn(req, res, next)).catch(next); };
 
 export function createProviderRoutes(
     providerService: ProviderService,
     searchService: SearchService,
-    entityState: EntityStateManager
+    _entityState: EntityStateManager
 ): Router {
     const router = Router();
-    const { GROUP_TYPE, GROUP_ID, PROVIDER_RESOURCE_TYPE } = REGISTRY_METADATA;
-    const base = `/${GROUP_TYPE}/${GROUP_ID}/${PROVIDER_RESOURCE_TYPE}`;
+    const { GROUP_TYPE, PROVIDER_RESOURCE_TYPE } = REGISTRY_METADATA;
+    const base = `/${GROUP_TYPE}/:groupId/${PROVIDER_RESOURCE_TYPE}`;
 
-    // ------------------------------------------------------------------
-    // Collection
-    // ------------------------------------------------------------------
-    router.get(base, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const baseUrl = getBaseUrl(req);
-        const limit = Math.max(1, parseInt((req.query['limit'] as string) || String(SERVER_CONFIG.DEFAULT_PAGE_LIMIT), 10));
-        const offset = Math.max(0, parseInt((req.query['offset'] as string) || '0', 10));
-        const filterRaw = req.query['filter'];
-        const filter = Array.isArray(filterRaw) ? filterRaw[0] as string : filterRaw as string | undefined;
-        const sortRaw = req.query['sort'];
-        const sort = Array.isArray(sortRaw) ? sortRaw[0] as string : sortRaw as string | undefined;
+    const canonicalPath = (req: Request, entity: Record<string, unknown>, suffix = ''): string => {
+        const queryIndex = req.originalUrl.indexOf('?');
+        const query = queryIndex === -1 ? '' : req.originalUrl.slice(queryIndex);
+        return `${getBaseUrl(req)}/${GROUP_TYPE}/${encodeURIComponent(String(entity['namespace']))}/${PROVIDER_RESOURCE_TYPE}/${encodeURIComponent(String(entity['providerid']))}${suffix}${query}`;
+    };
 
-        let all = searchService.getAllProviders();
+    const resolveResource = async (req: Request): Promise<Record<string, unknown>> => {
+        const groupId = String(req.params['groupId'] ?? '');
+        const providerId = String(req.params['providerId'] ?? '');
+        const entity = await providerService.getProviderMetadata(groupId, providerId, getBaseUrl(req));
+        searchService.registerProvider(String(entity['namespace']), String(entity['providerid']));
+        return entity;
+    };
 
-        if (filter) {
-            const m = filter.match(/(?:type|id)=(.+)/i);
-            if (m) all = all.filter((p) => matchesFilter(p.type, m[1]) || matchesFilter(p.id, m[1]));
-            else if (filter.match(/namespace=(.+)/i)) {
-                const nsm = filter.match(/namespace=(.+)/i)!;
-                all = all.filter((p) => matchesFilter(p.namespace, nsm[1]));
-            } else {
-                all = [];
-            }
+    const redirectIfAlias = (req: Request, res: Response, entity: Record<string, unknown>, suffix = ''): boolean => {
+        const groupId = String(req.params['groupId'] ?? '');
+        const providerId = String(req.params['providerId'] ?? '');
+        if (entity['namespace'] !== groupId || entity['providerid'] !== providerId) {
+            res.redirect(308, canonicalPath(req, entity, suffix));
+            return true;
         }
+        return false;
+    };
 
-        if (sort) {
-            const parts = sort.split('=');
-            const field = parts[0] as 'namespace' | 'type' | 'id';
-            const dir = parts[1]?.toLowerCase() === 'desc' ? -1 : 1;
-            all = [...all].sort((a, b) => (a[field] ?? '').localeCompare(b[field] ?? '') * dir);
+    router.get(base, asyncHandler(async (req, res) => {
+        const groupId = String(req.params['groupId'] ?? '');
+        if (!isTerraformIdentifier(groupId)) {
+            throw invalidData(req.originalUrl, 'groupId', 'Terraform namespace IDs contain only alphanumerics, underscore, and hyphen.');
         }
-
-        const totalCount = all.length;
-        const page = all.slice(offset, offset + limit);
-
-        const result: Record<string, unknown> = {};
-        const resourceBase = `${baseUrl}${base}`;
-        for (const p of page) {
-            const resourcePath = `${base}/${p.id}`;
-            result[p.id] = {
-                providerid: p.id,
-                xid: resourcePath,
-                self: `${resourceBase}/${p.id}`,
-                epoch: entityState.getEpoch(resourcePath),
-                createdat: entityState.getCreatedAt(resourcePath),
-                modifiedat: entityState.getModifiedAt(resourcePath),
-                namespace: p.namespace,
-                type: p.type,
-            };
+        if (req.query['filter'] !== undefined || req.query['sort'] !== undefined) {
+            throw invalidData(req.originalUrl, 'filter', 'Terraform discovery snapshots do not support filter or sort.');
         }
-
-        if (totalCount > 0) {
-            const links: string[] = [];
-            // Build safe string-only query params
-            const safeQuery: Record<string, string> = {};
-            for (const [k, v] of Object.entries(req.query)) {
-                if (typeof v === 'string') safeQuery[k] = v;
-            }
-            const q = new URLSearchParams(safeQuery);
-            if (offset > 0) {
-                q.set('offset', '0'); q.set('limit', String(limit));
-                links.push(`<${baseUrl}${base}?${q}>; rel="first"`);
-                q.set('offset', String(Math.max(0, offset - limit)));
-                links.push(`<${baseUrl}${base}?${q}>; rel="prev"`);
-            }
-            if (offset + limit < totalCount) {
-                q.set('offset', String(offset + limit)); q.set('limit', String(limit));
-                links.push(`<${baseUrl}${base}?${q}>; rel="next"`);
-                q.set('offset', String(Math.floor((totalCount - 1) / limit) * limit));
-                links.push(`<${baseUrl}${base}?${q}>; rel="last"`);
-            }
-            links.push(`count="${totalCount}"`, `per-page="${limit}"`);
-            res.set('Link', links.join(', '));
+        const namespace = await searchService.resolveNamespace(groupId);
+        if (!namespace || namespace.namespace !== groupId) {
+            throw entityNotFound(req.originalUrl, 'terraformregistry', groupId);
         }
+        const discovered = searchService.getProviders(groupId)
+            .sort((a, b) => a.type.localeCompare(b.type));
+        const { offset, limit } = parsePagination(req);
+        const page = discovered.slice(offset, offset + limit);
+        const completePage = await Promise.all(page.map(provider =>
+            providerService.getProviderMetadata(provider.namespace, provider.type, getBaseUrl(req)),
+        ));
 
-        res.json(result);
+        const body: Record<string, unknown> = {};
+        for (const entity of completePage) body[String(entity['providerid'])] = entity;
+        setPaginationHeaders(req, res, offset, limit, discovered.length, false);
+        res.json(body);
     }));
 
-    // ------------------------------------------------------------------
-    // Single provider resource
-    // ------------------------------------------------------------------
-    router.get(`${base}/:providerId`, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const providerId = String(req.params['providerId']);
-        const decoded = decodeProviderId(providerId);
-        if (!decoded) {
-            throw entityNotFound(req.originalUrl, 'provider', providerId);
+    router.get(`${base}/:providerId`, asyncHandler(async (req, res) => {
+        const entity = await resolveResource(req);
+        if (redirectIfAlias(req, res, entity)) return;
+        res.json(entity);
+    }));
+
+    router.get(`${base}/:providerId/meta`, asyncHandler(async (req, res) => {
+        const entity = await resolveResource(req);
+        if (redirectIfAlias(req, res, entity, '/meta')) return;
+        res.json(await providerService.getProviderMeta(
+            String(entity['namespace']), String(entity['providerid']), getBaseUrl(req),
+        ));
+    }));
+
+    router.get(`${base}/:providerId/versions`, asyncHandler(async (req, res) => {
+        const entity = await resolveResource(req);
+        if (redirectIfAlias(req, res, entity, '/versions')) return;
+        if (req.query['filter'] !== undefined || req.query['sort'] !== undefined) {
+            throw invalidData(req.originalUrl, 'filter', 'Terraform version collections do not support filter or sort.');
         }
-        const exists = await searchService.providerExists(decoded.namespace, decoded.type);
-        if (!exists) throw entityNotFound(req.originalUrl, 'provider', providerId);
-
-        const data = await providerService.getProviderMetadata(providerId, getBaseUrl(req));
-        res.json(data);
+        const all = await providerService.getProviderVersions(
+            String(entity['namespace']), String(entity['providerid']), getBaseUrl(req),
+        );
+        const entries = Object.entries(all).sort(([a], [b]) => a.localeCompare(b));
+        const { offset, limit } = parsePagination(req);
+        const body = Object.fromEntries(entries.slice(offset, offset + limit));
+        setPaginationHeaders(req, res, offset, limit, entries.length);
+        res.json(body);
     }));
 
-    // ------------------------------------------------------------------
-    // Meta sub-resource
-    // ------------------------------------------------------------------
-    router.get(`${base}/:providerId/meta`, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const providerId = String(req.params['providerId']);
-        const decoded = decodeProviderId(providerId);
-        if (!decoded) throw entityNotFound(req.originalUrl, 'provider', providerId);
-        const exists = await searchService.providerExists(decoded.namespace, decoded.type);
-        if (!exists) throw entityNotFound(req.originalUrl, 'provider', providerId);
-
-        const data = await providerService.getProviderMeta(providerId, getBaseUrl(req));
-        res.json(data);
-    }));
-
-    // ------------------------------------------------------------------
-    // Versions collection
-    // ------------------------------------------------------------------
-    router.get(`${base}/:providerId/versions`, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const providerId = String(req.params['providerId']);
-        const decoded = decodeProviderId(providerId);
-        if (!decoded) throw entityNotFound(req.originalUrl, 'provider', providerId);
-        const exists = await searchService.providerExists(decoded.namespace, decoded.type);
-        if (!exists) throw entityNotFound(req.originalUrl, 'provider', providerId);
-
-        const data = await providerService.getProviderVersions(providerId, getBaseUrl(req));
-        res.json(data);
-    }));
-
-    // ------------------------------------------------------------------
-    // Single version
-    // ------------------------------------------------------------------
-    router.get(`${base}/:providerId/versions/:versionId`, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const providerId = String(req.params['providerId']);
-        const versionId = String(req.params['versionId']);
-        const decoded = decodeProviderId(providerId);
-        if (!decoded) throw entityNotFound(req.originalUrl, 'provider', providerId);
-        const exists = await searchService.providerExists(decoded.namespace, decoded.type);
-        if (!exists) throw entityNotFound(req.originalUrl, 'provider', providerId);
-
-        const data = await providerService.getProviderVersion(providerId, versionId, getBaseUrl(req));
-        res.json(data);
+    router.get(`${base}/:providerId/versions/:versionId`, asyncHandler(async (req, res) => {
+        const versionId = String(req.params['versionId'] ?? '');
+        const entity = await resolveResource(req);
+        if (redirectIfAlias(req, res, entity, `/versions/${encodeURIComponent(versionId)}`)) return;
+        res.json(await providerService.getProviderVersion(
+            String(entity['namespace']), String(entity['providerid']), versionId, getBaseUrl(req),
+        ));
     }));
 
     return router;

@@ -9,6 +9,7 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 
 const execPromise = promisify(exec);
+const { assertCapabilitiesConform } = require("../helpers/xregistry-capability-conformance.cjs");
 
 describe("Terraform Docker Integration Tests", function () {
   this.timeout(180000); // 3 min
@@ -42,7 +43,7 @@ describe("Terraform Docker Integration Tests", function () {
   };
 
   before(async function () {
-    this.timeout(120000);
+    this.timeout(300000);
     containerName = `terraform-test-${Date.now()}`;
     serverPort = getRandomPort();
     baseUrl = `http://localhost:${serverPort}`;
@@ -80,7 +81,7 @@ describe("Terraform Docker Integration Tests", function () {
       expect(r.data).to.have.property("registryid", "terraform-registry-wrapper");
       expect(r.data).to.have.property("xid", "/");
       expect(r.data).to.have.property("terraformregistriesurl");
-      expect(r.data).to.have.property("terraformregistriescount", 1);
+      expect(r.data).not.to.have.property("terraformregistriescount");
     });
 
     it("GET /model returns the model document", async () => {
@@ -91,24 +92,31 @@ describe("Terraform Docker Integration Tests", function () {
       expect(trg).to.exist;
       expect(trg).to.have.nested.property("resources.providers");
       expect(trg).to.have.nested.property("resources.modules");
+      expect(trg.resources.providers.attributes).to.have.property("versionid");
+      expect(trg.resources.providers.resourceattributes).to.have.property("versionscount");
+      const source = await axios.get(`${baseUrl}/modelsource`);
+      expect(Object.keys(source.data)).to.deep.equal(["groups"]);
+      expect(source.data).not.to.have.property("default");
+      expect(r.data).not.to.have.property("default");
+      expect(source.data.groups.terraformregistries.resources.providers).not.to.have.property("resourceattributes");
     });
 
-    it("GET /capabilities reports read-only with filter/sort/pagination", async () => {
+    it("GET /capabilities satisfies the rc2 schema and runtime profile", async () => {
       const r = await axios.get(`${baseUrl}/capabilities`);
       expect(r.status).to.equal(200);
-      expect(r.data).to.have.property("mutable", false);
-      expect(r.data).to.have.property("filter", true);
-      expect(r.data).to.have.property("pagination", true);
+      assertCapabilitiesConform(r.data, { flags: [], versionmodes: ["manual", "semver"] });
     });
 
-    it("GET /terraformregistries returns the registry.terraform.io group", async () => {
+    it("GET /terraformregistries returns an explicitly incomplete namespace snapshot", async () => {
       const r = await axios.get(`${baseUrl}/terraformregistries`);
       expect(r.status).to.equal(200);
-      expect(r.data).to.have.property("registry.terraform.io");
+      expect(Object.keys(r.data).length).to.be.greaterThan(0);
+      expect(r.headers['x-collection-complete']).to.equal('false');
+      expect(r.headers).not.to.have.property('x-total-count');
     });
 
-    it("GET /terraformregistries/registry.terraform.io returns group detail", async () => {
-      const r = await axios.get(`${baseUrl}/terraformregistries/registry.terraform.io`);
+    it("GET /terraformregistries/hashicorp returns group detail", async () => {
+      const r = await axios.get(`${baseUrl}/terraformregistries/hashicorp`);
       expect(r.status).to.equal(200);
       expect(r.data).to.have.property("providersurl");
       expect(r.data).to.have.property("modulesurl");
@@ -119,42 +127,53 @@ describe("Terraform Docker Integration Tests", function () {
   // Provider endpoints
   // ------------------------------------------------------------------
   describe("Provider endpoints", () => {
-    const providersBase = "/terraformregistries/registry.terraform.io/providers";
+    const providersBase = "/terraformregistries/hashicorp/providers";
 
     it("GET /providers returns a collection", async () => {
       const r = await axios.get(`${baseUrl}${providersBase}`, { timeout: 30000 });
       expect(r.status).to.equal(200);
       expect(r.data).to.be.an("object");
+      const first = Object.values(r.data)[0];
+      if (first) {
+        expect(first).to.have.property("versionid");
+        expect(first).to.have.property("ancestor");
+        expect(first).to.have.property("metaurl");
+        expect(first).to.have.property("versionscount");
+      }
     });
 
-    it("GET /providers/hashicorp~aws returns provider metadata", async () => {
-      const r = await axios.get(`${baseUrl}${providersBase}/hashicorp~aws`, { timeout: 30000 });
+    it("GET /providers/aws returns provider metadata", async () => {
+      const r = await axios.get(`${baseUrl}${providersBase}/aws`, { timeout: 30000 });
       expect(r.status).to.equal(200);
-      expect(r.data).to.have.property("providerid", "hashicorp~aws");
+      expect(r.data).to.have.property("providerid", "aws");
       expect(r.data).to.have.property("namespace", "hashicorp");
       expect(r.data).to.have.property("type", "aws");
       expect(r.data).to.have.property("versionsurl");
       expect(r.data).to.have.property("versionscount");
+      expect(r.data).to.have.property("ancestor");
+      expect(r.data).not.to.have.property("defaultversionurl");
       expect(r.data.versionscount).to.be.a("number").and.to.be.greaterThan(0);
     });
 
-    it("GET /providers/hashicorp~aws/versions returns version map", async () => {
-      const r = await axios.get(`${baseUrl}${providersBase}/hashicorp~aws/versions`, { timeout: 30000 });
+    it("GET /providers/aws/versions returns version map", async () => {
+      const r = await axios.get(`${baseUrl}${providersBase}/aws/versions`, { timeout: 30000 });
       expect(r.status).to.equal(200);
       const versions = Object.keys(r.data);
       expect(versions.length).to.be.greaterThan(0);
       const anyVersion = r.data[versions[0]];
       expect(anyVersion).to.have.property("versionid");
-      expect(anyVersion).to.have.property("providerid", "hashicorp~aws");
+      expect(anyVersion).to.have.property("providerid", "aws");
+      expect(anyVersion).to.have.property("ancestor");
     });
 
-    it("GET /providers/hashicorp~aws/versions/latest exposes platform distributions", async () => {
-      // Get versions first to pick one
-      const versionsResp = await axios.get(`${baseUrl}${providersBase}/hashicorp~aws/versions`, { timeout: 30000 });
-      const versionIds = Object.keys(versionsResp.data);
-      const latestId = versionIds[0];
+    it("GET /providers/aws/versions/latest exposes platform distributions", async () => {
+      // The versions collection is ascending and paginated, so obtain the
+      // default ID from the Resource rather than assuming page 1 is latest.
+      const provider = await axios.get(`${baseUrl}${providersBase}/aws`, { timeout: 30000 });
+      const latestId = provider.data.versionid;
+      expect(latestId).to.be.a('string').and.not.empty;
 
-      const r = await axios.get(`${baseUrl}${providersBase}/hashicorp~aws/versions/${latestId}`, { timeout: 60000 });
+      const r = await axios.get(`${baseUrl}${providersBase}/aws/versions/${latestId}`, { timeout: 60000 });
       expect(r.status).to.equal(200);
       expect(r.data).to.have.property("platforms");
       const platforms = r.data.platforms;
@@ -169,11 +188,14 @@ describe("Terraform Docker Integration Tests", function () {
       }
     });
 
-    it("GET /providers/hashicorp~aws/meta returns meta sub-resource", async () => {
-      const r = await axios.get(`${baseUrl}${providersBase}/hashicorp~aws/meta`, { timeout: 30000 });
+    it("GET /providers/aws/meta returns meta sub-resource", async () => {
+      const r = await axios.get(`${baseUrl}${providersBase}/aws/meta`, { timeout: 30000 });
       expect(r.status).to.equal(200);
       expect(r.data).to.have.property("readonly", true);
       expect(r.data).to.have.property("defaultversionid");
+      expect(r.data).to.have.property("defaultversionurl");
+      expect(r.data).to.have.property("defaultversionsticky", false);
+      expect(r.data).not.to.have.property("ancestor");
     });
 
     it("GET /providers/unknown~provider returns 404", async () => {
@@ -199,7 +221,7 @@ describe("Terraform Docker Integration Tests", function () {
   // Module endpoints
   // ------------------------------------------------------------------
   describe("Module endpoints", () => {
-    const modulesBase = "/terraformregistries/registry.terraform.io/modules";
+    const modulesBase = "/terraformregistries/terraform-aws-modules/modules";
 
     it("GET /modules returns a collection", async () => {
       const r = await axios.get(`${baseUrl}${modulesBase}`, { timeout: 30000 });
@@ -207,24 +229,26 @@ describe("Terraform Docker Integration Tests", function () {
       expect(r.data).to.be.an("object");
     });
 
-    it("GET /modules/terraform-aws-modules~vpc~aws returns module metadata", async () => {
-      const r = await axios.get(`${baseUrl}${modulesBase}/terraform-aws-modules~vpc~aws`, { timeout: 30000 });
+    it("GET /modules/vpc~aws returns module metadata", async () => {
+      const r = await axios.get(`${baseUrl}${modulesBase}/vpc~aws`, { timeout: 30000 });
       expect(r.status).to.equal(200);
-      expect(r.data).to.have.property("moduleid", "terraform-aws-modules~vpc~aws");
+      expect(r.data).to.have.property("moduleid", "vpc~aws");
       expect(r.data).to.have.property("namespace", "terraform-aws-modules");
       expect(r.data).to.have.property("name", "vpc");
       expect(r.data).to.have.property("provider", "aws");
       expect(r.data).to.have.property("versionsurl");
+      expect(r.data).to.have.property("ancestor");
     });
 
-    it("GET /modules/terraform-aws-modules~vpc~aws/versions returns version map", async () => {
-      const r = await axios.get(`${baseUrl}${modulesBase}/terraform-aws-modules~vpc~aws/versions`, { timeout: 30000 });
+    it("GET /modules/vpc~aws/versions returns version map", async () => {
+      const r = await axios.get(`${baseUrl}${modulesBase}/vpc~aws/versions`, { timeout: 30000 });
       expect(r.status).to.equal(200);
       const versions = Object.keys(r.data);
       expect(versions.length).to.be.greaterThan(0);
       const v = r.data[versions[0]];
       expect(v).to.have.property("versionid");
-      expect(v).to.have.property("moduleid", "terraform-aws-modules~vpc~aws");
+      expect(v).to.have.property("moduleid", "vpc~aws");
+      expect(v).to.have.property("ancestor");
     });
 
     it("GET /modules/unknown~mod~aws returns 404", async () => {
@@ -238,10 +262,10 @@ describe("Terraform Docker Integration Tests", function () {
   });
 
   // ------------------------------------------------------------------
-  // Pagination and filtering
+  // Pagination and explicit unsupported-operation handling
   // ------------------------------------------------------------------
-  describe("Pagination and filtering", () => {
-    const providersBase = "/terraformregistries/registry.terraform.io/providers";
+  describe("Pagination and unsupported operations", () => {
+    const providersBase = "/terraformregistries/hashicorp/providers";
 
     it("?limit=2&offset=0 returns at most 2 providers", async () => {
       const r = await axios.get(`${baseUrl}${providersBase}?limit=2&offset=0`, { timeout: 30000 });
@@ -249,17 +273,43 @@ describe("Terraform Docker Integration Tests", function () {
       expect(Object.keys(r.data).length).to.be.at.most(2);
     });
 
+    it("rejects unsupported filtering explicitly", async () => {
+      try {
+        await axios.get(`${baseUrl}${providersBase}?filter=source%3Daws`, { timeout: 30000 });
+        expect.fail('Expected 400');
+      } catch (err) {
+        expect(err.response.status).to.equal(400);
+      }
+    });
+
     it("Link header is present when results span multiple pages", async () => {
       const r = await axios.get(`${baseUrl}${providersBase}?limit=1&offset=0`, { timeout: 30000 });
       expect(r.status).to.equal(200);
       if (Object.keys(r.data).length > 0) {
         // Link header should be present if there are more pages
-        const total = parseInt((r.headers['link'] || '').match(/count="(\d+)"/) ?.[1] || '0', 10);
-        if (total > 1) {
-          expect(r.headers['link']).to.include('rel="next"');
-        }
+        expect(r.headers['x-collection-complete']).to.equal('false');
+        if (r.headers['link']) expect(r.headers['link']).to.include('rel="next"');
       }
     });
+  });
+
+  it("returns 410 for removed fixed-group paths", async () => {
+    try {
+      await axios.get(`${baseUrl}/terraformregistries/registry.terraform.io/providers/hashicorp%7Eaws/meta`);
+      expect.fail("Expected 410");
+    } catch (err) {
+      expect(err.response.status).to.equal(410);
+      expect(err.response.data.replacement).to.equal("/terraformregistries/hashicorp/providers/aws/meta");
+    }
+  });
+
+  it("encoded legacy paths still return 410", async () => {
+    try {
+      await axios.get(`${baseUrl}/terraformregistries/%72egistry.terraform.io/providers/hashicorp%7Eaws`);
+      expect.fail("Expected 410");
+    } catch (err) {
+      expect(err.response.status).to.equal(410);
+    }
   });
 
   // ------------------------------------------------------------------

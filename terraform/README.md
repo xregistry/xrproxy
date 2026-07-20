@@ -1,108 +1,81 @@
-# xregistry-terraform-wrapper
+# xRegistry Terraform Registry Proxy
 
-xRegistry 1.0-rc2 proxy for the public [Terraform Registry](https://registry.terraform.io/).
+Read-only [xRegistry 1.0-rc2](https://github.com/xregistry/spec/blob/main/core/spec.md) access to providers and modules on `registry.terraform.io` (port **3800**).
 
-## Overview
+## Native identity mapping
 
-| Attribute | Value |
-|-----------|-------|
-| Port | **3800** |
-| Group type | `terraformregistries` |
-| Group ID | `registry.terraform.io` |
-| Resource types | `providers`, `modules` |
-| Spec version | 1.0-rc2 |
+Terraform namespaces are xRegistry groups:
 
-## Resource IDs
+| Terraform source | Group ID | Resource ID | xRegistry path |
+|---|---|---|---|
+| provider `hashicorp/aws` | `hashicorp` | `aws` | `/terraformregistries/hashicorp/providers/aws` |
+| module `terraform-aws-modules/vpc/aws` | `terraform-aws-modules` | `vpc~aws` | `/terraformregistries/terraform-aws-modules/modules/vpc~aws` |
 
-| Type | ID format | Example |
-|------|-----------|---------|
-| Provider | `namespace~type` | `hashicorp~aws` |
-| Module | `namespace~name~provider` | `terraform-aws-modules~vpc~aws` |
+Provider IDs are their type/name. A module's native `name/provider` pair is encoded as `name~provider`. Terraform registry identifiers permit alphanumerics, `_`, and `-`, but not `~`, making this encoding reversible and collision-free. Group and resource IDs are slash-free. Canonical addresses remain in `source`; `namespace`, `name`/`type`, `provider`, and `registryhost` preserve each component.
 
-The `~` separator is URL-safe and never appears in Terraform registry names.
+Exact provider/module/version lookup always resolves through the authoritative versions endpoint, independently of the bounded discovery snapshot. Namespace detail is validated independently through exact provider/module search before a Group or child collection is returned, so real namespaces such as `philips-software` work group-first while arbitrary syntactically valid names return 404. Successful exact child resolution registers its canonical provider/module in the bounded catalogue. Discovery is deduplicated case-insensitively, but xRegistry lookup remains case-sensitive: wrong-case Group and Resource IDs return 404, never redirect. A true upstream 404 remains 404, while timeouts and outages propagate as 504/502 rather than being collapsed into “not found”.
 
-## API Endpoints
+## Registry host and multi-host aggregation
 
-### Standard xRegistry endpoints
+This proxy intentionally targets one fixed host, `registry.terraform.io`, recorded as `registryhost` on groups and resources. Group IDs therefore need only the native namespace. Separate single-host proxy instances naturally have separate xRegistry roots. A future service aggregating multiple hosts must disambiguate groups (for example, collision-free `host~namespace` IDs) while retaining `registryhost` and `namespace`; it must not merge equal namespaces from different hosts silently.
 
-```
-GET /                                                   Registry root
-GET /model                                              Model definition
-GET /capabilities                                       Server capabilities
-GET /export                                             Full export redirect
-GET /terraformregistries                                Group collection
-GET /terraformregistries/registry.terraform.io          Group detail
-```
+## Endpoints
 
-### Providers
-
-```
-GET /terraformregistries/registry.terraform.io/providers
-GET /terraformregistries/registry.terraform.io/providers/{namespace~type}
-GET /terraformregistries/registry.terraform.io/providers/{namespace~type}/meta
-GET /terraformregistries/registry.terraform.io/providers/{namespace~type}/versions
-GET /terraformregistries/registry.terraform.io/providers/{namespace~type}/versions/{version}
+```text
+GET /
+GET /model
+GET /modelsource
+GET /capabilities
+GET /terraformregistries
+GET /terraformregistries/{namespace}
+GET /terraformregistries/{namespace}/providers
+GET /terraformregistries/{namespace}/providers/{type}
+GET /terraformregistries/{namespace}/providers/{type}/meta
+GET /terraformregistries/{namespace}/providers/{type}/versions
+GET /terraformregistries/{namespace}/providers/{type}/versions/{version}
+GET /terraformregistries/{namespace}/modules
+GET /terraformregistries/{namespace}/modules/{name~provider}
+GET /terraformregistries/{namespace}/modules/{name~provider}/meta
+GET /terraformregistries/{namespace}/modules/{name~provider}/versions
+GET /terraformregistries/{namespace}/modules/{name~provider}/versions/{version}
 ```
 
-Provider versions expose:
-- `platforms[]` — per-OS/arch distribution entries with `download_url`, `shasum`, `shasums_url`, `shasums_signature_url`, `filename`
-- `signing_keys.gpg_public_keys[]` — GPG key metadata for verifying the provider release
-- `protocols[]` — supported Terraform plugin protocol versions
+Group, provider, module, and version collections support `limit`/`offset` and provide RFC 8288 links. Provider/module discovery is deliberately bounded rather than pretending that the first 100 popular entries are complete: those collections emit `X-Collection-Complete: false` and omit non-authoritative root, group, and HTTP counts. Exact Version collections are authoritative and retain `X-Total-Count`.
 
-### Modules
+The service does not advertise xRegistry `filter` or `sort`. Either parameter on group, provider, module, or Version collections receives HTTP 400; it is never silently ignored or evaluated against an incomplete snapshot. Default pagination order is deterministic by entity ID.
 
+`GET /capabilities` emits every known xRegistry 1.0-rc2 capability with required types. It reports a read-only registry (`mutable: []`), pagination, `manual`/`semver` version modes, and `xRegistry-json/1.0-rc2`; its `flags` array is empty because no xRegistry query flag is implemented (Core, **Registry Capabilities**).
+
+Version arrays from Terraform are treated as unordered. Provider and module defaults are recomputed from each upstream versions response, so both models set `setdefaultversionsticky: false` and `/meta` emits `defaultversionsticky: false`. Providers and modules are sorted ascending by strict SemVer precedence before default/latest and `ancestor` predecessor selection. Invalid non-SemVer values sort lexically before valid SemVer values; if all values are non-SemVer, the lexical maximum is the default. Build metadata is only a deterministic tie-breaker. This makes pagination deterministic and follows xRegistry Core **Versions** (`ancestor`, `isdefault`) semantics.
+
+## Public path migration (#203)
+
+```text
+OLD /terraformregistries/registry.terraform.io/providers/hashicorp~aws
+NEW /terraformregistries/hashicorp/providers/aws
+
+OLD /terraformregistries/registry.terraform.io/modules/terraform-aws-modules~vpc~aws
+NEW /terraformregistries/terraform-aws-modules/modules/vpc~aws
 ```
-GET /terraformregistries/registry.terraform.io/modules
-GET /terraformregistries/registry.terraform.io/modules/{namespace~name~provider}
-GET /terraformregistries/registry.terraform.io/modules/{namespace~name~provider}/meta
-GET /terraformregistries/registry.terraform.io/modules/{namespace~name~provider}/versions
-GET /terraformregistries/registry.terraform.io/modules/{namespace~name~provider}/versions/{version}
-```
 
-## Query parameters
+All requests under the removed fixed group—including percent-encoded sentinel/resource forms—return **HTTP 410 Gone** with a `replacement` path/template. Replacements use the actual `providers`/`modules` resource type and retain `/meta`, `/versions`, and Version suffixes. Malformed percent escapes return 400, not 500. Legacy paths are not interpreted as canonical identities.
 
-All collection endpoints support:
+## Configuration
 
-| Parameter | Description |
-|-----------|-------------|
-| `limit` | Page size (default 25) |
-| `offset` | Page offset |
-| `filter` | Attribute filter expression (e.g. `type=aws`, `namespace=hashicorp`) |
-| `sort` | Sort field with optional direction (e.g. `type=asc`) |
+| Variable | Default |
+|---|---|
+| `PORT` / `XREGISTRY_TERRAFORM_PORT` | `3800` |
+| `HOST` | `0.0.0.0` |
+| `XREGISTRY_TERRAFORM_API_KEY` | unset |
+| `BASE_URL` | derived from request |
 
-## Running locally
+Search and version responses use an ETag-aware disk cache in `./cache`; the discovery snapshot refreshes every six hours.
+
+## Build and test
 
 ```bash
 cd terraform
-npm install
+npm ci
 npm run build
-npm start            # listens on :3800
-```
-
-Environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` / `XREGISTRY_TERRAFORM_PORT` | `3800` | Listen port |
-| `HOST` | `0.0.0.0` | Bind address |
-| `XREGISTRY_TERRAFORM_API_KEY` | — | Optional Bearer token |
-| `BASE_URL` / `XREGISTRY_TERRAFORM_BASEURL` | derived | Self-referencing base URL |
-
-## Running with Docker
-
-```bash
-docker build -f terraform.Dockerfile -t xregistry-terraform .
-docker run -p 3800:3800 xregistry-terraform
-```
-
-## Caching
-
-HTTP responses from the Terraform Registry are cached on disk (ETag-based) in `./cache/`.
-The in-memory provider/module catalogue is refreshed every 6 hours in the background.
-
-## Tests
-
-```bash
-cd terraform
 npm test
 ```

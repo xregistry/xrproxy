@@ -18,15 +18,17 @@ export interface XRegistryEntity {
 
 export interface XRegistryVersion extends XRegistryEntity {
     versionid: string;
+    packageid: string;
     isdefault: boolean;
+    ancestor: string;
     /** True for stable tagged releases; false for mutable dev-* aliases. */
     immutable: boolean;
     /** The human-readable version string as declared in composer.json. */
     version: string;
     /** The Composer-normalized version string. */
-    versionNormalized?: string;
+    versionnormalized?: string;
     /** VCS reference (commit SHA or branch). Critical for dev-* identity. */
-    sourceReference?: string;
+    sourcereference?: string;
 }
 
 export interface XRegistryResource extends XRegistryEntity {

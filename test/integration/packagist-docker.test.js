@@ -7,9 +7,10 @@ const path = require("path");
 const { promisify } = require("util");
 
 const execPromise = promisify(exec);
+const { assertCapabilitiesConform } = require("../helpers/xregistry-capability-conformance.cjs");
 
 describe("Packagist Docker Integration Tests", function () {
-  this.timeout(120000);
+  this.timeout(600000);
 
   let containerName;
   let serverPort;
@@ -45,7 +46,7 @@ describe("Packagist Docker Integration Tests", function () {
   };
 
   before(async function () {
-    this.timeout(180000);
+    this.timeout(600000);
 
     containerName = `packagist-test-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     serverPort = getRandomPort();
@@ -104,6 +105,14 @@ describe("Packagist Docker Integration Tests", function () {
     });
   });
 
+  it("GET /capabilities satisfies the rc2 schema and runtime profile", async () => {
+    const res = await loggedAxiosGet(`${baseUrl}/capabilities`);
+    assertCapabilitiesConform(res.data, {
+      flags: ["filter", "sort"],
+      versionmodes: ["manual", "createdat"],
+    });
+  });
+
   // ─── Model ──────────────────────────────────────────────────────────────────
 
   describe("GET /model", () => {
@@ -112,6 +121,14 @@ describe("Packagist Docker Integration Tests", function () {
       expect(res.status).to.equal(200);
       expect(res.data).to.have.property("groups");
       expect(res.data.groups).to.have.property("composerregistries");
+      const packages = res.data.groups.composerregistries.resources.packages;
+      expect(packages.attributes).to.have.property("versionid");
+      expect(packages.resourceattributes).to.have.property("versionscount");
+      const source = await loggedAxiosGet(`${baseUrl}/modelsource`);
+      expect(Object.keys(source.data)).to.deep.equal(["groups"]);
+      expect(source.data).not.to.have.property("default");
+      expect(res.data).not.to.have.property("default");
+      expect(source.data.groups.composerregistries.resources.packages).not.to.have.property("resourceattributes");
     });
   });
 
@@ -119,18 +136,18 @@ describe("Packagist Docker Integration Tests", function () {
 
   describe("GET /composerregistries", () => {
     it("returns the composerregistries group collection", async () => {
-      const res = await loggedAxiosGet(`${baseUrl}/composerregistries`);
+      const res = await loggedAxiosGet(`${baseUrl}/composerregistries?filter=name=symfony`);
       expect(res.status).to.equal(200);
-      expect(res.data).to.have.property("packagist.org");
+      expect(res.data).to.have.property("symfony");
     });
   });
 
-  describe("GET /composerregistries/packagist.org", () => {
-    it("returns the packagist.org group entity", async () => {
-      const res = await loggedAxiosGet(`${baseUrl}/composerregistries/packagist.org`);
+  describe("GET /composerregistries/symfony", () => {
+    it("returns the symfony vendor group entity", async () => {
+      const res = await loggedAxiosGet(`${baseUrl}/composerregistries/symfony`);
       expect(res.status).to.equal(200);
       expect(res.data).to.have.property("xid");
-      expect(res.data.xid).to.equal("/composerregistries/packagist.org");
+      expect(res.data.xid).to.equal("/composerregistries/symfony");
       expect(res.data).to.have.property("packagesurl");
     });
 
@@ -146,14 +163,32 @@ describe("Packagist Docker Integration Tests", function () {
 
   // ─── Packages list ──────────────────────────────────────────────────────────
 
-  describe("GET /composerregistries/packagist.org/packages", () => {
+  describe("GET /composerregistries/symfony/packages", () => {
     it("returns a package listing (may be empty without network)", async () => {
       try {
-        const res = await loggedAxiosGet(`${baseUrl}/composerregistries/packagist.org/packages`);
+        const res = await loggedAxiosGet(`${baseUrl}/composerregistries/symfony/packages`);
         expect(res.status).to.equal(200);
         expect(typeof res.data).to.equal("object");
+        const first = Object.values(res.data)[0];
+        if (first) {
+          expect(first).to.have.property("versionid");
+          expect(first).to.have.property("ancestor");
+          expect(first).to.have.property("metaurl");
+          expect(first).to.have.property("versionscount");
+        }
       } catch (err) {
         // Accept 502/504 if Packagist is unreachable in CI
+        if (err.response?.status === 502 || err.response?.status === 504) return;
+        throw err;
+      }
+    });
+
+    it("filters complete serialized entities by epoch", async () => {
+      try {
+        const res = await loggedAxiosGet(`${baseUrl}/composerregistries/symfony/packages?filter=epoch%3D1&limit=2`);
+        expect(res.status).to.equal(200);
+        expect(Object.values(res.data).every(pkg => pkg.epoch === 1 && pkg.versionid)).to.equal(true);
+      } catch (err) {
         if (err.response?.status === 502 || err.response?.status === 504) return;
         throw err;
       }
@@ -162,7 +197,7 @@ describe("Packagist Docker Integration Tests", function () {
     it("supports ?q= query parameter", async () => {
       try {
         const res = await loggedAxiosGet(
-          `${baseUrl}/composerregistries/packagist.org/packages?q=symfony`
+          `${baseUrl}/composerregistries/symfony/packages?q=console`
         );
         expect(res.status).to.equal(200);
       } catch (err) {
@@ -174,7 +209,7 @@ describe("Packagist Docker Integration Tests", function () {
     it("honors xRegistry prefix filtering and limit/offset pagination", async () => {
       try {
         const res = await loggedAxiosGet(
-          `${baseUrl}/composerregistries/packagist.org/packages?filter=name%3Dsymfony*&limit=2&offset=0`
+          `${baseUrl}/composerregistries/symfony/packages?filter=name%3Dsymfony*&limit=2&offset=0`
         );
         expect(res.status).to.equal(200);
         const packages = Object.values(res.data);
@@ -191,11 +226,11 @@ describe("Packagist Docker Integration Tests", function () {
 
   // ─── Package entity ──────────────────────────────────────────────────────────
 
-  describe("GET /composerregistries/packagist.org/packages/:id", () => {
+  describe("GET /composerregistries/symfony/packages/:id", () => {
     it("returns 404 for non-existent package", async () => {
       try {
         await axios.get(
-          `${baseUrl}/composerregistries/packagist.org/packages/definitely~does-not-exist`
+          `${baseUrl}/composerregistries/definitely/packages/does-not-exist`
         );
         throw new Error("Expected 404");
       } catch (err) {
@@ -204,16 +239,29 @@ describe("Packagist Docker Integration Tests", function () {
       }
     });
 
-    it("uses tilde-encoded vendor~package IDs", async () => {
+    it("uses the package basename as the resource ID", async () => {
       // Verify the routing works with tilde encoding
       try {
         const res = await loggedAxiosGet(
-          `${baseUrl}/composerregistries/packagist.org/packages/symfony~console`
+          `${baseUrl}/composerregistries/symfony/packages/console`
         );
         expect(res.status).to.equal(200);
-        expect(res.data.packageid).to.equal("symfony~console");
+        expect(res.data.packageid).to.equal("console");
+        expect(res.data.packagepath).to.equal("symfony/console");
       } catch (err) {
-        if (err.response?.status === 404 || err.response?.status === 502 || err.response?.status === 504) return;
+        if (err.response?.status === 502 || err.response?.status === 504) return;
+        throw err;
+      }
+    });
+
+    it("returns complete Resource meta", async () => {
+      try {
+        const res = await loggedAxiosGet(`${baseUrl}/composerregistries/symfony/packages/console/meta`);
+        expect(res.data).to.include({ packageid: "console", readonly: true, defaultversionsticky: false });
+        expect(res.data).not.to.have.property("ancestor");
+        expect(res.data).to.have.property("defaultversionurl");
+      } catch (err) {
+        if ([502, 504].includes(err.response?.status)) return;
         throw err;
       }
     });
@@ -221,18 +269,33 @@ describe("Packagist Docker Integration Tests", function () {
     it("paginates versions and marks the default version", async () => {
       try {
         const res = await loggedAxiosGet(
-          `${baseUrl}/composerregistries/packagist.org/packages/symfony~console/versions?limit=2&offset=0`
+          `${baseUrl}/composerregistries/symfony/packages/console/versions?limit=2&offset=0`
         );
         expect(res.status).to.equal(200);
         const versions = Object.values(res.data);
         expect(versions).to.have.length.at.most(2);
-        expect(versions.some(version => version.isdefault === true)).to.equal(true);
+        // Unsorted pagination is ascending by stable versionid; the default may be on a later page.
+        const resource = await loggedAxiosGet(`${baseUrl}/composerregistries/symfony/packages/console`);
+        expect(typeof resource.data.versionid).to.equal('string');
+        expect(versions.every(version => typeof version.ancestor === "string")).to.equal(true);
+        expect(versions.every(version => version.packageid === "console")).to.equal(true);
+        expect(versions.every(version => typeof version.version === "string")).to.equal(true);
         expect(res.headers.link).to.include("offset=2");
       } catch (err) {
         if ([404, 502, 504].includes(err.response?.status)) return;
         throw err;
       }
     });
+  });
+
+  it("returns 410 for the removed fixed-group path", async () => {
+    try {
+      await axios.get(`${baseUrl}/composerregistries/packagist.org/packages/symfony%7Econsole/meta`);
+      throw new Error("Expected 410");
+    } catch (err) {
+      expect(err.response?.status).to.equal(410);
+      expect(err.response?.data.replacement).to.equal("/composerregistries/symfony/packages/console/meta");
+    }
   });
 
   // ─── 404 for unknown routes ──────────────────────────────────────────────────

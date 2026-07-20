@@ -12,11 +12,12 @@ WORKDIR /app/shared/registry-core
 RUN npm ci --prefer-offline && npm run build
 
 WORKDIR /app/terraform
-RUN npm ci --prefer-offline
-
 COPY terraform/ .
 
-RUN npm run build
+# The build context can contain a host node_modules junction even though its
+# contents are ignored. Recreate dependencies after COPY so the local
+# registry-core link is valid inside Linux.
+RUN rm -rf node_modules && npm ci --prefer-offline && npm run build
 
 # ---------------------------------------------------------------------------
 FROM node:20-alpine AS runtime

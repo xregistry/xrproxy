@@ -39,9 +39,10 @@ import type {
 import type { XRegistryEntity, XRegistryResource, XRegistryVersion } from '../types/xregistry';
 import {
     buildVersionId,
-    decodePackageId,
-    encodePackageId,
+    identityToPackageName,
     isDevVersion,
+    isValidPackageName,
+    packageNameToIdentity,
 } from '../utils/package-utils';
 
 /** Minimal HTTP surface the service depends on (satisfied by HttpUpstreamClient). */
@@ -60,7 +61,9 @@ export interface PackagistServiceOptions {
 
 export interface PackageListEntry {
     packageid: string;
+    vendor: string;
     name: string;
+    packagepath: string;
     description: string;
     /** xRegistry resource xid */
     xid: string;
@@ -76,14 +79,24 @@ interface PackagistV2Response {
  * Inflate a Packagist "minified" (`composer/2.0`) version array.
  *
  * In the minified format the first (prototype) entry carries the full set of
- * fields; subsequent entries OMIT fields that are unchanged from the prototype
- * and only include fields that differ. Reconstruct each subsequent entry by
- * layering it on top of the prototype.
+ * fields; each subsequent entry is a delta from the previously reconstructed
+ * entry. Reconstructing every delta from the first prototype loses changes
+ * inherited through intermediate versions.
  */
 export function inflateMinifiedVersions(versions: PackagistVersion[]): PackagistVersion[] {
     if (versions.length === 0) return [];
-    const prototype = versions[0]!;
-    return versions.map((v, i) => (i === 0 ? v : { ...prototype, ...v }));
+    const inflatedVersions: PackagistVersion[] = [];
+    let previous: Record<string, unknown> = {};
+    for (const version of versions) {
+        const inflated: Record<string, unknown> = { ...previous };
+        for (const [key, value] of Object.entries(version as unknown as Record<string, unknown>)) {
+            if (value === '__unset') delete inflated[key];
+            else inflated[key] = value;
+        }
+        previous = inflated;
+        inflatedVersions.push(inflated as unknown as PackagistVersion);
+    }
+    return inflatedVersions;
 }
 
 /** Convert an upstream time string to ISO-8601, or undefined when absent/invalid. */
@@ -93,9 +106,7 @@ function toIso(time?: string): string | undefined {
     return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
 }
 
-function selectDefaultVersion(versions: PackagistVersion[]): PackagistVersion | undefined {
-    return versions.find(v => !isDevVersion(v.version)) ?? versions[0];
-}
+const UNKNOWN_VERSION_TIME = '1970-01-01T00:00:00.000Z';
 
 function versionIdOf(version: PackagistVersion): string {
     return buildVersionId(
@@ -105,13 +116,27 @@ function versionIdOf(version: PackagistVersion): string {
     );
 }
 
+/** xRegistry `createdat` ordering with the required version-ID tie-breaker. */
+function sortRawVersions(versions: readonly PackagistVersion[]): PackagistVersion[] {
+    return [...versions].sort((a, b) => {
+        const timeCompare = (toIso(a.time) ?? UNKNOWN_VERSION_TIME)
+            .localeCompare(toIso(b.time) ?? UNKNOWN_VERSION_TIME);
+        return timeCompare || versionIdOf(a).localeCompare(versionIdOf(b), undefined, { sensitivity: 'base' });
+    });
+}
+
+function selectDefaultVersion(versions: readonly PackagistVersion[]): PackagistVersion | undefined {
+    // versionmode=createdat and defaultversionsticky=false require the newest
+    // Version in the canonical merged snapshot to be the default.
+    return sortRawVersions(versions).at(-1);
+}
+
 /**
  * Map a PackagistVersion into an xRegistry version entity.
  * Applies the critical dev-* immutability rule and stable version timestamps.
  */
 function mapVersion(
     pkgName: string,
-    pkgId: string,
     v: PackagistVersion,
     baseUrl: string,
     defaultVersionId: string | undefined,
@@ -119,30 +144,35 @@ function mapVersion(
     const sourceRef = v.source?.reference ?? v.dist?.reference;
     const versionId = buildVersionId(v.version, v.version_normalized, sourceRef);
     const dev = isDevVersion(v.version);
-    const xid = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${pkgId}/versions/${versionId}`;
-    const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${pkgId}/versions/${versionId}`;
+    const { groupId, resourceId } = packageNameToIdentity(pkgName);
+    const xid = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}/versions/${versionId}`;
+    const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_CONFIG.TYPE}/${encodeURIComponent(resourceId)}/versions/${encodeURIComponent(versionId)}`;
 
-    // Stable createdat/modifiedat: the version's own upstream time (or now()).
-    const releaseTime = toIso(v.time) ?? new Date().toISOString();
+    // Keep timestamps deterministic even when malformed upstream data omits time.
+    const releaseTime = toIso(v.time) ?? UNKNOWN_VERSION_TIME;
 
     const entity: Record<string, unknown> = {
         xid,
         self,
         versionid: versionId,
+        packageid: resourceId,
         isdefault: versionId === defaultVersionId,
+        ancestor: versionId,
         epoch: 1,
         createdat: releaseTime,
         modifiedat: releaseTime,
-        name: `${pkgName}@${v.version}`,
+        name: pkgName,
+        vendor: groupId,
+        packagepath: pkgName,
         version: v.version,
-        versionNormalized: v.version_normalized,
+        versionnormalized: v.version_normalized,
         // CRITICAL: mutable flag — dev aliases are not immutable releases
         immutable: !dev,
         type: v.type,
         license: v.license,
         authors: v.authors,
         require: v.require,
-        requireDev: v['require-dev'],
+        requiredev: v['require-dev'],
         conflict: v.conflict,
         replace: v.replace,
         provide: v.provide,
@@ -152,7 +182,11 @@ function mapVersion(
     };
 
     if (v.description !== undefined) entity['description'] = v.description;
-    if (sourceRef !== undefined) entity['sourceReference'] = sourceRef;
+    if (v.homepage !== undefined) entity['homepage'] = v.homepage;
+    if (v.keywords !== undefined) entity['keywords'] = v.keywords;
+    if (v.abandoned !== undefined) entity['abandoned'] = v.abandoned;
+    if (v.source?.url !== undefined) entity['repository'] = v.source.url;
+    if (sourceRef !== undefined) entity['sourcereference'] = sourceRef;
     if (v.dist !== undefined) entity['dist'] = v.dist;
     if (v.source !== undefined) entity['source'] = v.source;
     const iso = toIso(v.time);
@@ -170,46 +204,61 @@ function mapPackage(
     pkg: PackagistPackage,
     baseUrl: string,
 ): XRegistryResource & Record<string, unknown> {
-    const pkgId = encodePackageId(pkg.name);
-    const xid = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${pkgId}`;
-    const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${pkgId}`;
-
-    const versions = Object.values(pkg.versions ?? {});
-    const latestStable = versions.find(v => !isDevVersion(v.version));
-    const displayVersion = latestStable?.version ?? versions[0]?.version;
+    const { groupId, resourceId } = packageNameToIdentity(pkg.name);
+    const xid = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}`;
+    const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_CONFIG.TYPE}/${encodeURIComponent(resourceId)}`;
+    const versions = sortRawVersions(Object.values(pkg.versions ?? {}));
     const defaultVersion = selectDefaultVersion(versions);
-    const defaultVersionId = defaultVersion ? versionIdOf(defaultVersion) : undefined;
+    if (!defaultVersion) {
+        throw new UpstreamError({
+            code: 'invalid_response',
+            message: `Packagist package ${pkg.name} has no versions`,
+        });
+    }
+    const defaultVersionId = versionIdOf(defaultVersion);
+    const projected = mapVersion(pkg.name, defaultVersion, baseUrl, defaultVersionId) as unknown as Record<string, unknown>;
+    const defaultIndex = versions.findIndex(version => versionIdOf(version) === defaultVersionId);
+    projected['ancestor'] = defaultIndex > 0 ? versionIdOf(versions[defaultIndex - 1]!) : defaultVersionId;
 
-    const times = versions
-        .map(v => (v.time ? new Date(v.time).getTime() : NaN))
-        .filter(n => !Number.isNaN(n));
-    const now = new Date().toISOString();
-    const createdat = times.length ? new Date(Math.min(...times)).toISOString() : now;
-    const modifiedat = times.length ? new Date(Math.max(...times)).toISOString() : now;
-
-    const entity: Record<string, unknown> = {
+    return {
+        ...projected,
+        packageid: resourceId,
         xid,
         self,
-        packageid: pkgId,
+        metaurl: `${self}/meta`,
+        versionsurl: `${self}/versions`,
+        versionscount: versions.length,
+    } as unknown as XRegistryResource & Record<string, unknown>;
+}
+
+function mapPackageMeta(pkg: PackagistPackage, baseUrl: string): Record<string, unknown> {
+    const { groupId, resourceId } = packageNameToIdentity(pkg.name);
+    const versions = sortRawVersions(Object.values(pkg.versions ?? {}));
+    const defaultVersion = selectDefaultVersion(versions);
+    if (!defaultVersion) {
+        throw new UpstreamError({ code: 'invalid_response', message: `Packagist package ${pkg.name} has no versions` });
+    }
+    const defaultVersionId = versionIdOf(defaultVersion);
+    const latestStable = [...versions].reverse().find(version => !isDevVersion(version.version));
+    const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_CONFIG.TYPE}/${encodeURIComponent(resourceId)}`;
+    const createdat = toIso(versions[0]?.time) ?? UNKNOWN_VERSION_TIME;
+    const modifiedat = toIso(defaultVersion.time) ?? createdat;
+    return {
+        packageid: resourceId,
+        xid: `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}/meta`,
+        self: `${self}/meta`,
         epoch: 1,
         createdat,
         modifiedat,
-        name: pkg.name,
-        description: pkg.description,
-        versionid: defaultVersionId,
-        isdefault: true,
-        versionsurl: `${self}/versions`,
-        versionscount: versions.length,
-        metaurl: `${self}/meta`,
+        readonly: true,
+        compatibility: 'none',
+        defaultversionid: defaultVersionId,
+        defaultversionurl: `${self}/versions/${encodeURIComponent(defaultVersionId)}`,
+        defaultversionsticky: false,
+        ...(pkg.downloads !== undefined ? { downloads: pkg.downloads } : {}),
+        ...(pkg.favers !== undefined ? { favers: pkg.favers } : {}),
+        ...(latestStable?.version !== undefined ? { currentversion: latestStable.version } : {}),
     };
-
-    if (pkg.type !== undefined) entity['type'] = pkg.type;
-    if (pkg.repository !== undefined) entity['repository'] = pkg.repository;
-    if (pkg.downloads !== undefined) entity['downloads'] = pkg.downloads;
-    if (pkg.favers !== undefined) entity['favers'] = pkg.favers;
-    if (displayVersion !== undefined) entity['currentVersion'] = displayVersion;
-
-    return entity as XRegistryResource & Record<string, unknown>;
 }
 
 export class PackagistService {
@@ -230,47 +279,82 @@ export class PackagistService {
      * Returns null if not found.
      */
     async fetchPackage(vendorPackage: string): Promise<PackagistPackage | null> {
-        const loader = (etag?: string): Promise<CacheLoadResult<PackagistPackage>> =>
-            this.loadPackage(vendorPackage, etag);
+        // Validate without normalizing: xRegistry entity lookup is case-sensitive.
+        packageNameToIdentity(vendorPackage);
+        const loader = (): Promise<CacheLoadResult<PackagistPackage>> => this.loadPackage(vendorPackage);
+        const rejectWrongCase = (pkg: PackagistPackage | null): PackagistPackage | null => {
+            if (!pkg) return null;
+            const canonical = packageNameToIdentity(pkg.name).canonicalName;
+            return canonical.toLowerCase() === vendorPackage.toLowerCase() && canonical !== vendorPackage
+                ? null
+                : pkg;
+        };
 
         if (this.cache) {
             const key = createCacheKey('pkg', vendorPackage);
-            const result = await this.cache.get<PackagistPackage>(key, ctx => loader(ctx.etag));
+            const result = await this.cache.get<PackagistPackage>(key, loader);
             if (result.kind === 'not-found') return null;
-            return result.value ?? null;
+            return rejectWrongCase(result.value ?? null);
         }
 
         const loaded = await loader();
-        if (loaded.kind === 'value') return loaded.value;
-        return null;
+        return loaded.kind === 'value' ? rejectWrongCase(loaded.value) : null;
     }
 
     private async loadPackage(
         vendorPackage: string,
-        etag?: string,
     ): Promise<CacheLoadResult<PackagistPackage>> {
         const [vendor, pkg] = vendorPackage.split('/');
-        const url = `${this.baseUrl}/p2/${vendor}/${pkg}.json`;
+        const stableUrl = `${this.baseUrl}/p2/${vendor}/${pkg}.json`;
+        const developmentUrl = `${this.baseUrl}/p2/${vendor}/${pkg}~dev.json`;
+        const [stable, development] = await Promise.all([
+            this.loadV2Feed(stableUrl),
+            this.loadV2Feed(developmentUrl),
+        ]);
+
+        const merged = this.mergeV2Feeds(vendorPackage, [stable, development]);
+        if (merged) return { kind: 'value', value: merged };
+        return this.loadPackageV1(vendorPackage);
+    }
+
+    private async loadV2Feed(url: string): Promise<PackagistV2Response | null> {
         try {
-            const resp = await this.http.getJson<PackagistV2Response>(
-                url,
-                etag ? { conditional: { etag } } : {},
-            );
-            if ('notModified' in resp) {
-                return { kind: 'not-modified', ...(resp.etag ? { etag: resp.etag } : {}) };
-            }
-            const transformed = this.transformV2(vendorPackage, resp.value);
-            if (transformed) {
-                return { kind: 'value', value: transformed, ...(resp.etag ? { etag: resp.etag } : {}) };
-            }
-            // v2 responded but did not contain this package → fall back to v1.
-            return this.loadPackageV1(vendorPackage);
-        } catch (e) {
-            if (isUpstreamError(e) && e.code === 'not_found') {
-                return this.loadPackageV1(vendorPackage);
-            }
-            throw e;
+            const response = await this.http.getJson<PackagistV2Response>(url);
+            return 'notModified' in response ? null : response.value;
+        } catch (error) {
+            if (isUpstreamError(error) && error.code === 'not_found') return null;
+            throw error;
         }
+    }
+
+    /** Merge stable and ~dev feeds using the canonical injective Version IDs. */
+    private mergeV2Feeds(
+        vendorPackage: string,
+        feeds: readonly (PackagistV2Response | null)[],
+    ): PackagistPackage | null {
+        const packages = feeds
+            .filter((feed): feed is PackagistV2Response => feed !== null)
+            .map(feed => this.transformV2(vendorPackage, feed))
+            .filter((pkg): pkg is PackagistPackage => pkg !== null);
+        if (packages.length === 0) return null;
+
+        const versions: Record<string, PackagistVersion> = {};
+        for (const pkg of packages) {
+            for (const version of Object.values(pkg.versions ?? {})) {
+                const versionId = versionIdOf(version);
+                // A Version present in both feeds is one logical Version. Dev
+                // IDs include the full alias and source reference, while stable
+                // IDs use Composer's canonical normalized version.
+                versions[versionId] ??= version;
+            }
+        }
+
+        const primary = packages[0]!;
+        return {
+            ...primary,
+            description: primary.description || packages.find(pkg => pkg.description)?.description || '',
+            versions,
+        };
     }
 
     private async loadPackageV1(vendorPackage: string): Promise<CacheLoadResult<PackagistPackage>> {
@@ -281,7 +365,12 @@ export class PackagistService {
             if ('notModified' in resp) return { kind: 'not-found' };
             const result = resp.value?.package ?? null;
             if (!result) return { kind: 'not-found' };
-            return { kind: 'value', value: result, ...(resp.etag ? { etag: resp.etag } : {}) };
+            const canonicalName = packageNameToIdentity(result.name).canonicalName;
+            return {
+                kind: 'value',
+                value: { ...result, name: canonicalName },
+                ...(resp.etag ? { etag: resp.etag } : {}),
+            };
         } catch (e) {
             if (isUpstreamError(e) && e.code === 'not_found') return { kind: 'not-found' };
             throw e;
@@ -297,22 +386,29 @@ export class PackagistService {
         vendorPackage: string,
         body: PackagistV2Response,
     ): PackagistPackage | null {
-        const rawVersions = body.packages?.[vendorPackage];
-        if (!rawVersions || rawVersions.length === 0) return null;
-
+        const match = Object.entries(body.packages ?? {}).find(
+            ([name]) => name.toLowerCase() === vendorPackage.toLowerCase(),
+        );
+        if (!match || match[1].length === 0) return null;
+        const canonicalName = packageNameToIdentity(match[0]).canonicalName;
+        const rawVersions = match[1];
         const versionArray = body.minified === 'composer/2.0'
             ? inflateMinifiedVersions(rawVersions)
             : rawVersions;
 
         const versionsMap: Record<string, PackagistVersion> = {};
-        for (const v of versionArray) {
-            const key = buildVersionId(v.version, v.version_normalized, v.source?.reference ?? v.dist?.reference);
-            versionsMap[key] = v;
+        for (const version of versionArray) {
+            const key = buildVersionId(
+                version.version,
+                version.version_normalized,
+                version.source?.reference ?? version.dist?.reference,
+            );
+            versionsMap[key] = version;
         }
 
         const first = versionArray[0]!;
         const result: PackagistPackage = {
-            name: vendorPackage,
+            name: canonicalName,
             description: first.description ?? '',
             versions: versionsMap,
         };
@@ -354,12 +450,9 @@ export class PackagistService {
             if ('notModified' in resp) return { packages: [], total: 0 };
             const data = resp.value;
             return {
-                packages: (data.results ?? []).map(hit => ({
-                    packageid: encodePackageId(hit.name),
-                    name: hit.name,
-                    description: hit.description ?? '',
-                    xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodePackageId(hit.name)}`,
-                })),
+                packages: (data.results ?? [])
+                    .filter(hit => isValidPackageName(hit.name))
+                    .map(hit => this.toPackageListEntry(hit.name, hit.description ?? '')),
                 total: data.total ?? 0,
             };
         };
@@ -416,7 +509,7 @@ export class PackagistService {
         };
     }
 
-    private async getPackageNames(): Promise<string[]> {
+    async getPackageNames(): Promise<string[]> {
         const url = `${this.baseUrl}/packages/list.json`;
         const load = async (): Promise<CacheLoadResult<PackagistPackageListResult>> => {
             const resp = await this.http.getJson<PackagistPackageListResult>(url);
@@ -429,23 +522,46 @@ export class PackagistService {
                 createCacheKey('package-list'),
                 load,
             );
-            return result.value?.packageNames ?? result.value?.packages ?? [];
+            return [...new Set((result.value?.packageNames ?? result.value?.packages ?? [])
+                .filter(isValidPackageName)
+                .map(name => packageNameToIdentity(name).canonicalName))];
         }
 
         const result = await load();
         return result.kind === 'value'
-            ? result.value.packageNames ?? result.value.packages ?? []
+            ? [...new Set((result.value.packageNames ?? result.value.packages ?? [])
+                .filter(isValidPackageName)
+                .map(name => packageNameToIdentity(name).canonicalName))]
             : [];
     }
 
-    private toPackageListEntry(name: string): PackageListEntry {
-        const packageid = encodePackageId(name);
+    private toPackageListEntry(name: string, description = ''): PackageListEntry {
+        const { groupId, resourceId } = packageNameToIdentity(name);
         return {
-            packageid,
+            packageid: resourceId,
+            vendor: groupId,
             name,
-            description: '',
-            xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${packageid}`,
+            packagepath: name,
+            description,
+            xid: `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}`,
         };
+    }
+
+    async listVendors(): Promise<Array<{ id: string; packagescount: number }>> {
+        const counts = new Map<string, number>();
+        for (const name of await this.getPackageNames()) {
+            const { groupId } = packageNameToIdentity(name);
+            counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
+        }
+        return [...counts.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([id, packagescount]) => ({ id, packagescount }));
+    }
+
+    async listVendorPackages(vendor: string): Promise<PackageListEntry[]> {
+        return (await this.getPackageNames())
+            .filter(name => packageNameToIdentity(name).groupId === vendor)
+            .map(name => this.toPackageListEntry(name));
     }
 
     // ─── xRegistry entity builders ──────────────────────────────────────────
@@ -462,6 +578,14 @@ export class PackagistService {
         return mapPackage(pkg, hostBaseUrl);
     }
 
+    async getPackageMeta(
+        vendorPackage: string,
+        hostBaseUrl: string,
+    ): Promise<Record<string, unknown> | null> {
+        const pkg = await this.fetchPackage(vendorPackage);
+        return pkg ? mapPackageMeta(pkg, hostBaseUrl) : null;
+    }
+
     /**
      * Return all xRegistry version entities for a package.
      */
@@ -471,13 +595,16 @@ export class PackagistService {
     ): Promise<XRegistryVersion[]> {
         const pkg = await this.fetchPackage(vendorPackage);
         if (!pkg) return [];
-        const pkgId = encodePackageId(vendorPackage);
-        const versions = Object.values(pkg.versions ?? {});
+        const versions = sortRawVersions(Object.values(pkg.versions ?? {}));
         const defaultVersion = selectDefaultVersion(versions);
         const defaultVersionId = defaultVersion ? versionIdOf(defaultVersion) : undefined;
-        return versions.map(v =>
-            mapVersion(vendorPackage, pkgId, v, hostBaseUrl, defaultVersionId),
+        const ordered = versions.map(v =>
+            mapVersion(pkg.name, v, hostBaseUrl, defaultVersionId),
         );
+        ordered.forEach((version, index) => {
+            version.ancestor = index === 0 ? version.versionid : ordered[index - 1]!.versionid;
+        });
+        return ordered;
     }
 
     /**
@@ -492,42 +619,34 @@ export class PackagistService {
         return versions.find(v => v.versionid === versionId) ?? null;
     }
 
-    /**
-     * Build the xRegistry group entity for packagist.org.
-     *
-     * `createdat` and `modifiedat` are supplied by the caller so they can be
-     * anchored to stable, process-lifetime values via EntityStateManager rather
-     * than re-sampled on every call (which would invalidate ETags between
-     * identical requests).
-     *
-     * Note: `packagescount` is intentionally omitted — Packagist does not
-     * expose an authoritative package count without a full list traversal, and
-     * emitting a fabricated count would violate the xRegistry count contract.
-     */
+    /** Build one Composer vendor group entity from the discovery catalogue. */
     buildGroupEntity(
         hostBaseUrl: string,
+        vendor: string,
+        packagescount: number,
         timestamps: { createdat: string; modifiedat: string },
     ): XRegistryEntity & Record<string, unknown> {
-        const self = `${hostBaseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
+        const groupPath = `/${GROUP_CONFIG.TYPE}/${vendor}`;
+        const self = `${hostBaseUrl}/${GROUP_CONFIG.TYPE}/${encodeURIComponent(vendor)}`;
         return {
-            xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`,
+            xid: groupPath,
             self,
-            [`${GROUP_CONFIG.TYPE}id`]: GROUP_CONFIG.ID,
-            name: 'Packagist',
-            description: 'The default Composer package repository for PHP.',
-            documentation: 'https://packagist.org',
+            [`${GROUP_CONFIG.TYPE_SINGULAR}id`]: vendor,
+            name: vendor,
+            vendor,
+            description: `Composer packages published by ${vendor} on Packagist.`,
+            documentation: `https://packagist.org/packages/${encodeURIComponent(vendor)}/`,
             epoch: 1,
             createdat: timestamps.createdat,
             modifiedat: timestamps.modifiedat,
             packagesurl: `${self}/${RESOURCE_CONFIG.TYPE}`,
+            packagescount,
         };
     }
 
-    // ─── Internal helpers ────────────────────────────────────────────────────
-
-    /** Resolve a vendor/package string from an xRegistry package ID (decodes ~ → /). */
-    resolveVendorPackage(packageId: string): string {
-        return decodePackageId(packageId);
+    /** Resolve native group/resource IDs without consulting discovery. */
+    resolveVendorPackage(groupId: string, packageId: string): string {
+        return identityToPackageName(groupId, packageId);
     }
 }
 
