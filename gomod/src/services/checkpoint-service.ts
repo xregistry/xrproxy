@@ -14,7 +14,7 @@ import {
     GoCatalogModuleEntry,
     GoIndexCheckpoint,
 } from '../types/go';
-import { modulePathToIdentity } from '../utils/path-escaping';
+import { ModuleIdentity, modulePathToIdentity } from '../utils/path-escaping';
 
 export class CheckpointService {
     private readonly catalogPath: string;
@@ -23,16 +23,16 @@ export class CheckpointService {
      *  happen when the index cursor stays at the same timestamp across a
      *  full-page boundary) are not double-counted in `entryCount`. */
     private readonly seen = new Set<string>();
+    private identityByPath = new Map<string, ModuleIdentity>();
+    private pathByIdentity = new Map<string, string>();
+    private groupIds: string[] = [];
 
     constructor(cacheDir: string) {
         this.catalogPath = path.join(cacheDir, CATALOG_FILENAME);
         this.catalog = this.loadOrInit();
         this.rebuildSeen();
+        this.rebuildIdentityMaps();
     }
-
-    // -------------------------------------------------------------------------
-    // Persistence helpers
-    // -------------------------------------------------------------------------
 
     /** Populate the dedup set from the catalog loaded off disk. */
     private rebuildSeen(): void {
@@ -44,12 +44,29 @@ export class CheckpointService {
         }
     }
 
+    private rebuildIdentityMaps(): void {
+        this.identityByPath.clear();
+        this.pathByIdentity.clear();
+
+        const modulePaths = Object.keys(this.catalog.modules).sort();
+        const groups = new Set<string>();
+
+        for (const modulePath of modulePaths) {
+            const identity = modulePathToIdentity(modulePath, { collidingModulePaths: modulePaths });
+            this.identityByPath.set(modulePath, identity);
+            this.pathByIdentity.set(`${identity.groupId}\u0000${identity.moduleId}`, modulePath);
+            groups.add(identity.groupId);
+        }
+
+        this.groupIds = [...groups].sort();
+    }
+
     private emptyCatalog(): GoCatalog {
         return {
             schemaVersion: 1,
             generatedAt: new Date().toISOString(),
             checkpoint: {
-                since: '2019-04-10T19:08:52.997264Z', // earliest index entry
+                since: '2019-04-10T19:08:52.997264Z',
                 savedAt: 0,
                 entryCount: 0,
             },
@@ -82,10 +99,6 @@ export class CheckpointService {
         fs.renameSync(tmp, this.catalogPath);
     }
 
-    // -------------------------------------------------------------------------
-    // Checkpoint management
-    // -------------------------------------------------------------------------
-
     getCheckpoint(): GoIndexCheckpoint {
         return { ...this.catalog.checkpoint };
     }
@@ -95,21 +108,9 @@ export class CheckpointService {
         this.catalog.checkpoint.savedAt = Date.now();
     }
 
-    // -------------------------------------------------------------------------
-    // Module catalog management
-    // -------------------------------------------------------------------------
-
-    /**
-     * Merge a batch of new index entries into the catalog.
-     *
-     * Idempotent: entries whose `path@version` pair has already been processed
-     * (either earlier in this run or loaded from a persisted catalog) are
-     * skipped so a stationary index cursor cannot inflate `entryCount`.
-     *
-     * @returns the number of genuinely new entries merged.
-     */
     mergeEntries(entries: Array<{ path: string; version: string; timestamp: string }>): number {
         let newCount = 0;
+        let touchedNewModulePath = false;
         for (const entry of entries) {
             const key = `${entry.path}@${entry.version}`;
             if (this.seen.has(key)) continue;
@@ -120,7 +121,6 @@ export class CheckpointService {
                 if (!existing.versions.includes(entry.version)) {
                     existing.versions.push(entry.version);
                 }
-                // Track the most recently seen version by timestamp
                 if (entry.timestamp > existing.lastSeen) {
                     existing.latestVersion = entry.version;
                     existing.lastSeen = entry.timestamp;
@@ -132,53 +132,44 @@ export class CheckpointService {
                     versions: [entry.version],
                     lastSeen: entry.timestamp,
                 };
+                touchedNewModulePath = true;
             }
             this.catalog.checkpoint.entryCount++;
             newCount++;
         }
+        if (touchedNewModulePath) {
+            this.rebuildIdentityMaps();
+        }
         return newCount;
     }
 
-    /** Return total number of known module paths. */
     getModuleCount(): number {
         return Object.keys(this.catalog.modules).length;
     }
 
-    /** Return the number of distinct module-path namespaces in the catalog. */
     getGroupCount(): number {
-        return this.getGroupIds().length;
+        return this.groupIds.length;
     }
 
-    /** Retrieve sorted, paginated module-path namespace IDs. */
     listGroupIds(offset: number, limit: number, pattern?: string): {
         groupIds: string[];
         totalKnown: number;
     } {
-        const groupIds = pattern
-            ? this.filterValues(this.getGroupIds(), pattern)
-            : this.getGroupIds();
+        const groupIds = pattern ? this.filterValues(this.groupIds, pattern) : this.groupIds;
         return {
             groupIds: groupIds.slice(offset, offset + limit),
             totalKnown: groupIds.length,
         };
     }
 
-    /** Return the number of cataloged modules in one namespace. */
     getGroupModuleCount(groupId: string): number {
-        return Object.keys(this.catalog.modules)
-            .filter(modulePath => modulePathToIdentity(modulePath).groupId === groupId)
-            .length;
+        return [...this.identityByPath.values()].filter((identity) => identity.groupId === groupId).length;
     }
 
-    /** Return total number of index entries processed. */
     getEntryCount(): number {
         return this.catalog.checkpoint.entryCount;
     }
 
-    /**
-     * Retrieve a paginated, sorted list of module paths.
-     * Returns `null` for count when it would be misleading (e.g. mid-refresh).
-     */
     listModulePaths(offset: number, limit: number): {
         paths: string[];
         totalKnown: number;
@@ -190,7 +181,6 @@ export class CheckpointService {
         };
     }
 
-    /** Retrieve modules within one namespace, with optional name filtering. */
     listGroupModulePaths(
         groupId: string,
         pattern: string | undefined,
@@ -201,55 +191,54 @@ export class CheckpointService {
         totalMatched: number;
     } {
         const inGroup = Object.keys(this.catalog.modules)
-            .filter(modulePath => modulePathToIdentity(modulePath).groupId === groupId)
+            .filter((modulePath) => this.getModuleIdentity(modulePath).groupId === groupId)
             .sort();
-        let matched = inGroup;
-        if (pattern) {
-            matched = this.filterValues(inGroup, pattern);
-        }
+        const matched = pattern ? this.filterValues(inGroup, pattern) : inGroup;
         return {
             paths: matched.slice(offset, offset + limit),
             totalMatched: matched.length,
         };
     }
 
-    /** Look up a module entry by canonical path. */
     getModule(modulePath: string): GoCatalogModuleEntry | null {
         return this.catalog.modules[modulePath] ?? null;
     }
 
-    /** Check if any modules are loaded. */
+    getModuleIdentity(modulePath: string): ModuleIdentity {
+        const identity = this.identityByPath.get(modulePath);
+        if (identity) return identity;
+        return modulePathToIdentity(modulePath, {
+            collidingModulePaths: [...Object.keys(this.catalog.modules), modulePath],
+        });
+    }
+
+    resolveModulePath(groupId: string, moduleId: string): string | null {
+        return this.pathByIdentity.get(`${groupId}\u0000${moduleId}`) ?? null;
+    }
+
     hasModules(): boolean {
         return Object.keys(this.catalog.modules).length > 0;
     }
 
-    /** Filter module paths by a simple substring or glob pattern. */
     filterModulePaths(pattern: string, offset: number, limit: number): {
         paths: string[];
         totalMatched: number;
     } {
         const all = Object.keys(this.catalog.modules).sort();
-        let matched: string[];
-        matched = this.filterValues(all, pattern);
+        const matched = this.filterValues(all, pattern);
         return {
             paths: matched.slice(offset, offset + limit),
             totalMatched: matched.length,
         };
     }
 
-    private getGroupIds(): string[] {
-        return [...new Set(
-            Object.keys(this.catalog.modules).map(modulePath => modulePathToIdentity(modulePath).groupId)
-        )].sort();
-    }
-
     private filterValues(values: string[], pattern: string): string[] {
         if (!pattern.includes('*')) {
             const lower = pattern.toLowerCase();
-            return values.filter(value => value.toLowerCase().includes(lower));
+            return values.filter((value) => value.toLowerCase().includes(lower));
         }
         const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`^${escaped.replace(/\\\*/g, '.*')}$`, 'i');
-        return values.filter(value => regex.test(value));
+        return values.filter((value) => regex.test(value));
     }
 }

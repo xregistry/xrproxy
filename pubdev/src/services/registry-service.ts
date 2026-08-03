@@ -12,22 +12,23 @@ export class RegistryService {
   constructor(
     private readonly search: SearchService,
     private readonly entityState: EntityStateManager,
+    private readonly sourceUrl: string,
   ) {}
 
   getRoot(baseUrl: string): Record<string, unknown> {
     return {
-      specversion:  SPEC_VERSION,
-      registryid:   REGISTRY_ID,
-      xid:          '/',
-      self:         `${baseUrl}/`,
-      description:  'xRegistry-compliant read-only proxy for the pub.dev Dart/Flutter package registry.',
+      specversion:   SPEC_VERSION,
+      registryid:    REGISTRY_ID,
+      xid:           '/',
+      self:          `${baseUrl}/`,
+      description:   'xRegistry-compliant read-only proxy for a Dart/Flutter package registry projection.',
       documentation: `${baseUrl}/model`,
       capabilities:  CAPABILITIES,
-      [`${GROUP_TYPE}url`]:   `${baseUrl}/${GROUP_TYPE}`,
+      [`${GROUP_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}`,
       [`${GROUP_TYPE}count`]: 1,
-      epoch:      this.entityState.getEpoch('/'),
-      createdat:  this.entityState.getCreatedAt('/'),
-      modifiedat: this.entityState.getModifiedAt('/'),
+      epoch:         this.entityState.getEpoch('/'),
+      createdat:     this.entityState.getCreatedAt('/'),
+      modifiedat:    this.entityState.getModifiedAt('/'),
     };
   }
 
@@ -35,7 +36,9 @@ export class RegistryService {
     return { ...(MODEL as Record<string, unknown>), self: `${baseUrl}/model` };
   }
 
-  getCapabilities(): typeof CAPABILITIES { return CAPABILITIES; }
+  getCapabilities(): typeof CAPABILITIES {
+    return CAPABILITIES;
+  }
 
   getGroups(baseUrl: string): Record<string, unknown> {
     const groupPath = `/${GROUP_TYPE}/${GROUP_ID}`;
@@ -43,13 +46,14 @@ export class RegistryService {
     return {
       [GROUP_ID]: {
         [`${GROUP_TYPE_SINGULAR}id`]: GROUP_ID,
-        xid:        groupPath,
-        name:       GROUP_ID,
-        description: 'pub.dev — the official Dart/Flutter package registry',
-        epoch:      this.entityState.getEpoch(groupPath),
-        createdat:  this.entityState.getCreatedAt(groupPath),
-        modifiedat: this.entityState.getModifiedAt(groupPath),
-        self:       `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}`,
+        xid:         groupPath,
+        self:        `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}`,
+        name:        GROUP_ID,
+        description: 'Projection of the Dart/Flutter pub package metadata model.',
+        sourceurl:   this.sourceUrl,
+        epoch:       this.entityState.getEpoch(groupPath),
+        createdat:   this.entityState.getCreatedAt(groupPath),
+        modifiedat:  this.entityState.getModifiedAt(groupPath),
         [`${RESOURCE_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}`,
         ...(count !== undefined ? { [`${RESOURCE_TYPE}count`]: count } : {}),
       },
@@ -61,13 +65,14 @@ export class RegistryService {
     const count = this.search.isAuthoritative() ? this.search.getAll().length : undefined;
     return {
       [`${GROUP_TYPE_SINGULAR}id`]: GROUP_ID,
-      xid:        groupPath,
-      name:       GROUP_ID,
-      description: 'pub.dev — the official Dart/Flutter package registry',
-      epoch:      this.entityState.getEpoch(groupPath),
-      createdat:  this.entityState.getCreatedAt(groupPath),
-      modifiedat: this.entityState.getModifiedAt(groupPath),
-      self:       `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}`,
+      xid:         groupPath,
+      self:        `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}`,
+      name:        GROUP_ID,
+      description: 'Projection of the Dart/Flutter pub package metadata model.',
+      sourceurl:   this.sourceUrl,
+      epoch:       this.entityState.getEpoch(groupPath),
+      createdat:   this.entityState.getCreatedAt(groupPath),
+      modifiedat:  this.entityState.getModifiedAt(groupPath),
       [`${RESOURCE_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}`,
       ...(count !== undefined ? { [`${RESOURCE_TYPE}count`]: count } : {}),
     };

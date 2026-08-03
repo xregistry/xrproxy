@@ -4,78 +4,369 @@
       "plural": "rustregistries",
       "singular": "rustregistry",
       "description": "Rust package registry provider (e.g., crates.io).",
+      "attributes": {
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the crate registry index from which these crates were projected, e.g. 'https://index.crates.io'. This records provenance only; a crate name denotes the same crate whichever registry serves it."
+        }
+      },
       "resources": {
         "crates": {
           "plural": "crates",
           "singular": "crate",
           "description": "A Rust crate (library or binary) published to the registry.",
           "hasdocument": false,
+          "maxversions": 0,
+          "setversionid": true,
+          "singleversionroot": true,
+          "versionmode": "manual",
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The canonical name of the crate."
+              "required": true,
+              "description": "The canonical crate name exactly as published, preserving its case. This is the authoritative name of the crate; the crateid is only an addressing key and MAY be a hash where two crate names collide case-insensitively."
             },
-            "description": {
+            "num": {
               "type": "string",
-              "description": "A short description of the crate."
+              "description": "The exact upstream crate version string as published, including any build metadata. This is the authoritative version value; versionid is a derived identifier and MUST NOT be parsed as a version."
             },
             "homepage": {
               "type": "string",
-              "description": "The homepage URL for the crate."
+              "description": "The homepage URL declared in the package.homepage field of Cargo.toml for this version."
             },
             "repository": {
               "type": "string",
-              "description": "The source repository URL for the crate."
-            },
-            "documentation": {
-              "type": "string",
-              "description": "The documentation URL for the crate."
+              "description": "The source repository URL declared in the package.repository field of Cargo.toml for this version."
             },
             "categories": {
               "type": "array",
               "item": {
                 "type": "string"
               },
-              "description": "Category slugs that the crate belongs to."
+              "description": "Category slugs that the crate belongs to, declared in package.categories of Cargo.toml for this version."
             },
             "keywords": {
               "type": "array",
               "item": {
                 "type": "string"
               },
-              "description": "Keywords that describe the crate."
-            },
-            "downloads": {
-              "type": "integer",
-              "description": "Total all-time download count for the crate."
-            },
-            "recent_downloads": {
-              "type": "integer",
-              "description": "Recent (last 90 days) download count for the crate."
-            },
-            "max_version": {
-              "type": "string",
-              "description": "The highest semver version published for this crate."
-            },
-            "max_stable_version": {
-              "type": "string",
-              "description": "The highest stable (non-pre-release) version published for this crate."
-            },
-            "newest_version": {
-              "type": "string",
-              "description": "The most recently published version of this crate."
-            },
-            "yanked": {
-              "type": "boolean",
-              "description": "Whether the latest version of the crate has been yanked."
+              "description": "Keywords that describe the crate, declared in package.keywords of Cargo.toml for this version."
             },
             "license": {
               "type": "string",
-              "description": "The SPDX license identifier(s) for the crate."
+              "description": "The SPDX license expression for this version, taken from package.license in Cargo.toml. This is a version-level field: crates.io does not report a license on the crate object. The value is an expression and MAY combine identifiers with OR/AND; it MUST NOT be split into a list. ABSENT when the version declares only license_file, or neither."
             },
-            "links": {
+            "license_file": {
+              "type": "string",
+              "description": "The repository-relative path of a license file, taken from package.license-file in Cargo.toml, used when the license is not expressible as an SPDX expression. A version MAY legitimately declare neither license nor license_file."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Download count for this specific version."
+            },
+            "crate_size": {
+              "type": "uinteger",
+              "description": "The size, in bytes, of the published .crate archive for this version."
+            },
+            "cksum": {
+              "type": "string",
+              "description": "The lowercase hexadecimal SHA-256 checksum of the published .crate archive, as recorded in the registry index. This is the integrity anchor for the artifact."
+            },
+            "dl_path": {
+              "type": "string",
+              "description": "The registry-relative path from which the .crate archive for this version is downloaded."
+            },
+            "readme_path": {
+              "type": "string",
+              "description": "The registry-relative path from which the rendered README for this version is retrieved."
+            },
+            "features": {
+              "type": "map",
+              "item": {
+                "type": "array",
+                "item": {
+                  "type": "string"
+                }
+              },
+              "description": "The Cargo feature table for this version: each feature name maps to the list of features it enables. Only features representable in the version 1 index format appear here; the remainder appear in features2."
+            },
+            "features2": {
+              "type": "map",
+              "item": {
+                "type": "array",
+                "item": {
+                  "type": "string"
+                }
+              },
+              "description": "Additional Cargo features that require index format version 2 or later, namely features referencing weak dependencies (dep_name?/feat_name) or explicit dependency activation (dep:dep_name). Consumers MUST merge features2 into features."
+            },
+            "v": {
+              "type": "uinteger",
+              "description": "The registry index schema version of this version's index entry. The value 2 signals that features2 MAY be present. A consumer that does not understand the value MUST refuse to use the entry."
+            },
+            "rust_version": {
+              "type": "string",
+              "description": "The minimum supported Rust version (MSRV) declared in package.rust-version of Cargo.toml for this version."
+            },
+            "edition": {
+              "type": "string",
+              "description": "The Rust language edition declared in package.edition of Cargo.toml for this version.",
+              "enum": [ "2015", "2018", "2021", "2024" ],
+              "strict": false
+            },
+            "lib_links": {
+              "type": "string",
+              "description": "The name of the native library this version links against, declared in the package.links key of Cargo.toml. Cargo names this manifest key links; it is named lib_links here, as crates.io does, to avoid colliding with the crate-level hypermedia links object, which is modelled as crate_links."
+            },
+            "has_lib": {
+              "type": "boolean",
+              "description": "Whether this version publishes a library target."
+            },
+            "bin_names": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The names of the binary targets published by this version."
+            },
+            "yanked": {
+              "type": "boolean",
+              "description": "Whether this specific version has been yanked. A yanked version remains downloadable; yanking only prevents new dependency resolutions from selecting it."
+            },
+            "yank_message": {
+              "type": "string",
+              "description": "The operator-supplied explanation recorded when this version was yanked. ABSENT when the version is not yanked or when no message was supplied."
+            },
+            "published_by": {
               "type": "object",
-              "description": "Hypermedia links for related crates.io resources."
+              "description": "The registry user account that published this version. ABSENT for versions published before crates.io began recording the publisher.",
+              "attributes": {
+                "id": {
+                  "type": "integer",
+                  "description": "The registry-assigned numeric user identifier."
+                },
+                "login": {
+                  "type": "string",
+                  "description": "The login name of the user."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The display name of the user."
+                },
+                "url": {
+                  "type": "string",
+                  "description": "The URL of the user's profile."
+                },
+                "avatar": {
+                  "type": "string",
+                  "description": "The URL of the user's avatar image."
+                }
+              }
+            },
+            "audit_actions": {
+              "type": "array",
+              "description": "The recorded lifecycle actions for this version, such as publish, yank and unyank, in chronological order.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "action": {
+                    "type": "string",
+                    "description": "The action that was performed.",
+                    "enum": [ "publish", "yank", "unyank" ],
+                    "strict": false
+                  },
+                  "time": {
+                    "type": "timestamp",
+                    "description": "The time at which the action was performed."
+                  },
+                  "user": {
+                    "type": "object",
+                    "description": "The registry user account that performed the action.",
+                    "attributes": {
+                      "id": {
+                        "type": "integer",
+                        "description": "The registry-assigned numeric user identifier."
+                      },
+                      "login": {
+                        "type": "string",
+                        "description": "The login name of the user."
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "The display name of the user."
+                      },
+                      "url": {
+                        "type": "string",
+                        "description": "The URL of the user's profile."
+                      },
+                      "avatar": {
+                        "type": "string",
+                        "description": "The URL of the user's avatar image."
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "dependencies": {
+              "type": "array",
+              "description": "The dependencies declared by this version, as recorded in the deps array of the registry index entry.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name the dependency is referred to by within this crate. When the dependency was renamed this is the local alias, and the package attribute carries the real crate name."
+                  },
+                  "req": {
+                    "type": "string",
+                    "description": "The Cargo semver requirement string the dependency version must satisfy, for example ^1.0."
+                  },
+                  "features": {
+                    "type": "array",
+                    "item": {
+                      "type": "string"
+                    },
+                    "description": "The features of the dependency explicitly enabled by this crate."
+                  },
+                  "optional": {
+                    "type": "boolean",
+                    "description": "Whether the dependency is optional. This is the upstream index field name and is unrelated to xRegistry attribute optionality."
+                  },
+                  "default_features": {
+                    "type": "boolean",
+                    "description": "Whether the default features of the dependency are enabled. This is the upstream index field name."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "The Cargo target platform expression that gates this dependency, for example cfg(windows). ABSENT when the dependency is unconditional."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "The dependency kind.",
+                    "enum": [ "normal", "dev", "build" ],
+                    "strict": false
+                  },
+                  "registry": {
+                    "type": "string",
+                    "description": "The index URL of the registry the dependency is resolved from. ABSENT when the dependency comes from the same registry as this crate."
+                  },
+                  "package": {
+                    "type": "string",
+                    "description": "The real crate name when the dependency was renamed with the package key. ABSENT when the dependency was not renamed."
+                  }
+                }
+              }
+            }
+          },
+          "metaattributes": {
+            "defaultversionsticky": {
+              "enum": [ false ],
+              "type": "boolean",
+              "required": true,
+              "default": false,
+              "description": "Sticky default Versions are not supported: the default Version always tracks the registry-computed default_version."
+            },
+            "default_version": {
+              "type": "string",
+              "description": "The version crates.io designates as the crate's default, being the highest non-yanked, non-pre-release version where one exists. This is the upstream replacement for the deprecated max_version, max_stable_version and newest_version fields, and it is the value the xRegistry default Version corresponds to."
+            },
+            "max_version": {
+              "type": "string",
+              "description": "DEPRECATED upstream. The highest version by SemVer precedence, including pre-releases and yanked versions. Retained only for compatibility with existing crates.io clients; default_version is to be used instead."
+            },
+            "max_stable_version": {
+              "type": "string",
+              "description": "DEPRECATED upstream. The highest version by SemVer precedence excluding pre-releases. Retained only for compatibility with existing crates.io clients; default_version is to be used instead."
+            },
+            "newest_version": {
+              "type": "string",
+              "description": "DEPRECATED upstream. The most recently published version, which need not be the highest by SemVer precedence. Retained only for compatibility with existing crates.io clients; default_version is to be used instead."
+            },
+            "num_versions": {
+              "type": "uinteger",
+              "description": "The number of versions published for this crate, including yanked versions."
+            },
+            "downloads": {
+              "type": "integer",
+              "description": "Total all-time download count summed over every version of the crate."
+            },
+            "recent_downloads": {
+              "type": "integer",
+              "description": "Download count for the crate over the trailing 90-day window."
+            },
+            "yanked": {
+              "type": "boolean",
+              "description": "Whether EVERY version of this crate has been yanked. It does not report the yank status of the default or the newest version; per-version yank status is carried by the Version-level yanked attribute."
+            },
+            "trustpub_only": {
+              "type": "boolean",
+              "description": "Whether the crate may only be published through Trusted Publishing, so that API tokens are rejected for new publishes."
+            },
+            "owners": {
+              "type": "array",
+              "description": "The users and teams authorized to publish new versions of the crate.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "id": {
+                    "type": "integer",
+                    "description": "The registry-assigned numeric owner identifier."
+                  },
+                  "login": {
+                    "type": "string",
+                    "description": "The login name of the user, or the qualified handle of the team."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The display name of the owner."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "Whether the owner is an individual user or a team.",
+                    "enum": [ "user", "team" ],
+                    "strict": false
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "The URL of the owner's profile."
+                  },
+                  "avatar": {
+                    "type": "string",
+                    "description": "The URL of the owner's avatar image."
+                  }
+                }
+              }
+            },
+            "crate_links": {
+              "type": "object",
+              "description": "The crates.io CrateLinks structure: a fixed set of registry-relative paths to related crate endpoints. Every member is individually nullable upstream and is therefore ABSENT when not supplied. It is named crate_links, not links, because Cargo's manifest already defines a links key declaring a native library; that per-version value is modelled as lib_links.",
+              "attributes": {
+                "version_downloads": {
+                  "type": "string",
+                  "description": "The registry-relative path to the per-version download statistics for the crate."
+                },
+                "versions": {
+                  "type": "string",
+                  "description": "The registry-relative path to the crate's version list. ABSENT when the version list was already inlined in the response."
+                },
+                "owners": {
+                  "type": "string",
+                  "description": "The registry-relative path to the combined owner list for the crate."
+                },
+                "owner_team": {
+                  "type": "string",
+                  "description": "The registry-relative path to the team owners of the crate."
+                },
+                "owner_user": {
+                  "type": "string",
+                  "description": "The registry-relative path to the individual user owners of the crate."
+                },
+                "reverse_dependencies": {
+                  "type": "string",
+                  "description": "The registry-relative path to the crates that depend on this crate."
+                }
+              }
             }
           }
         }

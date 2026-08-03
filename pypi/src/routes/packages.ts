@@ -1,6 +1,6 @@
 /**
- * Package and version routes
- * Implements /pythonregistries/pypi.org/packages/* endpoints
+ * Package and version routes.
+ * Implements /pythonregistries/pypi/packages/* endpoints.
  */
 
 import { NextFunction, Request, Response, Router } from 'express';
@@ -8,6 +8,7 @@ import { EntityStateManager } from '../../../shared/entity-state-manager';
 import { getBaseUrl, REGISTRY_METADATA, SERVER_CONFIG } from '../config/constants';
 import { PackageService } from '../services/package-service';
 import { SearchService } from '../services/search-service';
+import { normalizePackageId } from '../utils/identity';
 import { entityNotFound } from '../utils/xregistry-errors';
 
 export function createPackageRoutes(
@@ -18,33 +19,26 @@ export function createPackageRoutes(
     const router = Router();
     const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE } = REGISTRY_METADATA;
 
-    // Async error handler
     const asyncHandler = (fn: Function) => {
         return (req: Request, res: Response, next: NextFunction) => {
             Promise.resolve(fn(req, res, next)).catch(next);
         };
     };
 
-    // Helper to match filter
     const matchesFilter = (value: string, filterPattern: string): boolean => {
         if (filterPattern.includes('*')) {
-            // Wildcard matching
             const pattern = filterPattern.replace(/\*/g, '.*');
             const regex = new RegExp(`^${pattern}$`, 'i');
             return regex.test(value);
-        } else {
-            // Exact match (case insensitive)
-            return value.toLowerCase() === filterPattern.toLowerCase();
         }
+
+        return value.toLowerCase() === filterPattern.toLowerCase();
     };
 
-    // Package collection
     router.get(
         `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}`,
         asyncHandler(async (req: Request, res: Response): Promise<void> => {
             const baseUrl = getBaseUrl(req);
-
-            // Apply pagination
             const limit = req.query.limit
                 ? parseInt(req.query.limit as string, 10)
                 : SERVER_CONFIG.DEFAULT_PAGE_LIMIT;
@@ -63,76 +57,81 @@ export function createPackageRoutes(
                 return;
             }
 
-            // Get all packages from cache
             let allPackages = searchService.getAllPackages();
 
-            // Apply filtering if provided
             if (filter) {
-                // Parse filter (format: "name=*azure*" or "name='azure'").
-                // Per core spec §"Filter Flag" the value may be quoted with
-                // single or double quotes; strip them so the literal value
-                // is what's matched.
                 const filterMatch = filter.match(/name=(.+)/i);
                 if (filterMatch) {
                     let filterPattern = filterMatch[1] || '';
-                    if (filterPattern.length >= 2 &&
-                        ((filterPattern.startsWith("'") && filterPattern.endsWith("'")) ||
-                         (filterPattern.startsWith('"') && filterPattern.endsWith('"')))) {
+                    if (
+                        filterPattern.length >= 2 &&
+                        ((filterPattern.startsWith('\'') && filterPattern.endsWith('\'')) ||
+                            (filterPattern.startsWith('"') && filterPattern.endsWith('"')))
+                    ) {
                         filterPattern = filterPattern.slice(1, -1);
                     }
-                    allPackages = allPackages.filter(pkg => matchesFilter(pkg.name, filterPattern));
+                    allPackages = allPackages.filter((pkg) => matchesFilter(pkg.name, filterPattern));
                 } else {
-                    // If filter doesn't have name constraint, return empty set
                     allPackages = [];
                 }
             }
 
-            // Apply sorting if provided
             if (sort) {
                 const sortParts = sort.split('=');
                 if (sortParts.length === 2) {
                     const sortOrder = sortParts[1].toLowerCase();
                     allPackages = [...allPackages].sort((a, b) => {
-                        const comparison = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+                        const comparison = a.name.localeCompare(b.name, undefined, {
+                            sensitivity: 'base',
+                        });
                         return sortOrder === 'desc' ? -comparison : comparison;
                     });
                 }
             }
 
-            // Slice for pagination
             const paginatedPackages = allPackages.slice(offset, offset + limit);
-
-            // Build response
+            const packageEntries = await Promise.allSettled(
+                paginatedPackages.map((pkg) => packageService.getPackageMetadata(pkg.name, baseUrl))
+            );
             const packages: Record<string, any> = {};
             const resourceBasePath = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}`;
 
-            for (const pkg of paginatedPackages) {
-                const resourcePath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${pkg.name}`;
-                packages[pkg.name] = {
-                    packageid: pkg.name,
+            for (let index = 0; index < paginatedPackages.length; index += 1) {
+                const packageId = normalizePackageId(paginatedPackages[index]?.name || '');
+                const entry = packageEntries[index];
+                if (entry?.status === 'fulfilled') {
+                    packages[packageId] = entry.value;
+                    continue;
+                }
+
+                const resourcePath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageId}`;
+                packages[packageId] = {
+                    packageid: packageId,
                     xid: resourcePath,
-                    name: pkg.name,
+                    self: `${resourceBasePath}/${packageId}`,
+                    name: packageId,
+                    versionid: '',
+                    version: '',
                     epoch: entityState.getEpoch(resourcePath),
                     createdat: entityState.getCreatedAt(resourcePath),
                     modifiedat: entityState.getModifiedAt(resourcePath),
-                    self: `${resourceBasePath}/${pkg.name}`,
+                    metaurl: `${resourceBasePath}/${packageId}/meta`,
+                    versionsurl: `${resourceBasePath}/${packageId}/versions`,
+                    versionscount: 0,
                 };
             }
 
-            // Add pagination headers
             const totalCount = allPackages.length;
             if (totalCount > 0) {
                 const links: string[] = [];
                 const queryParams = new URLSearchParams(req.query as Record<string, string>);
 
-                // First link
                 if (offset > 0) {
                     queryParams.set('offset', '0');
                     queryParams.set('limit', limit.toString());
                     links.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="first"`);
                 }
 
-                // Previous link
                 if (offset > 0) {
                     const prevOffset = Math.max(0, offset - limit);
                     queryParams.set('offset', prevOffset.toString());
@@ -140,7 +139,6 @@ export function createPackageRoutes(
                     links.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="prev"`);
                 }
 
-                // Next link
                 if (offset + limit < totalCount) {
                     const nextOffset = offset + limit;
                     queryParams.set('offset', nextOffset.toString());
@@ -148,7 +146,6 @@ export function createPackageRoutes(
                     links.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="next"`);
                 }
 
-                // Last link
                 if (offset + limit < totalCount) {
                     const lastOffset = Math.floor((totalCount - 1) / limit) * limit;
                     queryParams.set('offset', lastOffset.toString());
@@ -156,10 +153,8 @@ export function createPackageRoutes(
                     links.push(`<${baseUrl}${req.path}?${queryParams.toString()}>; rel="last"`);
                 }
 
-                // Add count and per-page metadata
                 links.push(`count="${totalCount}"`);
                 links.push(`per-page="${limit}"`);
-
                 res.set('Link', links.join(', '));
             }
 
@@ -167,94 +162,80 @@ export function createPackageRoutes(
         })
     );
 
-    // Package documentation endpoint
     router.get(
         `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/:packageName/doc`,
         asyncHandler(async (req: Request, res: Response) => {
-            const { packageName } = req.params;
-
-            // Check if package exists
-            const exists = await searchService.packageExists(packageName);
+            const packageId = normalizePackageId(req.params['packageName']);
+            const exists = await searchService.packageExists(packageId);
             if (!exists) {
-                throw entityNotFound(req.originalUrl, 'package', packageName);
+                throw entityNotFound(req.originalUrl, 'package', packageId);
             }
 
-            const { content, contentType } = await packageService.getPackageDoc(packageName);
+            const { content, contentType } = await packageService.getPackageDoc(packageId);
             res.set('Content-Type', contentType);
             res.send(content);
         })
     );
 
-    // Package metadata
     router.get(
         `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/:packageName`,
         asyncHandler(async (req: Request, res: Response) => {
-            const { packageName } = req.params;
+            const packageId = normalizePackageId(req.params['packageName']);
             const baseUrl = getBaseUrl(req);
-
-            // Check if package exists
-            const exists = await searchService.packageExists(packageName);
+            const exists = await searchService.packageExists(packageId);
             if (!exists) {
-                throw entityNotFound(req.originalUrl, 'package', packageName);
+                throw entityNotFound(req.originalUrl, 'package', packageId);
             }
 
-            const packageData = await packageService.getPackageMetadata(packageName, baseUrl);
+            const packageData = await packageService.getPackageMetadata(packageId, baseUrl);
             res.json(packageData);
         })
     );
 
-    // Package meta
     router.get(
         `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/:packageName/meta`,
         asyncHandler(async (req: Request, res: Response) => {
-            const { packageName } = req.params;
+            const packageId = normalizePackageId(req.params['packageName']);
             const baseUrl = getBaseUrl(req);
-
-            // Check if package exists
-            const exists = await searchService.packageExists(packageName);
+            const exists = await searchService.packageExists(packageId);
             if (!exists) {
-                throw entityNotFound(req.originalUrl, 'package', packageName);
+                throw entityNotFound(req.originalUrl, 'package', packageId);
             }
 
-            const metaData = await packageService.getPackageMeta(packageName, baseUrl);
+            const metaData = await packageService.getPackageMeta(packageId, baseUrl);
             res.json(metaData);
         })
     );
 
-    // Package versions collection
     router.get(
         `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/:packageName/versions`,
         asyncHandler(async (req: Request, res: Response) => {
-            const { packageName } = req.params;
+            const packageId = normalizePackageId(req.params['packageName']);
             const baseUrl = getBaseUrl(req);
-
-            // Check if package exists
-            const exists = await searchService.packageExists(packageName);
+            const exists = await searchService.packageExists(packageId);
             if (!exists) {
-                throw entityNotFound(req.originalUrl, 'package', packageName);
+                throw entityNotFound(req.originalUrl, 'package', packageId);
             }
 
-            const versionsData = await packageService.getPackageVersions(packageName, baseUrl);
+            const versionsData = await packageService.getPackageVersions(packageId, baseUrl);
             res.json(versionsData);
         })
     );
 
-    // Specific version details
     router.get(
         `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/:packageName/versions/:versionId`,
         asyncHandler(async (req: Request, res: Response) => {
-            const { packageName, versionId } = req.params;
+            const packageId = normalizePackageId(req.params['packageName']);
+            const requestedVersionId = req.params['versionId'];
             const baseUrl = getBaseUrl(req);
-
-            // Check if package exists
-            const exists = await searchService.packageExists(packageName);
+            const exists = await searchService.packageExists(packageId);
             if (!exists) {
-                throw entityNotFound(req.originalUrl, 'package', packageName);
+                throw entityNotFound(req.originalUrl, 'package', packageId);
             }
 
             const versionData = await packageService.getVersionDetails(
-                packageName,
-                versionId,
+                packageId,
+                requestedVersionId,
                 baseUrl
             );
             res.json(versionData);

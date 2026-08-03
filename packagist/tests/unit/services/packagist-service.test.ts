@@ -190,7 +190,7 @@ describe('PackagistService', () => {
             const versions = await service.getVersions('symfony/console', BASE_URL);
             const dev = versions.find(v => isDevVersion(v.version));
 
-            expect(dev!.versionid).toMatch(/^xv~d~/);
+            expect(dev!.versionid).toBe('dev-main:deadbeef1234567890abcdef1234567890abcdef');
             expect(dev!.version).toBe('dev-main');
         });
 
@@ -202,7 +202,7 @@ describe('PackagistService', () => {
             const stable = versions.find(v => v.version === 'v7.1.0');
 
             // Stable ID should be the normalized version
-            expect(stable!.versionid).toBe('7.1.0.0');
+            expect(stable!.versionid).toBe('v7.1.0');
         });
 
         it('xid and self follow the expected URL structure', async () => {
@@ -230,7 +230,7 @@ describe('PackagistService', () => {
             const http = getHttpMock();
             mockV1Only(http, symfonyConsoleFixture);
 
-            const result = await service.getVersion('symfony/console', '7.1.0.0', BASE_URL);
+            const result = await service.getVersion('symfony/console', 'v7.1.0', BASE_URL);
             expect(result).not.toBeNull();
             expect(result!.version).toBe('v7.1.0');
             expect(result!.immutable).toBe(true);
@@ -267,17 +267,54 @@ describe('PackagistService', () => {
             expect(result!.versionscount).toBeGreaterThan(0);
         });
 
-        it('identifies the default package version', async () => {
+                it('identifies the default package version', async () => {
             const http = getHttpMock();
             mockV1Only(http, laravelFixture);
 
             const result = await service.getPackageResource('laravel/framework', BASE_URL);
 
             expect(result).toEqual(expect.objectContaining({
-                versionid: expect.any(String),
+                versionid: 'v11.0.0',
                 isdefault: true,
             }));
         });
+
+                it('maps spec-defined hyphenated and package-wide attributes', async () => {
+            const http = getHttpMock();
+            mockV1Only(http, symfonyConsoleFixture);
+
+            const resource = await service.getPackageResource('symfony/console', BASE_URL);
+            mockV1Only(http, symfonyConsoleFixture);
+            const meta = await service.getPackageMeta('symfony/console', BASE_URL);
+            mockV1Only(http, symfonyConsoleFixture);
+            const versions = await service.getVersions('symfony/console', BASE_URL);
+            const stable = versions.find(version => version.version === 'v7.1.0');
+
+            expect(resource).toMatchObject({
+                versionid: 'dev-main:deadbeef1234567890abcdef1234567890abcdef',
+            });
+            expect(stable).toMatchObject({
+                'require-dev': { 'phpunit/phpunit': '^11.0' },
+            });
+            expect(stable?.['autoload-dev']).toEqual({
+                'psr-4': { 'Symfony\\Component\\Console\\Tests\\': 'Tests/' },
+            });
+            expect(stable?.['bin']).toEqual(['bin/console']);
+            expect(stable?.['support']).toEqual({
+                issues: 'https://github.com/symfony/console/issues',
+                docs: 'https://symfony.com/doc/current/components/console.html',
+            });
+            expect(stable?.['funding']).toEqual([{
+                type: 'github',
+                url: 'https://github.com/sponsors/fabpot',
+            }]);
+            expect(meta).toMatchObject({
+                currentversion: 'dev-main',
+                readme: '<h1>Symfony Console</h1>',
+                'default-branch': 'main',
+            });
+        });
+
     });
 
     describe('native vendor discovery', () => {
@@ -538,7 +575,7 @@ describe('PackagistService', () => {
             const devVersion = versions.find(v => v.version === 'dev-main');
             expect(devVersion).toBeDefined();
             expect(devVersion!.immutable).toBe(false);
-            expect(devVersion!.versionid).toMatch(/^xv~d~/);
+            expect(devVersion!.versionid).toBe('dev-main:deadbeef1234567890abcdef1234567890abcdef');
             expect(devVersion!.version).toBe('dev-main');
             expect(devVersion!.sourcereference).toBe('deadbeef1234567890abcdef1234567890abcdef');
         });

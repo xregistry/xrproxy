@@ -1,6 +1,5 @@
 /**
- * PyPI API integration service
- * Handles communication with PyPI Simple and JSON APIs
+ * PyPI API integration service.
  */
 
 import { FALLBACK_PACKAGES, PYPI_API } from '../config/constants';
@@ -8,8 +7,10 @@ import {
     PackageMetadata,
     PackageNameEntry,
     PyPIPackageResponse,
+    PyPISimpleProjectResponse,
     PyPISimpleResponse,
 } from '../types/pypi';
+import { normalizePackageId } from '../utils/identity';
 import { CacheService } from './cache-service';
 
 export class PyPIService {
@@ -19,9 +20,6 @@ export class PyPIService {
         this.cacheService = cacheService;
     }
 
-    /**
-     * Fetch list of all package names from PyPI Simple API
-     */
     async fetchAllPackageNames(): Promise<PackageNameEntry[]> {
         try {
             const response = await this.cacheService.cachedGet<PyPISimpleResponse>(
@@ -30,57 +28,69 @@ export class PyPIService {
             );
 
             if (response?.projects && Array.isArray(response.projects)) {
-                return response.projects
-                    .map((project) => ({ name: project.name }))
-                    .sort((a, b) => a.name.localeCompare(b.name));
+                const unique = new Set<string>();
+                for (const project of response.projects) {
+                    unique.add(normalizePackageId(project.name));
+                }
+
+                return Array.from(unique)
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((name) => ({ name }));
             }
 
             throw new Error('PyPI API did not return a valid projects array');
         } catch (error: any) {
             console.error('Error fetching PyPI package names:', error.message);
-
-            // Return fallback list
             return FALLBACK_PACKAGES.map((name) => ({ name })).sort((a, b) =>
                 a.name.localeCompare(b.name)
             );
         }
     }
 
-    /**
-     * Fetch full package metadata from PyPI JSON API
-     */
-    async fetchPackageMetadata(
-        packageName: string
-    ): Promise<PyPIPackageResponse> {
-        const url = `${PYPI_API.JSON_API_URL}/${packageName}/json`;
-        return await this.cacheService.cachedGet<PyPIPackageResponse>(url);
+    async fetchPackageMetadata(packageName: string): Promise<PyPIPackageResponse> {
+        const packageId = normalizePackageId(packageName);
+        const url = `${PYPI_API.JSON_API_URL}/${packageId}/json`;
+        return this.cacheService.cachedGet<PyPIPackageResponse>(url);
     }
 
-    /**
-     * Fetch simplified package metadata for filtering
-     */
+    async fetchVersionMetadata(
+        packageName: string,
+        version: string
+    ): Promise<PyPIPackageResponse> {
+        const packageId = normalizePackageId(packageName);
+        const url = `${PYPI_API.JSON_API_URL}/${packageId}/${encodeURIComponent(version)}/json`;
+        return this.cacheService.cachedGet<PyPIPackageResponse>(url);
+    }
+
+    async fetchSimpleProject(packageName: string): Promise<PyPISimpleProjectResponse> {
+        const packageId = normalizePackageId(packageName);
+        const url = `${PYPI_API.SIMPLE_URL}${packageId}/`;
+        return this.cacheService.cachedGet<PyPISimpleProjectResponse>(url, {
+            Accept: PYPI_API.SIMPLE_ACCEPT_HEADER,
+        });
+    }
+
     async fetchSimplifiedMetadata(packageName: string): Promise<PackageMetadata> {
         try {
             const packageData = await this.fetchPackageMetadata(packageName);
             const info = packageData.info || {};
 
             return {
-                name: packageName,
+                name: normalizePackageId(packageName),
                 description: info.summary || info.description || '',
-                author: info.author || info.maintainer || '',
-                license: info.license || '',
-                homepage: info.home_page || info.project_url || '',
+                author: (info.author || info.maintainer || '') as string,
+                license: (info.license_expression || info.license || '') as string,
+                homepage: (info.home_page || info.project_url || '') as string,
                 keywords: info.keywords
-                    ? info.keywords.split(',').map((k) => k.trim())
+                    ? info.keywords.split(',').map((k) => k.trim()).filter(Boolean)
                     : [],
                 version: info.version || '',
                 classifiers: info.classifiers || [],
                 project_urls: info.project_urls || {},
             };
-        } catch (error: any) {
-            // Return minimal metadata if fetch fails
+        } catch {
             return {
-                name: packageName,
+                name: normalizePackageId(packageName),
                 description: '',
                 author: '',
                 license: '',
@@ -93,61 +103,41 @@ export class PyPIService {
         }
     }
 
-    /**
-     * Check if a package exists in PyPI
-     */
     async packageExists(packageName: string): Promise<boolean> {
         try {
             await this.fetchPackageMetadata(packageName);
             return true;
-        } catch (error: any) {
+        } catch {
             return false;
         }
     }
 
-    /**
-     * Get versions for a package
-     */
     async getPackageVersions(packageName: string): Promise<string[]> {
-        try {
-            const packageData = await this.fetchPackageMetadata(packageName);
-            return Object.keys(packageData.releases || {}).sort((a, b) => {
-                // Simple version comparison - newer versions typically later alphabetically
-                return b.localeCompare(a);
-            });
-        } catch (error: any) {
-            throw new Error(`Failed to fetch versions for ${packageName}: ${error.message}`);
-        }
-    }
+        const [packageData, simpleProject] = await Promise.all([
+            this.fetchPackageMetadata(packageName),
+            this.fetchSimpleProject(packageName),
+        ]);
 
-    /**
-     * Get specific version information
-     */
-    async getVersionInfo(packageName: string, version: string) {
-        try {
-            const packageData = await this.fetchPackageMetadata(packageName);
+        const versions = simpleProject.versions && simpleProject.versions.length > 0
+            ? simpleProject.versions
+            : Object.keys(packageData.releases || {});
+        const unique: string[] = [];
 
-            if (!packageData.releases || !packageData.releases[version]) {
-                return null;
+        for (const version of versions) {
+            if (!unique.includes(version)) {
+                unique.push(version);
             }
-
-            return packageData.releases[version];
-        } catch (error: any) {
-            throw new Error(
-                `Failed to fetch version ${version} for ${packageName}: ${error.message}`
-            );
         }
+
+        if (packageData.info.version && !unique.includes(packageData.info.version)) {
+            unique.push(packageData.info.version);
+        }
+
+        return unique;
     }
 
-    /**
-     * Get latest version of a package
-     */
     async getLatestVersion(packageName: string): Promise<string> {
-        try {
-            const packageData = await this.fetchPackageMetadata(packageName);
-            return packageData.info.version;
-        } catch (error: any) {
-            throw new Error(`Failed to fetch latest version for ${packageName}: ${error.message}`);
-        }
+        const packageData = await this.fetchPackageMetadata(packageName);
+        return packageData.info.version;
     }
 }

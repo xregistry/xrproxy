@@ -3,20 +3,27 @@
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'node:crypto';
 import { CheckpointService } from '../src/services/checkpoint-service';
 
+const workspaceRoot = path.join(__dirname, '.test-work');
 let tmpDir: string;
 let svc: CheckpointService;
 
 beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gomod-test-'));
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+    tmpDir = path.join(workspaceRoot, `checkpoint-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
     svc = new CheckpointService(tmpDir);
 });
 
 afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
 describe('CheckpointService', () => {
@@ -54,7 +61,6 @@ describe('CheckpointService', () => {
     });
 
     it('dedups overlapping entries at an equal-timestamp full-page boundary (cursor fix)', () => {
-        // First page fills exactly, all sharing one timestamp.
         const page1 = [
             { path: 'a.io/x', version: 'v1.0.0', timestamp: '2020-01-01T00:00:00Z' },
             { path: 'a.io/x', version: 'v1.1.0', timestamp: '2020-01-01T00:00:00Z' },
@@ -62,11 +68,9 @@ describe('CheckpointService', () => {
         expect(svc.mergeEntries(page1)).toBe(2);
         expect(svc.getEntryCount()).toBe(2);
 
-        // The cursor stays at the same timestamp, so the next page overlaps the
-        // previous one. Overlapping pairs must NOT inflate entryCount.
         const page2 = [
-            { path: 'a.io/x', version: 'v1.1.0', timestamp: '2020-01-01T00:00:00Z' }, // seen
-            { path: 'a.io/x', version: 'v1.2.0', timestamp: '2020-01-01T00:00:00Z' }, // new
+            { path: 'a.io/x', version: 'v1.1.0', timestamp: '2020-01-01T00:00:00Z' },
+            { path: 'a.io/x', version: 'v1.2.0', timestamp: '2020-01-01T00:00:00Z' },
         ];
         expect(svc.mergeEntries(page2)).toBe(1);
         expect(svc.getEntryCount()).toBe(3);
@@ -79,7 +83,6 @@ describe('CheckpointService', () => {
         expect(svc.getEntryCount()).toBe(1);
 
         const reloaded = new CheckpointService(tmpDir);
-        // Re-merging an already-persisted pair is a no-op for entryCount.
         expect(reloaded.mergeEntries([{ path: 'b.io/y', version: 'v2.0.0', timestamp: '2021-01-01T00:00:00Z' }])).toBe(0);
         expect(reloaded.getEntryCount()).toBe(1);
         expect(reloaded.getModule('b.io/y')?.versions).toHaveLength(1);
@@ -125,6 +128,19 @@ describe('CheckpointService', () => {
             'github.com/gorilla/mux',
             'github.com/pkg/errors',
         ]);
+    });
+
+    it('resolves hashed identities for case collisions', () => {
+        const laterPath = 'github.com/case/module';
+        svc.mergeEntries([
+            { path: 'github.com/Case/Module', version: 'v1.0.0', timestamp: '2024-01-01T00:00:00Z' },
+            { path: laterPath, version: 'v1.0.1', timestamp: '2024-01-02T00:00:00Z' },
+        ]);
+
+        const hashedId = `xh~${createHash('sha256').update(laterPath, 'utf8').digest('hex')}`;
+        expect(svc.getModuleIdentity('github.com/Case/Module').moduleId).toBe('Case:Module');
+        expect(svc.getModuleIdentity(laterPath).moduleId).toBe(hashedId);
+        expect(svc.resolveModulePath('github.com', hashedId)).toBe(laterPath);
     });
 
     it('filters by substring', () => {

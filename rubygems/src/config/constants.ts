@@ -25,7 +25,8 @@ export const CAPABILITIES = createRegistryCapabilities({
 export const GROUP_CONFIG = {
     TYPE: 'rubyregistries',
     TYPE_SINGULAR: 'rubyregistry',
-    ID: 'rubygems.org',
+    ID: 'rubygems',
+    SOURCE_URL: 'https://rubygems.org',
 } as const;
 
 export const RESOURCE_CONFIG = {
@@ -51,6 +52,7 @@ export const CACHE_CONFIG = {
 
 export const RUBYGEMS_API = {
     BASE_URL: 'https://rubygems.org/api/v1',
+    PUBLIC_URL: 'https://rubygems.org',
     USER_AGENT: 'xRegistry-RubyGems-Wrapper/1.0',
 } as const;
 

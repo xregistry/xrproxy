@@ -126,9 +126,9 @@ Once running, the unified bridge provides these endpoints at `http://localhost:8
 
 ### Registry-Specific Endpoints
 
-- **`GET /noderegistries`** - NPM packages (Node.js)
+- **`GET /nodescopes`** - npm packages grouped by scope (Node.js)
 - **`GET /pythonregistries`** - PyPI packages (Python)
-- **`GET /javaregistries`** - Maven packages (Java)
+- **`GET /javanamespaces`** - Maven packages grouped by `groupId` (Java)
 - **`GET /dotnetregistries`** - NuGet packages (.NET)
 - **`GET /containerregistries`** - OCI images (Containers)
 - **`GET /mcpproviders`** - MCP packages (Model Context Protocol)
@@ -158,7 +158,7 @@ Hugging Face truly bare authoritative repository IDs use the valid reserved `_` 
 curl http://localhost:8080/model
 
 # Browse NPM packages
-curl http://localhost:8080/noderegistries
+curl http://localhost:8080/nodescopes
 
 # Get capabilities from all registries
 curl http://localhost:8080/capabilities
@@ -198,7 +198,7 @@ curl http://localhost:8080/
 
 # Check all registries are merged
 curl http://localhost:8080/model | jq '.groups | keys'
-# Should return: ["containerregistries", "dotnetregistries", "javaregistries", "mcpproviders", "noderegistries", "pythonregistries"]
+# Should return: ["containerregistries", "dotnetregistries", "javanamespaces", "mcpproviders", "nodescopes", "pythonregistries"]
 ```
 
 ## 🐳 Docker Deployment
@@ -367,7 +367,7 @@ node --version  # Should be v16+
 cd bridge && npm run build
 
 # Check backend services are running
-curl http://localhost:3000/noderegistries
+curl http://localhost:3000/nodescopes
 curl http://localhost:3100/pythonregistries
 ```
 

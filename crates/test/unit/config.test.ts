@@ -7,6 +7,7 @@ test('parseCratesConfig defaults', () => {
   assert.equal(config.HOST, '0.0.0.0');
   assert.equal(config.PORT, 3700);
   assert.equal(config.UPSTREAM_URL, 'https://crates.io/');
+  assert.equal(config.UPSTREAM_INDEX_URL, 'https://index.crates.io/');
   assert.equal(config.FIXTURE_MODE, false);
   assert.equal(config.CACHE_DIR, './cache');
   assert.equal(config.CACHE_TTL_MS, 300_000);
@@ -20,14 +21,16 @@ test('parseCratesConfig overrides from environment', () => {
   const config = parseCratesConfig({
     PORT: '3701',
     UPSTREAM_URL: 'http://localhost:9999',
+    UPSTREAM_INDEX_URL: 'http://localhost:9998/index',
     FIXTURE_MODE: 'true',
-    CACHE_DIR: '/tmp/crates-cache',
+    CACHE_DIR: '.\\cache\\custom',
     CACHE_TTL_MS: '60000'
   });
   assert.equal(config.PORT, 3701);
   assert.equal(config.UPSTREAM_URL, 'http://localhost:9999/');
+  assert.equal(config.UPSTREAM_INDEX_URL, 'http://localhost:9998/index');
   assert.equal(config.FIXTURE_MODE, true);
-  assert.equal(config.CACHE_DIR, '/tmp/crates-cache');
+  assert.equal(config.CACHE_DIR, '.\\cache\\custom');
   assert.equal(config.CACHE_TTL_MS, 60_000);
 });
 
@@ -39,12 +42,13 @@ test('parseCratesConfig rejects invalid port', () => {
 
 test('parseCratesConfig rejects invalid URL protocol', () => {
   assert.throws(() => parseCratesConfig({ UPSTREAM_URL: 'ftp://crates.io' }), /UPSTREAM_URL must use one of/);
+  assert.throws(() => parseCratesConfig({ UPSTREAM_INDEX_URL: 'ftp://index.crates.io' }), /UPSTREAM_INDEX_URL must use one of/);
 });
 
-test('cratesConfigSchema has rustregistries port', () => {
+test('cratesConfigSchema exposes the sparse index URL setting', () => {
   const schema = cratesConfigSchema;
-  assert.ok(schema.PORT);
-  if (schema.PORT.type === 'integer') {
-    assert.equal(schema.PORT.default, 3700);
+  assert.ok(schema.UPSTREAM_INDEX_URL);
+  if (schema.UPSTREAM_INDEX_URL.type === 'url') {
+    assert.equal(schema.UPSTREAM_INDEX_URL.default, 'https://index.crates.io');
   }
 });

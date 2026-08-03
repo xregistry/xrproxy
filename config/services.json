@@ -9,7 +9,7 @@
       "directory": "npm",
       "port": 3100,
       "groupTypes": [
-        "noderegistries"
+        "nodescopes"
       ],
       "environment": {
         "PORT": "3100",
@@ -69,7 +69,7 @@
       "directory": "maven",
       "port": 3300,
       "groupTypes": [
-        "javaregistries"
+        "javanamespaces"
       ],
       "environment": {
         "PORT": "3300",

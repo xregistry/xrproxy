@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const search   = new SearchService(pubdev);
   const entityState = new EntityStateManager();
   const pkgSvc   = new PackageService(pubdev, entityState);
-  const regSvc   = new RegistryService(search, entityState);
+  const regSvc   = new RegistryService(search, entityState, config.UPSTREAM_URL.replace(/\/$/, ''));
 
   // Warm up package list before accepting traffic
   await search.initialize().catch(err =>

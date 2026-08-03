@@ -1,42 +1,29 @@
-/**
- * OCI xRegistry Wrapper Server
- * @fileoverview Main Express server implementing xRegistry 1.0 specification for OCI container registries
- */
-
 import express, { Application, Request, Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 import { EntityStateManager } from '../../shared/entity-state-manager';
 import { GROUP_CONFIG, RESOURCE_CONFIG, SERVER_CONFIG } from './config/constants';
 import { parseXRegistryFlags } from './middleware/xregistry-flags';
-import { createimageRoutes } from './routes/images';
-import { ImageService } from './services/image-service';
 import { OCIService, OCIServiceConfig } from './services/oci-service';
+import { ImageService } from './services/image-service';
 import { RegistryService } from './services/registry-service';
 import { OCIBackend } from './types/oci';
 import { XRegistryError, apiNotFound, errorToXRegistryError } from './utils/xregistry-errors';
 
-/**
- * Simple console logger
- */
 class Logger {
-    info(message: string, data?: any) {
+    info(message: string, data?: unknown): void {
         console.log(`[INFO] ${message}`, data ? JSON.stringify(data) : '');
     }
-    error(message: string, data?: any) {
+
+    error(message: string, data?: unknown): void {
         console.error(`[ERROR] ${message}`, data ? JSON.stringify(data) : '');
     }
-    warn(message: string, data?: any) {
+
+    warn(message: string, data?: unknown): void {
         console.warn(`[WARN] ${message}`, data ? JSON.stringify(data) : '');
-    }
-    debug(message: string, data?: any) {
-        console.debug(`[DEBUG] ${message}`, data ? JSON.stringify(data) : '');
     }
 }
 
-/**
- * Server configuration options
- */
 export interface ServerOptions {
     port?: number;
     host?: string;
@@ -44,77 +31,52 @@ export interface ServerOptions {
     cacheDir?: string;
 }
 
-/**
- * Main OCI xRegistry Server
- */
 export class OCIXRegistryServer {
-    private app: Application;
-    private ociService: OCIService;
-    private imageService: ImageService;
-    private registryService: RegistryService;
-    private logger: Logger;
-    private port: number;
-    private host: string;
+    private readonly app: Application;
+    private readonly ociService: OCIService;
+    private readonly imageService: ImageService;
+    private readonly registryService: RegistryService;
+    private readonly logger: Logger;
+    private readonly port: number;
+    private readonly host: string;
 
     constructor(options: ServerOptions = {}) {
         this.logger = new Logger();
         this.port = options.port || SERVER_CONFIG.DEFAULT_PORT;
-        this.host = options.host || '0.0.0.0';
+        this.host = options.host || SERVER_CONFIG.DEFAULT_HOST;
         this.app = express();
 
-        // Load backends from config file or use defaults
         const backends = this.loadBackends(options.backends);
-
-        // Initialize services
-        const baseUrl = `http://localhost:${this.port}`;
         const entityState = new EntityStateManager();
+        const baseUrl = `http://localhost:${this.port}`;
         const ociServiceConfig: OCIServiceConfig = {
             backends,
             baseUrl,
             entityState,
+            ...(options.cacheDir ? { cacheDir: options.cacheDir } : {}),
         };
-        if (options.cacheDir !== undefined) {
-            ociServiceConfig.cacheDir = options.cacheDir;
-        }
+
         this.ociService = new OCIService(ociServiceConfig);
-
-        this.imageService = new ImageService({
-            ociService: this.ociService,
-            baseUrl,
-        }, entityState);
-
-        this.registryService = new RegistryService({
-            imageService: this.imageService,
-            logger: this.logger,
-        }, entityState);
+        this.imageService = new ImageService({ ociService: this.ociService, baseUrl }, entityState);
+        this.registryService = new RegistryService({ imageService: this.imageService, logger: this.logger }, entityState);
 
         this.setupMiddleware();
         this.setupRoutes();
         this.setupErrorHandling();
     }
 
-    /**
-     * Load backends from config file
-     * Supports environment variables for credentials:
-     * - DOCKER_USERNAME / DOCKER_PASSWORD for docker.io
-     * - GHCR_TOKEN for ghcr.io
-     */
     private loadBackends(providedBackends?: OCIBackend[]): OCIBackend[] {
         if (providedBackends) {
             return providedBackends;
         }
 
-        // Try to load from backends.json file
         const backendsPath = path.join(process.cwd(), 'backends.json');
         if (fs.existsSync(backendsPath)) {
             try {
-                const backendsData = JSON.parse(fs.readFileSync(backendsPath, 'utf8'));
-                if (backendsData.backends && Array.isArray(backendsData.backends)) {
-                    // Inject credentials from environment variables
-                    const backends = backendsData.backends.map((backend: OCIBackend) => {
-                        const enrichedBackend = { ...backend };
-
-                        // Docker Hub credentials
+                const backendsData = JSON.parse(fs.readFileSync(backendsPath, 'utf8')) as { backends?: OCIBackend[] };
+                if (Array.isArray(backendsData.backends)) {
+                    return backendsData.backends.map((backend) => {
+                        const enrichedBackend: OCIBackend = { ...backend };
                         if (backend.id === 'docker.io') {
                             if (process.env.DOCKER_USERNAME) {
                                 enrichedBackend.username = process.env.DOCKER_USERNAME;
@@ -123,295 +85,155 @@ export class OCIXRegistryServer {
                                 enrichedBackend.password = process.env.DOCKER_PASSWORD;
                             }
                         }
-
-                        // GitHub Container Registry token
                         if (backend.id === 'ghcr.io' && process.env.GHCR_TOKEN) {
                             enrichedBackend.username = 'oauth2';
                             enrichedBackend.password = process.env.GHCR_TOKEN;
                         }
-
                         return enrichedBackend;
                     });
-
-                    this.logger.info(`Loaded ${backends.length} backends from backends.json`);
-                    const credentialsLoaded = backends.filter((b: OCIBackend) => b.username || b.password).length;
-                    if (credentialsLoaded > 0) {
-                        this.logger.info(`Credentials loaded from environment for ${credentialsLoaded} backends`);
-                    }
-                    return backends;
                 }
             } catch (error) {
-                this.logger.warn('Failed to load backends.json, using defaults', { error });
+                this.logger.warn('Failed to load backends.json, using defaults', error);
             }
         }
 
-        // Default backends
-        return [
-            {
-                id: 'mcr.microsoft.com',
-                name: 'Microsoft Container Registry',
-                url: 'https://mcr.microsoft.com',
-                apiVersion: 'v2',
-                description: 'Microsoft Container Registry',
-                enabled: true,
-                public: true,
-                catalogPath: '/v2/_catalog',
-            },
-        ];
+        return [{
+            id: 'mcr.microsoft.com',
+            name: 'Microsoft Container Registry',
+            url: 'https://mcr.microsoft.com',
+            apiVersion: 'v2',
+            description: 'Microsoft Container Registry',
+            enabled: true,
+            public: true,
+            catalogPath: '/v2/_catalog',
+        }];
     }
 
-    /**
-     * Setup middleware
-     */
     private setupMiddleware(): void {
-        // CORS
-        this.app.use((req, res, next) => {
+        this.app.use((_req, res, next) => {
             res.header('Access-Control-Allow-Origin', '*');
-            res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+            res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
             res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-            if (req.method === 'OPTIONS') {
-                res.sendStatus(204);
-            } else {
-                next();
-            }
+            next();
         });
-
-        // Body parser
         this.app.use(express.json());
         this.app.use(express.urlencoded({ extended: true }));
-
-        // Standard HTTP headers
-        this.app.use((_req, res, next) => {
-            res.setHeader('cache-control', 'public, max-age=300');
-            next();
-        });
-
-        // xRegistry request flags parsing middleware
         this.app.use(parseXRegistryFlags);
-
-        // Request logging
-        this.app.use((req, _res, next) => {
-            this.logger.info(`${req.method} ${req.path}`, {
-                query: req.query,
-                params: req.params,
-            });
-            next();
-        });
     }
 
-    /**
-     * Setup routes
-     */
     private setupRoutes(): void {
-        // Performance stats endpoint
-        this.app.get('/performance/stats', (_req: Request, res: Response) => {
-            res.json({
-                filterOptimizer: {
-                    twoStepFilteringEnabled: false,
-                    hasMetadataFetcher: false,
-                    indexedEntities: 0,
-                    nameIndexSize: 0,
-                    maxMetadataFetches: 0,
-                    cacheSize: 0,
-                    maxCacheAge: 0
-                },
-                packageCache: {
-                    size: 0
-                }
-            });
-        });
-
-        // Health check
         this.app.get('/health', (_req: Request, res: Response) => {
             res.json({
                 status: 'healthy',
                 service: 'oci-xregistry-wrapper',
                 timestamp: new Date().toISOString(),
-                backends: this.ociService.getBackends().map(b => ({
-                    id: b.id,
-                    name: b.name,
-                    enabled: b.enabled,
+                backends: this.ociService.getBackends().map((backend) => ({
+                    id: backend.id,
+                    name: backend.name,
+                    enabled: backend.enabled,
                 })),
             });
         });
 
-        // Registry root
         this.app.get('/', (req: Request, res: Response) => {
-            this.registryService.getRegistry(req, res);
+            void this.registryService.getRegistry(req, res);
         });
-
-        // Model and capabilities
         this.app.get('/model', (req: Request, res: Response) => {
-            this.registryService.getModel(req, res);
+            void this.registryService.getModel(req, res);
         });
-
         this.app.get('/capabilities', (req: Request, res: Response) => {
-            this.registryService.getCapabilities(req, res);
+            void this.registryService.getCapabilities(req, res);
         });
-
-        // Groups (backends) routes
         this.app.get(`/${GROUP_CONFIG.TYPE}`, (req: Request, res: Response) => {
-            this.registryService.getGroups(req, res);
+            void this.registryService.getGroups(req, res);
         });
-
         this.app.get(`/${GROUP_CONFIG.TYPE}/:groupId`, (req: Request, res: Response) => {
-            this.registryService.getGroup(req, res);
+            void this.registryService.getGroup(req, res);
         });
-
-        // Resources (images) routes
         this.app.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}`, (req: Request, res: Response) => {
-            this.registryService.getResources(req, res);
+            void this.registryService.getResources(req, res);
         });
-
         this.app.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}/:resourceId`, (req: Request, res: Response) => {
-            this.registryService.getResource(req, res);
+            void this.registryService.getResource(req, res);
         });
-
-        // Versions (tags) routes
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}/:resourceId/meta`, (req: Request, res: Response) => {
+            void this.registryService.getMeta(req, res);
+        });
         this.app.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}/:resourceId/versions`, (req: Request, res: Response) => {
-            this.registryService.getVersions(req, res);
+            void this.registryService.getVersions(req, res);
         });
-
         this.app.get(`/${GROUP_CONFIG.TYPE}/:groupId/${RESOURCE_CONFIG.TYPE}/:resourceId/versions/:versionId`, (req: Request, res: Response) => {
-            this.registryService.getVersion(req, res);
+            void this.registryService.getVersion(req, res);
         });
-
-        // Legacy image routes (if needed)
-        const imageRouter = createimageRoutes({
-            ImageService: this.imageService,
-            logger: this.logger,
-        });
-        this.app.use('/', imageRouter);
     }
 
-    /**
-     * Setup error handling per xRegistry RFC 9457 (Problem Details)
-     */
     private setupErrorHandling(): void {
-        // 405 Method Not Allowed - catch unsupported methods before 404
-        this.app.all('*', (req: Request, res: Response, next: any) => {
+        this.app.all('*', (req: Request, res: Response, next) => {
             if (['PUT', 'PATCH', 'POST', 'DELETE'].includes(req.method)) {
                 res.status(405).json({
                     type: 'about:blank',
                     title: 'Method Not Allowed',
                     status: 405,
                     detail: `${req.method} method not supported on ${req.path}`,
-                    instance: req.path
+                    instance: req.path,
                 });
-            } else {
-                next();
+                return;
             }
+            next();
         });
 
-        // 404 handler - xRegistry api_not_found
         this.app.use((req: Request, res: Response) => {
-            const error: XRegistryError = apiNotFound(
-                req.originalUrl || req.path,
-                `${req.method} ${req.path}`
-            );
-
-            this.logger.warn('API not found', {
-                method: req.method,
-                path: req.path,
-                instance: error.instance,
-            });
-
+            const error: XRegistryError = apiNotFound(req.originalUrl || req.path, `${req.method} ${req.path}`);
             res.status(error.status).json(error);
         });
 
-        // Global error handler - xRegistry internal_error
-        this.app.use((err: any, req: Request, res: Response, _next: any) => {
-            this.logger.error('Unhandled error', {
-                error: err.message,
-                stack: err.stack,
-                path: req.path,
-            });
-
-            // Check if error is already an XRegistryError
-            let xError: XRegistryError;
-            if (err.type && err.status && err.instance) {
-                xError = err as XRegistryError;
-            } else {
-                // Convert generic Error to XRegistryError
-                xError = errorToXRegistryError(err, req.originalUrl || req.path);
-            }
-
-            // Add stack trace in development
-            if (process.env.NODE_ENV === 'development') {
-                xError.stack = err.stack;
-            }
-
+        this.app.use((err: Error, req: Request, res: Response, _next: unknown) => {
+            const xError = errorToXRegistryError(err, req.originalUrl || req.path);
             res.status(xError.status).json(xError);
         });
     }
 
-    /**
-     * Start the server
-     */
     public async start(): Promise<void> {
-        return new Promise((resolve) => {
+        await new Promise<void>((resolve) => {
             this.app.listen(this.port, this.host, () => {
-                this.logger.info(`OCI xRegistry Wrapper started`, {
+                this.logger.info('OCI xRegistry Wrapper started', {
                     port: this.port,
                     host: this.host,
-                    url: `http://${this.host}:${this.port}`,
                     groupType: GROUP_CONFIG.TYPE,
                     resourceType: RESOURCE_CONFIG.TYPE,
-                    backends: this.ociService.getBackends().length,
                 });
                 resolve();
             });
         });
     }
 
-    /**
-     * Get Express app instance
-     */
     public getApp(): Application {
         return this.app;
     }
 }
 
-/**
- * Main entry point
- */
 if (require.main === module) {
-    // Parse command line arguments
     const args = process.argv.slice(2);
     let port = process.env.PORT ? parseInt(process.env.PORT, 10) : SERVER_CONFIG.DEFAULT_PORT;
-    let host = process.env.HOST || '0.0.0.0';
+    let host = process.env.HOST || SERVER_CONFIG.DEFAULT_HOST;
 
-    for (let i = 0; i < args.length; i++) {
-        if (args[i] === '--port' && i + 1 < args.length) {
-            const portArg = args[i + 1];
-            if (portArg) {
-                port = parseInt(portArg, 10);
-            }
-        } else if (args[i] === '--host' && i + 1 < args.length) {
-            const hostArg = args[i + 1];
-            if (hostArg) {
-                host = hostArg;
-            }
+    for (let index = 0; index < args.length; index += 1) {
+        if (args[index] === '--port' && args[index + 1]) {
+            port = parseInt(args[index + 1] as string, 10);
+        }
+        if (args[index] === '--host' && args[index + 1]) {
+            host = args[index + 1] as string;
         }
     }
 
     const server = new OCIXRegistryServer({ port, host });
-
-    server.start().catch((error) => {
+    void server.start().catch((error) => {
         console.error('Failed to start server:', error);
         process.exit(1);
     });
 
-    // Graceful shutdown
-    process.on('SIGTERM', () => {
-        console.log('SIGTERM received, shutting down gracefully...');
-        process.exit(0);
-    });
-
-    process.on('SIGINT', () => {
-        console.log('SIGINT received, shutting down gracefully...');
-        process.exit(0);
-    });
+    process.on('SIGTERM', () => process.exit(0));
+    process.on('SIGINT', () => process.exit(0));
 }
 
 export default OCIXRegistryServer;

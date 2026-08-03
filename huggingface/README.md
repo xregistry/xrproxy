@@ -51,9 +51,9 @@ All paths below the removed fixed `huggingface.co` group return **HTTP 410 Gone*
 
 ## Versions and caching
 
-Resource default versions and version IDs are immutable commit SHAs. Resource and Version lineage is emitted through the rc2 `ancestor` attribute. Branches/tags remain mutable pointers in the Resource Meta `refs` attribute. The model uses xRegistry's built-in Resource Version mechanism (`maxversions: 0`, `versionmode: manual`). The current upstream HEAD is a non-sticky default (`defaultversionsticky: false`).
+Resource default versions and version IDs are immutable commit SHAs. Resource and Version lineage is emitted through the rc2 `ancestor` attribute. Default resources expose the current commit's `siblings` file manifest, while Resource Meta carries repository-wide state such as `card_data`, `disabled`, `used_storage`, and `refs` with `branches`, `tags`, and `converts` including both short `name` and fully qualified Git `ref`. The model uses xRegistry's built-in Resource Version mechanism (`maxversions: 0`, `versionmode: manual`). The current upstream HEAD is a non-sticky default (`defaultversionsticky: false`).
 
-If anonymous refs or commit enrichment returns HTTP 401/403 while repository metadata still exposes a SHA, that SHA is materialized as a minimal Version. Resource, Meta, Versions collection, and exact Version reads therefore retain one resolvable default.
+If anonymous refs or commit enrichment returns HTTP 401/403 while repository metadata still exposes a SHA, that SHA is materialized as a minimal Version. Resource, Meta, Versions collection, and exact Version reads therefore retain one resolvable default. Dataset `description` is projected onto the xRegistry core field, and space runtime metadata is exposed through `runtime`, `subdomain`, and `host`.
 
 | Content | Cache policy |
 |---|---|

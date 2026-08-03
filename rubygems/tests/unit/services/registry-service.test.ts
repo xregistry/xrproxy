@@ -5,7 +5,14 @@ import modelData from '../../../model.json';
 import { GROUP_CONFIG } from '../../../src/config/constants';
 import { RegistryService } from '../../../src/services/registry-service';
 import { RubyGemsService } from '../../../src/services/rubygems-service';
-import { NOKOGIRI_GEM_FIXTURE, NOKOGIRI_VERSIONS_FIXTURE, RACK_GEM_FIXTURE, RACK_VERSIONS_FIXTURE } from '../../fixtures/rubygems-fixtures';
+import {
+    NOKOGIRI_GEM_FIXTURE,
+    NOKOGIRI_VERSIONS_FIXTURE,
+    RACK_GEM_FIXTURE,
+    RACK_OWNERS_FIXTURE,
+    RACK_REVERSE_DEPENDENCIES_FIXTURE,
+    RACK_VERSIONS_FIXTURE,
+} from '../../fixtures/rubygems-fixtures';
 
 const {
     assertGroupConforms,
@@ -50,6 +57,8 @@ describe('RegistryService', () => {
         rubygemsService = {
             getGem: jest.fn().mockResolvedValue(null),
             getVersions: jest.fn().mockResolvedValue([]),
+            getOwners: jest.fn().mockResolvedValue([]),
+            getReverseDependencies: jest.fn().mockResolvedValue([]),
             searchGems: jest.fn().mockResolvedValue([]),
         } as unknown as jest.Mocked<RubyGemsService>;
         registryService = new RegistryService(rubygemsService);
@@ -77,9 +86,10 @@ describe('RegistryService', () => {
         await registryService.getGroups(req, res);
 
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-            'rubygems.org': expect.objectContaining({
-                rubyregistryid: 'rubygems.org',
-                packagesurl: 'https://registry.example.com/rubyregistries/rubygems.org/packages',
+            rubygems: expect.objectContaining({
+                rubyregistryid: 'rubygems',
+                sourceurl: 'https://rubygems.org',
+                packagesurl: 'https://registry.example.com/rubyregistries/rubygems/packages',
             }),
         }));
     });
@@ -163,10 +173,7 @@ describe('RegistryService', () => {
     });
 
     test('stops when RubyGems repeats a full search page without progress', async () => {
-        const repeatedPage = Array.from(
-            { length: 30 },
-            (_, index) => ({ ...RACK_GEM_FIXTURE, name: `rack-${index}` }),
-        );
+        const repeatedPage = Array.from({ length: 30 }, (_, index) => ({ ...RACK_GEM_FIXTURE, name: `rack-${index}` }));
         rubygemsService.searchGems
             .mockResolvedValueOnce(repeatedPage)
             .mockResolvedValueOnce(repeatedPage);
@@ -187,10 +194,7 @@ describe('RegistryService', () => {
 
     test('rejects searches that exceed the safe upstream page limit', async () => {
         rubygemsService.searchGems.mockImplementation(async (_query, page) =>
-            Array.from(
-                { length: 30 },
-                (_, index) => ({ ...RACK_GEM_FIXTURE, name: `unrelated-${page}-${index}` }),
-            ),
+            Array.from({ length: 30 }, (_, index) => ({ ...RACK_GEM_FIXTURE, name: `unrelated-${page}-${index}` })),
         );
 
         const req = createRequest(
@@ -210,11 +214,7 @@ describe('RegistryService', () => {
     test('caps collection history hydration at the ten-Resource request budget', async () => {
         rubygemsService.getGem.mockImplementation(async (name: string) => ({ ...RACK_GEM_FIXTURE, name }));
         rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
-            { groupId: GROUP_CONFIG.ID },
-            { limit: '100', offset: '0' },
-        );
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { limit: '100', offset: '0' });
         const res = createResponse();
         await registryService.getResources(req, res);
         expect(rubygemsService.getVersions).toHaveBeenCalledTimes(10);
@@ -230,11 +230,7 @@ describe('RegistryService', () => {
             }
             return RACK_VERSIONS_FIXTURE;
         });
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
-            { groupId: GROUP_CONFIG.ID },
-            { search: 'anything', limit: '3', offset: '0' },
-        );
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { search: 'anything', limit: '3', offset: '0' });
         const res = createResponse();
         await registryService.getResources(req, res);
         const body = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
@@ -256,12 +252,14 @@ describe('RegistryService', () => {
             packageid: 'rack',
             versionid: expect.any(String),
             isdefault: true,
-            versionsurl: 'https://registry.example.com/rubyregistries/rubygems.org/packages/rack/versions',
+            versionsurl: 'https://registry.example.com/rubyregistries/rubygems/packages/rack/versions',
             ancestor: expect.any(String),
+            description: RACK_VERSIONS_FIXTURE[0]?.description,
+            full_name: 'rack-3.1.0',
         }));
         const call = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
         expect(call['versionscount']).toBe(RACK_VERSIONS_FIXTURE.length);
-        expect(call['metaurl']).toBe('https://registry.example.com/rubyregistries/rubygems.org/packages/rack/meta');
+        expect(call['metaurl']).toBe('https://registry.example.com/rubyregistries/rubygems/packages/rack/meta');
         expect(call).not.toHaveProperty('defaultversionurl');
     });
 
@@ -270,19 +268,12 @@ describe('RegistryService', () => {
         rubygemsService.getGem.mockResolvedValue(RACK_GEM_FIXTURE);
         rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
 
-        const collectionReq = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
-            { groupId: GROUP_CONFIG.ID },
-            { search: 'rack', limit: '1', offset: '0' },
-        );
+        const collectionReq = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { search: 'rack', limit: '1', offset: '0' });
         const collectionRes = createResponse();
         await registryService.getResources(collectionReq, collectionRes);
         const collection = (collectionRes.json as jest.Mock).mock.calls[0][0]['rack'] as Record<string, unknown>;
 
-        const exactReq = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack`,
-            { groupId: GROUP_CONFIG.ID, name: 'rack' },
-        );
+        const exactReq = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack`, { groupId: GROUP_CONFIG.ID, name: 'rack' });
         const exactRes = createResponse();
         await registryService.getResource(exactReq, exactRes);
         const exact = (exactRes.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
@@ -290,39 +281,37 @@ describe('RegistryService', () => {
         expect(collection).toEqual(exact);
     });
 
-    test('returns complete rc2 resource meta from the canonical snapshot', async () => {
+    test('returns spec-conformant resource meta from the canonical snapshot', async () => {
         rubygemsService.getGem.mockResolvedValue(RACK_GEM_FIXTURE);
         rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack/meta`,
-            { groupId: GROUP_CONFIG.ID, name: 'rack' },
-        );
+        rubygemsService.getOwners.mockResolvedValue(RACK_OWNERS_FIXTURE);
+        rubygemsService.getReverseDependencies.mockResolvedValue(RACK_REVERSE_DEPENDENCIES_FIXTURE);
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack/meta`, { groupId: GROUP_CONFIG.ID, name: 'rack' });
         const res = createResponse();
 
         await registryService.getMeta(req, res);
 
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
             packageid: 'rack',
-            xid: '/rubyregistries/rubygems.org/packages/rack/meta',
+            xid: '/rubyregistries/rubygems/packages/rack/meta',
             readonly: true,
             compatibility: 'none',
             defaultversionid: '3.1.0',
             defaultversionsticky: false,
             downloads: RACK_GEM_FIXTURE.downloads,
+            project_uri: RACK_GEM_FIXTURE.project_uri,
+            owners: RACK_OWNERS_FIXTURE,
+            reverse_dependencies: RACK_REVERSE_DEPENDENCIES_FIXTURE,
         }));
         const meta = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
         expect(meta['defaultversionurl']).toContain('/packages/rack/versions/3.1.0');
+        expect(meta).not.toHaveProperty('homepage_uri');
     });
 
     test('includes versionscount when inline=versions is requested', async () => {
         rubygemsService.getGem.mockResolvedValue(RACK_GEM_FIXTURE);
         rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
-
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack`,
-            { groupId: GROUP_CONFIG.ID, name: 'rack' },
-            { inline: 'versions' },
-        );
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack`, { groupId: GROUP_CONFIG.ID, name: 'rack' }, { inline: 'versions' });
         const res = createResponse();
 
         await registryService.getResource(req, res);
@@ -336,58 +325,29 @@ describe('RegistryService', () => {
     test('emits fixture-backed group, Resource, Meta, and Version entities conforming to its runtime model', async () => {
         rubygemsService.getGem.mockResolvedValue(RACK_GEM_FIXTURE);
         rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
+        rubygemsService.getOwners.mockResolvedValue(RACK_OWNERS_FIXTURE);
+        rubygemsService.getReverseDependencies.mockResolvedValue(RACK_REVERSE_DEPENDENCIES_FIXTURE);
 
         const groupRes = createResponse();
-        await registryService.getGroup(
-            createRequest('/rubyregistries/rubygems.org', { groupId: GROUP_CONFIG.ID }),
-            groupRes,
-        );
-        assertGroupConforms(
-            modelData,
-            'rubyregistries',
-            (groupRes.json as jest.Mock).mock.calls[0][0],
-            'rubygems.group',
-        );
+        await registryService.getGroup(createRequest('/rubyregistries/rubygems', { groupId: GROUP_CONFIG.ID }), groupRes);
+        assertGroupConforms(modelData, 'rubyregistries', (groupRes.json as jest.Mock).mock.calls[0][0], 'rubygems.group');
 
         const resourceRes = createResponse();
-        await registryService.getResource(
-            createRequest('/rubyregistries/rubygems.org/packages/rack', { groupId: GROUP_CONFIG.ID, name: 'rack' }),
-            resourceRes,
-        );
-        assertResourceConforms(
-            modelData,
-            'rubyregistries',
-            'packages',
-            (resourceRes.json as jest.Mock).mock.calls[0][0],
-            'rubygems.resource',
-        );
+        await registryService.getResource(createRequest('/rubyregistries/rubygems/packages/rack', { groupId: GROUP_CONFIG.ID, name: 'rack' }), resourceRes);
+        assertResourceConforms(modelData, 'rubyregistries', 'packages', (resourceRes.json as jest.Mock).mock.calls[0][0], 'rubygems.resource');
 
         const metaRes = createResponse();
-        await registryService.getMeta(
-            createRequest('/rubyregistries/rubygems.org/packages/rack/meta', { groupId: GROUP_CONFIG.ID, name: 'rack' }),
-            metaRes,
-        );
-        assertMetaConforms(
-            modelData,
-            'rubyregistries',
-            'packages',
-            (metaRes.json as jest.Mock).mock.calls[0][0],
-            'rubygems.meta',
-        );
+        await registryService.getMeta(createRequest('/rubyregistries/rubygems/packages/rack/meta', { groupId: GROUP_CONFIG.ID, name: 'rack' }), metaRes);
+        assertMetaConforms(modelData, 'rubyregistries', 'packages', (metaRes.json as jest.Mock).mock.calls[0][0], 'rubygems.meta');
 
         const versionsRes = createResponse();
-        await registryService.getVersions(
-            createRequest('/rubyregistries/rubygems.org/packages/rack/versions', { groupId: GROUP_CONFIG.ID, name: 'rack' }),
-            versionsRes,
-        );
+        await registryService.getVersions(createRequest('/rubyregistries/rubygems/packages/rack/versions', { groupId: GROUP_CONFIG.ID, name: 'rack' }), versionsRes);
         for (const [id, version] of Object.entries((versionsRes.json as jest.Mock).mock.calls[0][0])) {
             assertVersionConforms(modelData, 'rubyregistries', 'packages', version, `rubygems.version.${id}`);
         }
         const resource = (resourceRes.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
         const versions = (versionsRes.json as jest.Mock).mock.calls[0][0] as Record<string, Record<string, unknown>>;
-        assertResourceProjectsVersion(
-            modelData, 'rubyregistries', 'packages', resource, versions[String(resource['versionid'])], 'rubygems.resource',
-        );
+        assertResourceProjectsVersion(modelData, 'rubyregistries', 'packages', resource, versions[String(resource['versionid'])], 'rubygems.resource');
     });
 
     test('returns version IDs with platform suffixes when needed', async () => {
@@ -401,6 +361,7 @@ describe('RegistryService', () => {
 
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
             '1.18.0': expect.objectContaining({ platform: 'ruby', ancestor: expect.any(String) }),
+            '1.18.0-java': expect.objectContaining({ platform: 'java' }),
             '1.18.0-x86_64-linux': expect.objectContaining({ platform: 'x86_64-linux' }),
             '1.18.0-arm64-darwin': expect.objectContaining({ platform: 'arm64-darwin' }),
         }));
@@ -410,10 +371,7 @@ describe('RegistryService', () => {
         rubygemsService.getGem.mockResolvedValue(NOKOGIRI_GEM_FIXTURE);
         rubygemsService.getVersions.mockResolvedValue(NOKOGIRI_VERSIONS_FIXTURE);
 
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/nokogiri/versions/1.18.0-arm64-darwin`,
-            { groupId: GROUP_CONFIG.ID, name: 'nokogiri', versionId: '1.18.0-arm64-darwin' },
-        );
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/nokogiri/versions/1.18.0-arm64-darwin`, { groupId: GROUP_CONFIG.ID, name: 'nokogiri', versionId: '1.18.0-arm64-darwin' });
         const res = createResponse();
 
         await registryService.getVersion(req, res);

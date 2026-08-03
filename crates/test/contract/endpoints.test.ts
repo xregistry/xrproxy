@@ -26,7 +26,8 @@ async function startTestServer(): Promise<{ readonly base: string; readonly clos
         ttlMs: 0,
         negativeTtlMs: 0,
         staleIfErrorMs: 0,
-        cacheDir: './cache/test'
+        cacheDir: './cache/test',
+        sourceUrl: 'https://index.crates.io'
       });
     },
     errorResponse: mapError
@@ -98,7 +99,7 @@ test('GET / returns registry root', async () => {
     const response = await fetch(`${server.base}/`);
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
-    assert.equal(body['registryid'], 'crates.io');
+    assert.equal(body['registryid'], 'crates-io');
     assert.ok(typeof body['rustregistriesurl'] === 'string');
     assert.equal(body['rustregistriescount'], 1);
   } finally {
@@ -106,14 +107,15 @@ test('GET / returns registry root', async () => {
   }
 });
 
-test('GET /rustregistries/crates.io omits non-authoritative resource count', async () => {
+test('GET /rustregistries/crates-io returns the crates-io projection', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io`);
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
-    // crates.io has 175k+ crates; a page-bounded proxy cannot emit an authoritative count
-    assert.equal(body['cratescount'], undefined, 'group must not emit cratescount');
+    assert.equal(body['rustregistryid'], 'crates-io');
+    assert.equal(body['sourceurl'], 'https://index.crates.io');
+    assert.equal(body['cratescount'], undefined, 'group must not emit a synthetic cratescount');
     assert.ok(typeof body['cratesurl'] === 'string');
   } finally {
     await server.close();
@@ -126,20 +128,7 @@ test('GET /rustregistries returns group collection', async () => {
     const response = await fetch(`${server.base}/rustregistries`);
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
-    assert.ok(body['crates.io'], 'crates.io group must be present');
-  } finally {
-    await server.close();
-  }
-});
-
-test('GET /rustregistries/crates.io returns single group', async () => {
-  const server = await startTestServer();
-  try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io`);
-    assert.equal(response.status, 200);
-    const body = await response.json() as Record<string, unknown>;
-    assert.ok(typeof body['cratesurl'] === 'string');
-    assert.equal(body['epoch'], 1);
+    assert.ok(body['crates-io'], 'crates-io group must be present');
   } finally {
     await server.close();
   }
@@ -157,40 +146,108 @@ test('GET /rustregistries/unknown returns 404', async () => {
   }
 });
 
-test('GET /rustregistries/crates.io/crates returns crate list', async () => {
+test('GET /rustregistries/crates-io/crates returns spec-shaped crate resources', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates`);
     assert.equal(response.status, 200);
-    const body = await response.json() as Record<string, unknown>;
+    const body = await response.json() as Record<string, Record<string, unknown>>;
     assert.ok(body['serde'], 'serde fixture must be present');
     assert.ok(body['tokio'], 'tokio fixture must be present');
+    assert.equal(body['serde']?.versionid, '1.0.218');
+    assert.equal((body['serde']?.meta as Record<string, unknown>).default_version, '1.0.218');
+    assert.equal(body['tokio']?.versionid, '1.45.1~exp.sha.1');
   } finally {
     await server.close();
   }
 });
 
-test('GET /rustregistries/crates.io/crates/serde returns crate', async () => {
+test('GET /rustregistries/crates-io/crates/serde returns default-version fields at the resource root', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/serde`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/serde`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    const meta = body['meta'] as Record<string, unknown>;
+    assert.equal(body['crateid'], 'serde');
+    assert.equal(body['versionid'], '1.0.218');
+    assert.equal(body['downloads'], 3_000_000);
+    assert.equal(body['createdat'], '2024-12-01T00:00:00.000Z');
+    assert.equal(body['modifiedat'], '2024-12-01T00:00:00.000Z');
+    assert.equal(body['max_version'], undefined, 'deprecated crate-level pointers belong in meta');
+    assert.equal(body['recent_downloads'], undefined, 'crate statistics belong in meta');
+    assert.equal(body['owners'], undefined, 'owners belong in meta');
+    assert.equal(body['crate_links'], undefined, 'crate links belong in meta');
+    assert.equal(body['links'], undefined, 'links was renamed to crate_links in meta');
+    assert.equal(body['isdefault'], undefined, 'resource root must not expose version-only isdefault');
+    assert.equal(body['immutable'], undefined, 'resource root must not expose version-only immutable');
+    assert.equal(body['versionscount'], 2);
+    assert.ok(typeof body['metaurl'] === 'string');
+    assert.equal(meta['default_version'], '1.0.218');
+    assert.equal(meta['max_version'], '1.0.219');
+    assert.equal(meta['max_stable_version'], '1.0.219');
+    assert.equal(meta['newest_version'], '1.0.219');
+    assert.equal(meta['downloads'], 450_000_000);
+    assert.equal(meta['recent_downloads'], 12_000_000);
+    assert.equal(meta['num_versions'], 2);
+    assert.equal(meta['yanked'], false);
+    assert.equal(meta['trustpub_only'], true);
+    assert.equal(meta['defaultversionid'], '1.0.218');
+    assert.equal(meta['defaultversionsticky'], false);
+    assert.equal(meta['createdat'], '2015-01-17T17:47:12.000Z');
+    assert.equal(meta['modifiedat'], '2025-01-02T00:00:00.000Z');
+    assert.deepEqual(meta['owners'], [
+      {
+        id: 3618,
+        login: 'dtolnay',
+        name: 'David Tolnay',
+        kind: 'user',
+        url: 'https://github.com/dtolnay',
+        avatar: 'https://avatars.githubusercontent.com/u/1940490?v=4'
+      },
+      {
+        id: 8138,
+        login: 'github:serde-rs:publish',
+        name: 'publish',
+        kind: 'team',
+        url: 'https://github.com/serde-rs',
+        avatar: 'https://avatars.githubusercontent.com/u/11965399?v=4'
+      }
+    ]);
+    assert.deepEqual(meta['crate_links'], {
+      version_downloads: '/api/v1/crates/serde/downloads',
+      versions: '/api/v1/crates/serde/versions',
+      owners: '/api/v1/crates/serde/owners',
+      owner_team: '/api/v1/crates/serde/owner_team',
+      owner_user: '/api/v1/crates/serde/owner_user',
+      reverse_dependencies: '/api/v1/crates/serde/reverse_dependencies'
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /rustregistries/crates-io/crates/serde/meta returns the crate meta document', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/serde/meta`);
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body['crateid'], 'serde');
-    assert.equal(body['versionid'], '1.0.219');
-    assert.equal(body['isdefault'], true);
-    assert.equal(body['max_version'], '1.0.219');
-    assert.equal(body['immutable'], undefined, 'crate-level should not have immutable flag');
-    assert.ok(typeof body['versionsurl'] === 'string');
+    assert.equal(body['readonly'], true);
+    assert.equal(body['compatibility'], 'none');
+    assert.equal(body['defaultversionsticky'], false);
+    assert.equal(body['xid'], '/rustregistries/crates-io/crates/serde/meta');
+    assert.equal(body['ancestor'], undefined);
   } finally {
     await server.close();
   }
 });
 
-test('GET /rustregistries/crates.io/crates/unknown returns 404', async () => {
+test('GET /rustregistries/crates-io/crates/unknown returns 404', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/nonexistent-xyz-crate`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/nonexistent-xyz-crate`);
     assert.equal(response.status, 404);
     const body = await response.json() as { error: string };
     assert.equal(body.error, 'not_found');
@@ -199,33 +256,64 @@ test('GET /rustregistries/crates.io/crates/unknown returns 404', async () => {
   }
 });
 
-test('GET /rustregistries/crates.io/crates/serde/versions returns version list', async () => {
+test('GET /rustregistries/crates-io/crates/serde/versions returns yanked and default versions keyed by versionid', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/serde/versions`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/serde/versions`);
     assert.equal(response.status, 200);
-    const body = await response.json() as Record<string, unknown>;
+    const body = await response.json() as Record<string, Record<string, unknown>>;
     assert.ok(body['1.0.219'], '1.0.219 version must be present');
-    const v = body['1.0.219'] as Record<string, unknown>;
-    assert.equal(v['immutable'], true, 'version must be immutable');
-    assert.equal(v['isdefault'], true, '1.0.219 must be default');
+    assert.ok(body['1.0.218'], '1.0.218 version must be present');
+    assert.equal(body['1.0.219']?.immutable, true, 'version must be immutable');
+    assert.equal(body['1.0.219']?.isdefault, false, 'yanked 1.0.219 must not be default');
+    assert.equal(body['1.0.219']?.yanked, true, 'yanked versions remain listed');
+    assert.equal(body['1.0.218']?.isdefault, true, 'default_version drives isdefault');
   } finally {
     await server.close();
   }
 });
 
-test('GET version detail returns full version object', async () => {
+test('GET version detail returns full version object with dependencies and provenance', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/serde/versions/1.0.219`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/serde/versions/1.0.218`);
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
-    assert.equal(body['versionid'], '1.0.219');
+    assert.equal(body['versionid'], '1.0.218');
     assert.equal(body['immutable'], true);
     assert.equal(body['yanked'], false);
     assert.equal(body['license'], 'MIT OR Apache-2.0');
+    assert.equal(body['cksum'], '2182182182182182182182182182182182182182182182182182182182182182');
+    assert.deepEqual(body['features2'], { unstable: ['dep:serde_derive'] });
+    assert.deepEqual(body['dependencies'], [{
+      name: 'serde_derive_alias',
+      req: '^1.0',
+      features: ['std'],
+      optional: true,
+      default_features: false,
+      target: 'cfg(unix)',
+      kind: 'dev',
+      registry: 'https://example.invalid/index',
+      package: 'serde_derive'
+    }]);
+    assert.deepEqual(body['published_by'], undefined);
     assert.ok(body['self']);
     assert.ok(body['xid']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('build-metadata version routes use ~ in versionid while preserving num', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/tokio/versions/1.45.1~exp.sha.1`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body['versionid'], '1.45.1~exp.sha.1');
+    assert.equal(body['num'], '1.45.1+exp.sha.1');
+    assert.equal(body['isdefault'], true);
+    assert.equal(body['lib_links'], 'tokio_native');
   } finally {
     await server.close();
   }
@@ -234,7 +322,7 @@ test('GET version detail returns full version object', async () => {
 test('GET unknown version returns 404', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/serde/versions/0.0.0`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/serde/versions/0.0.0`);
     assert.equal(response.status, 404);
   } finally {
     await server.close();
@@ -244,7 +332,7 @@ test('GET unknown version returns 404', async () => {
 test('pagination params are bounded — limit above MAX_PAGE_SIZE returns max', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?limit=9999`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates?limit=9999`);
     assert.equal(response.status, 200);
   } finally {
     await server.close();
@@ -254,8 +342,8 @@ test('pagination params are bounded — limit above MAX_PAGE_SIZE returns max', 
 test('crate collection honors offset pagination and emits navigation links', async () => {
   const server = await startTestServer();
   try {
-    const first = await fetch(`${server.base}/rustregistries/crates.io/crates?offset=0&limit=1`);
-    const second = await fetch(`${server.base}/rustregistries/crates.io/crates?offset=1&limit=1`);
+    const first = await fetch(`${server.base}/rustregistries/crates-io/crates?offset=0&limit=1`);
+    const second = await fetch(`${server.base}/rustregistries/crates-io/crates?offset=1&limit=1`);
     const firstBody = await first.json() as Record<string, unknown>;
     const secondBody = await second.json() as Record<string, unknown>;
     assert.deepEqual(Object.keys(firstBody), ['serde']);
@@ -270,7 +358,7 @@ test('crate collection honors offset pagination and emits navigation links', asy
 test('crate collection supports name prefix filters', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?filter=name=ser*`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates?filter=name=ser*`);
     const body = await response.json() as Record<string, unknown>;
     assert.deepEqual(Object.keys(body), ['serde']);
   } finally {
@@ -281,7 +369,7 @@ test('crate collection supports name prefix filters', async () => {
 test('name prefix filtering paginates over matches rather than upstream pages', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?filter=name=tok*&offset=0&limit=1`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates?filter=name=tok*&offset=0&limit=1`);
     const body = await response.json() as Record<string, unknown>;
     assert.deepEqual(Object.keys(body), ['tokio']);
     assert.equal(response.headers.get('link'), null);
@@ -293,7 +381,7 @@ test('name prefix filtering paginates over matches rather than upstream pages', 
 test('name prefix filtering rejects offsets outside the crates.io search window', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates?filter=name=tok*&offset=1000&limit=1`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates?filter=name=tok*&offset=1000&limit=1`);
     assert.equal(response.status, 400);
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body['error'], 'invalid_offset');
@@ -307,7 +395,7 @@ test('name prefix filtering rejects offsets outside the crates.io search window'
 test('version collection honors offset pagination', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch(`${server.base}/rustregistries/crates.io/crates/serde/versions?offset=1&limit=1`);
+    const response = await fetch(`${server.base}/rustregistries/crates-io/crates/serde/versions?offset=1&limit=1`);
     const body = await response.json() as Record<string, unknown>;
     assert.deepEqual(Object.keys(body), ['1.0.218']);
     assert.match(response.headers.get('link') ?? '', /rel="prev"/);

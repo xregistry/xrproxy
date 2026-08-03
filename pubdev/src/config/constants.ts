@@ -3,7 +3,7 @@
  */
 
 import { type Request } from 'express';
-import { createRegistryCapabilities, parseConfig, proxyConfigSchema, type ParsedConfig } from "@xregistry/registry-core";
+import { createRegistryCapabilities, parseConfig, proxyConfigSchema, type ParsedConfig } from '@xregistry/registry-core';
 import model from '../../model.json';
 
 /**
@@ -11,14 +11,18 @@ import model from '../../model.json';
  */
 export const pubdevConfigSchema = {
   ...proxyConfigSchema,
-  PORT:         { type: 'integer', default: 4200,    min: 1, max: 65535 },
-  UPSTREAM_URL: { type: 'url',     default: 'https://pub.dev', protocols: ['https:', 'http:'] },
+  PORT:         { type: 'integer', default: 4200, min: 1, max: 65535 },
+  UPSTREAM_URL: { type: 'url', default: 'https://pub.dev', protocols: ['https:', 'http:'] },
 } as const;
 
 export type PubDevConfig = ParsedConfig<typeof pubdevConfigSchema>;
 
 export function parsePubDevConfig(env: NodeJS.ProcessEnv = process.env): PubDevConfig {
   return parseConfig(pubdevConfigSchema, env);
+}
+
+export function normalizeSourceUrl(url: string): string {
+  return url.replace(/\/+$/, '');
 }
 
 /**
@@ -38,13 +42,13 @@ export function getBaseUrl(req: Request): string {
  * xRegistry metadata
  */
 export const REGISTRY_METADATA = {
-  REGISTRY_ID:          'pubdev-wrapper',
-  GROUP_TYPE:           'dartregistries',
-  GROUP_TYPE_SINGULAR:  'dartregistry',
-  GROUP_ID:             'pub.dev',
-  RESOURCE_TYPE:        'packages',
-  RESOURCE_TYPE_SINGULAR: 'package',
-  SPEC_VERSION:         '1.0-rc2',
+  REGISTRY_ID:             'pubdev-wrapper',
+  GROUP_TYPE:              'dartregistries',
+  GROUP_TYPE_SINGULAR:     'dartregistry',
+  GROUP_ID:                'pub',
+  RESOURCE_TYPE:           'packages',
+  RESOURCE_TYPE_SINGULAR:  'package',
+  SPEC_VERSION:            '1.0-rc2',
 } as const;
 
 /**
@@ -80,6 +84,6 @@ export const MODEL = model;
  * Capabilities
  */
 export const CAPABILITIES = createRegistryCapabilities({
-  flags: ["filter", "sort"],
-  versionmodes: ["manual"],
+  flags: ['filter', 'sort'],
+  versionmodes: ['manual'],
 });

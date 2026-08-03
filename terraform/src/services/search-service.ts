@@ -2,7 +2,7 @@ import { isUpstreamError } from '@xregistry/registry-core';
 /** In-memory discovery catalogue for the fixed Terraform registry host. */
 
 import { decodeModuleIdentity, decodeProviderIdentity, encodeModuleId, SERVER_CONFIG } from '../config/constants';
-import { ModuleEntry, ProviderEntry } from '../types/terraform';
+import { ModuleEntry, ProviderEntry, TFTerraformDiscovery } from '../types/terraform';
 import { TerraformService } from './terraform-service';
 
 export interface TerraformNamespaceSummary {
@@ -25,6 +25,8 @@ export class SearchService {
     private readonly resolvedProviders = new Map<string, ProviderEntry>();
     private readonly resolvedModules = new Map<string, ModuleEntry>();
     private readonly resolvedNamespaces = new Map<string, string>();
+    private serviceDiscovery: TFTerraformDiscovery = {};
+    private serviceDiscoveryLoaded = false;
     private lastProviderRefresh = 0;
     private lastModuleRefresh = 0;
     private readonly refreshInterval: number;
@@ -36,8 +38,19 @@ export class SearchService {
 
     async initialize(): Promise<void> {
         console.log('[INFO] Initializing Terraform search service...');
+        await this.loadServiceDiscovery();
         await Promise.all([this.refreshProviders(), this.refreshModules()]);
         this.schedulePeriodicRefresh();
+    }
+
+    getServiceDiscovery(): Readonly<TFTerraformDiscovery> {
+        return this.serviceDiscovery;
+    }
+
+    private async loadServiceDiscovery(): Promise<void> {
+        if (this.serviceDiscoveryLoaded) return;
+        this.serviceDiscoveryLoaded = true;
+        this.serviceDiscovery = await this.tfService.fetchServiceDiscovery() ?? {};
     }
 
     private schedulePeriodicRefresh(): void {
@@ -56,6 +69,12 @@ export class SearchService {
 
     private async refreshProviders(): Promise<void> {
         try {
+            if (!this.serviceDiscoveryLoaded) await this.loadServiceDiscovery();
+            if (!this.serviceDiscovery['providers.v1']) {
+                this.providerCache = [];
+                this.lastProviderRefresh = Date.now();
+                return;
+            }
             const discovered = await this.tfService.fetchProviderPage(1, 100);
             this.providerCache = this.mergeProviders(discovered, [...this.resolvedProviders.values()]);
             this.lastProviderRefresh = Date.now();
@@ -67,6 +86,12 @@ export class SearchService {
 
     private async refreshModules(): Promise<void> {
         try {
+            if (!this.serviceDiscoveryLoaded) await this.loadServiceDiscovery();
+            if (!this.serviceDiscovery['modules.v1']) {
+                this.moduleCache = [];
+                this.lastModuleRefresh = Date.now();
+                return;
+            }
             const discovered = await this.tfService.fetchModulePage(0, 100);
             this.moduleCache = this.mergeModules(discovered, [...this.resolvedModules.values()]);
             this.lastModuleRefresh = Date.now();
@@ -108,7 +133,7 @@ export class SearchService {
             const namespace = preferredCase(current.namespace, candidate.namespace);
             const name = preferredCase(current.name, candidate.name);
             const provider = preferredCase(current.provider, candidate.provider);
-            merged.set(key, { ...current, namespace, name, provider, id: encodeModuleId(name, provider) });
+            merged.set(key, { ...current, namespace, name, provider, id: encodeModuleId(namespace, name, provider) });
         }
         return [...merged.values()].sort((a, b) =>
             a.namespace.localeCompare(b.namespace, undefined, { sensitivity: 'base' }) ||
@@ -131,7 +156,7 @@ export class SearchService {
     }
 
     registerModule(namespace: string, name: string, provider: string): void {
-        const entry = { namespace, name, provider, id: encodeModuleId(name, provider) };
+        const entry = { namespace, name, provider, id: encodeModuleId(namespace, name, provider) };
         this.resolvedModules.set(`${namespace}/${name}/${provider}`.toLowerCase(), entry);
         this.rememberNamespace(namespace);
         this.moduleCache = this.mergeModules(this.moduleCache, [entry]);
@@ -175,6 +200,7 @@ export class SearchService {
     }
 
     async resolveNamespace(namespace: string): Promise<TerraformNamespaceSummary | null> {
+        if (!this.serviceDiscoveryLoaded) await this.loadServiceDiscovery();
         const cached = this.getNamespaces().find(entry => entry.namespace.toLowerCase() === namespace.toLowerCase());
         if (cached) return cached;
         const canonical = await this.tfService.findNamespace(namespace);
@@ -190,6 +216,7 @@ export class SearchService {
     }
 
     async providerExists(namespace: string, type: string): Promise<boolean> {
+        if (!this.serviceDiscoveryLoaded) await this.loadServiceDiscovery();
         const cached = this.providerCache.find(entry =>
             entry.namespace.toLowerCase() === namespace.toLowerCase() && entry.type.toLowerCase() === type.toLowerCase(),
         );
@@ -218,6 +245,7 @@ export class SearchService {
     }
 
     async moduleExists(namespace: string, name: string, provider: string): Promise<boolean> {
+        if (!this.serviceDiscoveryLoaded) await this.loadServiceDiscovery();
         const cached = this.moduleCache.find(entry =>
             entry.namespace.toLowerCase() === namespace.toLowerCase() &&
             entry.name.toLowerCase() === name.toLowerCase() &&
@@ -234,7 +262,7 @@ export class SearchService {
         const source = response.modules?.[0]?.source;
         const parts = source?.split('/') ?? [];
         const canonical = parts.length === 3
-            ? decodeModuleIdentity(parts[0] ?? '', encodeModuleId(parts[1] ?? '', parts[2] ?? ''))
+            ? decodeModuleIdentity(parts[0] ?? '', encodeModuleId(parts[0] ?? '', parts[1] ?? '', parts[2] ?? ''))
             : null;
         if (!canonical) return false;
         if (canonical.namespace !== namespace || canonical.name !== name || canonical.provider !== provider) return false;

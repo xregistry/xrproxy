@@ -11,13 +11,13 @@ Terraform namespaces are xRegistry groups:
 | provider `hashicorp/aws` | `hashicorp` | `aws` | `/terraformregistries/hashicorp/providers/aws` |
 | module `terraform-aws-modules/vpc/aws` | `terraform-aws-modules` | `vpc~aws` | `/terraformregistries/terraform-aws-modules/modules/vpc~aws` |
 
-Provider IDs are their type/name. A module's native `name/provider` pair is encoded as `name~provider`. Terraform registry identifiers permit alphanumerics, `_`, and `-`, but not `~`, making this encoding reversible and collision-free. Group and resource IDs are slash-free. Canonical addresses remain in `source`; `namespace`, `name`/`type`, `provider`, and `registryhost` preserve each component.
+Provider IDs are their type/name. A module's native `name/provider` pair is encoded as `name~provider` when both components are xRegistry-safe; otherwise the proxy uses `xh~<sha256(namespace/name/provider)>`, matching the extension spec's hashed fallback. Canonical provider addresses remain in `source`. Canonical module addresses are in `source_address`; module `source` is the upstream repository URL. Provenance is carried in `sourceurl`, and Group entities expose the upstream `providers_v1` and `modules_v1` discovery values from `/.well-known/terraform.json`.
 
 Exact provider/module/version lookup always resolves through the authoritative versions endpoint, independently of the bounded discovery snapshot. Namespace detail is validated independently through exact provider/module search before a Group or child collection is returned, so real namespaces such as `philips-software` work group-first while arbitrary syntactically valid names return 404. Successful exact child resolution registers its canonical provider/module in the bounded catalogue. Discovery is deduplicated case-insensitively, but xRegistry lookup remains case-sensitive: wrong-case Group and Resource IDs return 404, never redirect. A true upstream 404 remains 404, while timeouts and outages propagate as 504/502 rather than being collapsed into “not found”.
 
 ## Registry host and multi-host aggregation
 
-This proxy intentionally targets one fixed host, `registry.terraform.io`, recorded as `registryhost` on groups and resources. Group IDs therefore need only the native namespace. Separate single-host proxy instances naturally have separate xRegistry roots. A future service aggregating multiple hosts must disambiguate groups (for example, collision-free `host~namespace` IDs) while retaining `registryhost` and `namespace`; it must not merge equal namespaces from different hosts silently.
+This proxy intentionally targets one fixed host, `registry.terraform.io`, recorded as `sourceurl` on groups and resources. Group IDs therefore need only the native namespace. Separate single-host proxy instances naturally have separate xRegistry roots. A future service aggregating multiple hosts must disambiguate groups (for example, collision-free `host~namespace` IDs) while retaining `sourceurl` and `namespace`; it must not merge equal namespaces from different hosts silently.
 
 ## Endpoints
 
@@ -32,21 +32,21 @@ GET /terraformregistries/{namespace}/providers
 GET /terraformregistries/{namespace}/providers/{type}
 GET /terraformregistries/{namespace}/providers/{type}/meta
 GET /terraformregistries/{namespace}/providers/{type}/versions
-GET /terraformregistries/{namespace}/providers/{type}/versions/{version}
+GET /terraformregistries/{namespace}/providers/{type}/versions/{versionid}
 GET /terraformregistries/{namespace}/modules
-GET /terraformregistries/{namespace}/modules/{name~provider}
-GET /terraformregistries/{namespace}/modules/{name~provider}/meta
-GET /terraformregistries/{namespace}/modules/{name~provider}/versions
-GET /terraformregistries/{namespace}/modules/{name~provider}/versions/{version}
+GET /terraformregistries/{namespace}/modules/{moduleid}
+GET /terraformregistries/{namespace}/modules/{moduleid}/meta
+GET /terraformregistries/{namespace}/modules/{moduleid}/versions
+GET /terraformregistries/{namespace}/modules/{moduleid}/versions/{versionid}
 ```
 
 Group, provider, module, and version collections support `limit`/`offset` and provide RFC 8288 links. Provider/module discovery is deliberately bounded rather than pretending that the first 100 popular entries are complete: those collections emit `X-Collection-Complete: false` and omit non-authoritative root, group, and HTTP counts. Exact Version collections are authoritative and retain `X-Total-Count`.
 
-The service does not advertise xRegistry `filter` or `sort`. Either parameter on group, provider, module, or Version collections receives HTTP 400; it is never silently ignored or evaluated against an incomplete snapshot. Default pagination order is deterministic by entity ID.
+The service does not advertise xRegistry `filter` or `sort`. Either parameter on group, provider, module, or Version collections receives HTTP 400; it is never silently ignored or evaluated against an incomplete snapshot. Default pagination order is deterministic by entity ID, and Version collections are emitted in SemVer order.
 
 `GET /capabilities` emits every known xRegistry 1.0-rc2 capability with required types. It reports a read-only registry (`mutable: []`), pagination, `manual`/`semver` version modes, and `xRegistry-json/1.0-rc2`; its `flags` array is empty because no xRegistry query flag is implemented (Core, **Registry Capabilities**).
 
-Version arrays from Terraform are treated as unordered. Provider and module defaults are recomputed from each upstream versions response, so both models set `setdefaultversionsticky: false` and `/meta` emits `defaultversionsticky: false`. Providers and modules are sorted ascending by strict SemVer precedence before default/latest and `ancestor` predecessor selection. Invalid non-SemVer values sort lexically before valid SemVer values; if all values are non-SemVer, the lexical maximum is the default. Build metadata is only a deterministic tie-breaker. This makes pagination deterministic and follows xRegistry Core **Versions** (`ancestor`, `isdefault`) semantics.
+Version arrays from Terraform are treated as unordered. Provider and module defaults are recomputed from each upstream versions response, so both models constrain `defaultversionsticky` to `false` and `/meta` emits `defaultversionsticky: false`. Providers and modules are sorted ascending by strict SemVer precedence before default/latest and `ancestor` predecessor selection. Invalid non-SemVer values sort lexically before valid SemVer values; if all values are non-SemVer, the lexical maximum is the default. Build metadata is transliterated from `+` to `~` in `versionid` only; the exact upstream release string remains in `version`.
 
 ## Public path migration (#203)
 

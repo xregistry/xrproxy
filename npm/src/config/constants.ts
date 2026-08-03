@@ -11,33 +11,24 @@ import { Request } from 'express';
  * 1. x-base-url header (set by bridge when proxying - contains actual external FQDN)
  * 2. x-forwarded-* headers (set by reverse proxies like Azure Container Apps)
  * 3. Construct from request properties (fallback for development)
- * 
- * Note: Does NOT use BASE_URL environment variable because it cannot know
- * the actual Azure-generated FQDN (with unique subdomain) at deployment time.
- * The bridge is responsible for forwarding the correct base URL via headers.
  */
 export function getBaseUrl(req: Request): string {
-    // Check for x-base-url header first (sent by bridge with actual external FQDN)
     const baseUrlHeader = req.get('x-base-url');
     if (baseUrlHeader) {
         return baseUrlHeader;
     }
 
-    // Check BASE_URL environment variable (fallback when header not forwarded)
     if (process.env['BASE_URL']) {
         return process.env['BASE_URL'];
     }
 
-    // Get protocol and host from forwarded headers (for direct external access)
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
     const host = req.get('x-forwarded-host') || req.get('host');
 
-    // Construct from headers
     if (host) {
         return `${protocol}://${host}`;
     }
 
-    // Final fallback for development
     return `${req.protocol}://${req.get('host')}`;
 }
 
@@ -48,9 +39,9 @@ export const REGISTRY_CONFIG = {
 } as const;
 
 export const GROUP_CONFIG = {
-    TYPE: 'noderegistries',
-    TYPE_SINGULAR: 'noderegistry',
-    ID: 'npmjs.org',
+    TYPE: 'nodescopes',
+    TYPE_SINGULAR: 'nodescope',
+    UNSCOPED_ID: '_',
 } as const;
 
 export const RESOURCE_CONFIG = {
@@ -64,12 +55,12 @@ export const PAGINATION = {
 } as const;
 
 export const CACHE_CONFIG = {
-    REFRESH_INTERVAL_MS: 24 * 60 * 60 * 1000, // 24 hours
-    HTTP_TIMEOUT_MS: 30000, // 30 seconds
+    REFRESH_INTERVAL_MS: 24 * 60 * 60 * 1000,
+    HTTP_TIMEOUT_MS: 30000,
     MAX_RETRIES: 3,
-    CACHE_TTL_MS: 24 * 60 * 60 * 1000, // 24 hours
+    CACHE_TTL_MS: 24 * 60 * 60 * 1000,
     FILTER_CACHE_SIZE: 2000,
-    FILTER_CACHE_TTL_MS: 600000, // 10 minutes
+    FILTER_CACHE_TTL_MS: 600000,
     MAX_METADATA_FETCHES: 20,
     MAX_CACHE_SIZE: 10000,
     CACHE_DIR: './cache',
@@ -101,4 +92,4 @@ export const PATHS = {
     CACHE_DIR: 'cache',
     CACHE_FILE: 'package-names-cache.json',
     CACHE_METADATA_FILE: 'cache-metadata.json',
-} as const; 
+} as const;

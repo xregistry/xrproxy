@@ -1,13 +1,13 @@
 /** xRegistry root and Terraform namespace group entities. */
 
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import { CAPABILITIES, REGISTRY_METADATA } from '../config/constants';
+import { CAPABILITIES, REGISTRY_METADATA, TERRAFORM_API } from '../config/constants';
 import { SearchService, TerraformNamespaceSummary } from './search-service';
 
 export class RegistryService {
     constructor(
         private readonly searchService: SearchService,
-        private readonly entityState: EntityStateManager
+        private readonly entityState: EntityStateManager,
     ) {}
 
     getCapabilities(): typeof CAPABILITIES {
@@ -44,6 +44,7 @@ export class RegistryService {
             GROUP_TYPE, GROUP_TYPE_SINGULAR, PROVIDER_RESOURCE_TYPE,
             MODULE_RESOURCE_TYPE, REGISTRY_HOST,
         } = REGISTRY_METADATA;
+        const discovery = this.searchService.getServiceDiscovery();
         const groupPath = `/${GROUP_TYPE}/${summary.namespace}`;
         const self = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(summary.namespace)}`;
         return {
@@ -51,7 +52,9 @@ export class RegistryService {
             xid: groupPath,
             name: summary.namespace,
             namespace: summary.namespace,
-            registryhost: REGISTRY_HOST,
+            sourceurl: TERRAFORM_API.REGISTRY_URL,
+            ...(discovery['providers.v1'] ? { providers_v1: discovery['providers.v1'] } : {}),
+            ...(discovery['modules.v1'] ? { modules_v1: discovery['modules.v1'] } : {}),
             description: `Terraform namespace ${summary.namespace} on ${REGISTRY_HOST}.`,
             epoch: this.entityState.getEpoch(groupPath),
             createdat: this.entityState.getCreatedAt(groupPath),

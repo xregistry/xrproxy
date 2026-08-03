@@ -1,9 +1,9 @@
 /**
- * Registry Service - Handles xRegistry root, groups, and model endpoints
+ * Registry Service - Handles xRegistry root, groups, and model endpoints.
  */
 
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import { MODEL_STRUCTURE, REGISTRY_METADATA } from '../config/constants';
+import { MODEL_STRUCTURE, PYPI_API, REGISTRY_METADATA } from '../config/constants';
 import { SearchService } from './search-service';
 
 export class RegistryService {
@@ -15,22 +15,17 @@ export class RegistryService {
         this.entityState = entityState;
     }
 
-    /**
-     * Get registry root information
-     */
     getRoot(baseUrl: string): any {
         const { REGISTRY_ID, GROUP_TYPE, SPEC_VERSION } = REGISTRY_METADATA;
-
-        const capabilities = this.getCapabilities();
 
         return {
             specversion: SPEC_VERSION,
             registryid: REGISTRY_ID,
             xid: '/',
             self: `${baseUrl}/`,
-            description: 'This registry supports read-only operations and model discovery.',
+            description: 'This registry exposes a PyPI projection through xRegistry.',
             documentation: `${baseUrl}/model`,
-            capabilities,
+            capabilities: this.getCapabilities(),
             model: `${baseUrl}/model`,
             [`${GROUP_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}`,
             [`${GROUP_TYPE}count`]: 1,
@@ -40,11 +35,6 @@ export class RegistryService {
         };
     }
 
-    /**
-     * Get capabilities (per xRegistry core spec §"Design: JSON Serialization").
-     * `mutable` is an array of mutable areas, not a boolean. `filter`/`sort`/
-     * `doc` belong inside `flags`, not as top-level booleans.
-     */
     getCapabilities(): any {
         return {
             apis: ['/capabilities', '/model', '/export'],
@@ -52,52 +42,41 @@ export class RegistryService {
             formats: ['xRegistry-json/1.0-rc2'],
             mutable: [],
             pagination: true,
-            specversions: ['1.0-rc2']
+            specversions: ['1.0-rc2'],
         };
     }
 
-    /**
-     * Get registry model
-     */
     getModel(baseUrl: string): any {
-        const modelWithUrls = JSON.parse(JSON.stringify(MODEL_STRUCTURE));
         return {
-            ...modelWithUrls,
+            ...JSON.parse(JSON.stringify(MODEL_STRUCTURE)),
             self: `${baseUrl}/model`,
         };
     }
 
-    /**
-     * Get group collection
-     */
     getGroups(baseUrl: string): Record<string, any> {
-        const { GROUP_TYPE, GROUP_ID, GROUP_TYPE_SINGULAR, RESOURCE_TYPE } =
-            REGISTRY_METADATA;
-
+        const { GROUP_TYPE, GROUP_ID, GROUP_TYPE_SINGULAR, RESOURCE_TYPE } = REGISTRY_METADATA;
         const groupPath = `/${GROUP_TYPE}/${GROUP_ID}`;
+        const packagesCount = this.searchService.getPackageCount();
 
         return {
             [GROUP_ID]: {
                 [`${GROUP_TYPE_SINGULAR}id`]: GROUP_ID,
                 xid: groupPath,
                 name: GROUP_ID,
-                description: 'PyPI registry group',
+                description: 'Projection of Python package metadata into xRegistry.',
                 epoch: this.entityState.getEpoch(groupPath),
                 createdat: this.entityState.getCreatedAt(groupPath),
                 modifiedat: this.entityState.getModifiedAt(groupPath),
                 self: `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}`,
+                sourceurl: PYPI_API.SIMPLE_URL,
                 [`${RESOURCE_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}`,
+                [`${RESOURCE_TYPE}count`]: packagesCount,
             },
         };
     }
 
-    /**
-     * Get single group details
-     */
     getGroupDetails(baseUrl: string): any {
-        const { GROUP_TYPE, GROUP_ID, GROUP_TYPE_SINGULAR, RESOURCE_TYPE } =
-            REGISTRY_METADATA;
-
+        const { GROUP_TYPE, GROUP_ID, GROUP_TYPE_SINGULAR, RESOURCE_TYPE } = REGISTRY_METADATA;
         const groupPath = `/${GROUP_TYPE}/${GROUP_ID}`;
         const packagesCount = this.searchService.getPackageCount();
 
@@ -105,11 +84,12 @@ export class RegistryService {
             [`${GROUP_TYPE_SINGULAR}id`]: GROUP_ID,
             xid: groupPath,
             name: GROUP_ID,
-            description: 'PyPI registry group',
+            description: 'Projection of Python package metadata into xRegistry.',
             epoch: this.entityState.getEpoch(groupPath),
             createdat: this.entityState.getCreatedAt(groupPath),
             modifiedat: this.entityState.getModifiedAt(groupPath),
             self: `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}`,
+            sourceurl: PYPI_API.SIMPLE_URL,
             [`${RESOURCE_TYPE}url`]: `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}`,
             [`${RESOURCE_TYPE}count`]: packagesCount,
         };

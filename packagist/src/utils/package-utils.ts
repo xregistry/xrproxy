@@ -10,7 +10,7 @@ export interface ComposerPackageIdentity {
 
 const COMPOSER_COMPONENT = /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/i;
 const XREGISTRY_ID = /^[A-Za-z0-9_][A-Za-z0-9._~:@-]{0,127}$/;
-const ENCODED_VERSION_PREFIX = 'xv~';
+const HASHED_VERSION_PREFIX = 'xh~';
 
 function validPackageParts(name: string): [string, string] | null {
     const parts = name.split('/');
@@ -20,6 +20,14 @@ function validPackageParts(name: string): [string, string] | null {
         !COMPOSER_COMPONENT.test(parts[0]) || !COMPOSER_COMPONENT.test(parts[1])
     ) return null;
     return [parts[0], parts[1]];
+}
+
+function isValidXRegistryId(id: string): boolean {
+    return id.length <= 128 && XREGISTRY_ID.test(id);
+}
+
+function hashVersionIdentity(value: string): string {
+    return `${HASHED_VERSION_PREFIX}${createHash('sha256').update(value, 'utf8').digest('hex')}`;
 }
 
 /** Map an upstream package name to its canonical lowercase Composer identity. */
@@ -55,46 +63,38 @@ export function isDevVersion(version: string): boolean {
     return version.startsWith('dev-') || version.endsWith('-dev');
 }
 
-function base64url(value: string): string {
-    return Buffer.from(value, 'utf8').toString('base64url');
+function buildStableVersionId(version: string): string {
+    if (isValidXRegistryId(version) && !version.startsWith(HASHED_VERSION_PREFIX)) {
+        return version;
+    }
+
+    const plusSubstituted = version.replace(/\+/g, '~');
+    if (isValidXRegistryId(plusSubstituted) && !plusSubstituted.startsWith(HASHED_VERSION_PREFIX)) {
+        return plusSubstituted;
+    }
+
+    return hashVersionIdentity(version);
+}
+
+function buildDevVersionId(version: string, sourceRef?: string): string {
+    const alias = version.replace(/\//g, '~');
+    const candidate = `${alias}:${sourceRef ?? ''}`;
+    if (isValidXRegistryId(candidate) && !candidate.startsWith(HASHED_VERSION_PREFIX)) {
+        return candidate;
+    }
+
+    return hashVersionIdentity(`${version}/${sourceRef ?? ''}`);
 }
 
 /**
- * Build a deterministic xRegistry-safe ID. Dev IDs reversibly encode the full
- * raw alias and full source reference, avoiding both sanitization and truncated
- * commit collisions. Stable normalized IDs remain unchanged when already safe.
+ * Build the xRegistry Version ID required by the Packagist extension spec.
+ * Stable versions preserve the raw upstream version where possible. Mutable
+ * dev aliases include the alias plus the full source reference.
  */
-export function buildVersionId(version: string, versionNormalized: string, sourceRef?: string): string {
-    let id: string;
-    if (isDevVersion(version)) {
-        id = `${ENCODED_VERSION_PREFIX}d~${base64url(version)}~${base64url(sourceRef ?? '')}`;
-        if (!XREGISTRY_ID.test(id)) {
-            // Composer branch aliases can approach xRegistry's 128-character
-            // Entity-ID limit before adding a source reference. Preserve a
-            // fixed-size, collision-resistant identity over the full tuple;
-            // the raw alias and source reference remain on the Version entity.
-            const digest = createHash('sha256')
-                .update(`${version.length}:`)
-                .update(version)
-                .update(`${(sourceRef ?? '').length}:`)
-                .update(sourceRef ?? '')
-                .digest('base64url');
-            id = `${ENCODED_VERSION_PREFIX}d~h~${digest}`;
-        }
-    } else {
-        const normalized = versionNormalized || version;
-        id = XREGISTRY_ID.test(normalized) && !normalized.startsWith(ENCODED_VERSION_PREFIX)
-            ? normalized
-            : `${ENCODED_VERSION_PREFIX}s~${base64url(normalized)}`;
-        if (!XREGISTRY_ID.test(id)) {
-            const digest = createHash('sha256').update(normalized).digest('base64url');
-            id = `${ENCODED_VERSION_PREFIX}s~h~${digest}`;
-        }
-    }
-    if (!XREGISTRY_ID.test(id)) {
-        throw new Error(`Composer version cannot be represented as an xRegistry ID: ${version}`);
-    }
-    return id;
+export function buildVersionId(version: string, _versionNormalized: string, sourceRef?: string): string {
+    return isDevVersion(version)
+        ? buildDevVersionId(version, sourceRef)
+        : buildStableVersionId(version);
 }
 
 export function isValidPackageName(name: string): boolean {

@@ -1,14 +1,13 @@
 /**
- * Unit tests for MCPService
+ * Unit tests for MCPService.
  */
 
-import { MCPService } from '../src/services/mcp-service';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { MCPService } from '../src/services/mcp-service';
 
-// Mock axios
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
@@ -18,7 +17,6 @@ describe('MCPService', () => {
   let cacheDir: string;
 
   beforeEach(() => {
-    // Reset mocks before each test
     jest.clearAllMocks();
 
     httpGetMock = jest.fn();
@@ -42,39 +40,35 @@ describe('MCPService', () => {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   });
 
-  describe('sanitizeId', () => {
-    it('should convert slashes to underscores', () => {
-      expect(service.sanitizeId('github/copilot')).toBe('github_copilot');
+  describe('identity mapping', () => {
+    it('derives server ids from the name portion after the single slash', () => {
+      const result = service.convertToXRegistryServer({
+        server: {
+          name: 'github/copilot',
+          version: '1.0.0',
+          description: 'Copilot MCP server',
+        },
+      } as any, 'github', 'http://localhost:3600');
+
+      expect(result.serverid).toBe('copilot');
+      expect(result.name).toBe('github/copilot');
+      expect(result.xid).toBe('/mcpproviders/github/servers/copilot');
     });
 
-    it('should replace @ at start with underscore', () => {
-      // @ at start of string is replaced by second regex: /^[^a-z0-9_]/g
-      expect(service.sanitizeId('@scope/package')).toBe('_scope_package');
+    it('hashes invalid or oversize server ids using the reserved xh~ prefix', () => {
+      expect(service.deriveServerId('bad value')).toMatch(/^xh~[0-9a-f]{64}$/);
+      expect(service.deriveServerId('x'.repeat(129))).toMatch(/^xh~[0-9a-f]{64}$/);
+      expect(service.deriveServerId('xh~reserved')).toMatch(/^xh~[0-9a-f]{64}$/);
     });
 
-    it('should handle mixed special characters', () => {
-      // Converts / to _, keeps @ and other valid chars
-      expect(service.sanitizeId('github/@scope/package')).toBe('github_@scope_package');
-    });
-
-    it('should handle empty string', () => {
-      expect(service.sanitizeId('')).toBe('');
-    });
-
-    it('should convert to lowercase', () => {
-      expect(service.sanitizeId('GitHub/Copilot')).toBe('github_copilot');
-    });
-
-    it('should preserve valid xRegistry characters', () => {
-      // Valid chars: a-z0-9._~:@-
-      expect(service.sanitizeId('test-server_v1.0:latest@registry')).toBe('test-server_v1.0:latest@registry');
+    it('derives version ids by replacing build metadata separators with tildes', () => {
+      expect(service.deriveVersionId('1.0.0+build.5')).toBe('1.0.0~build.5');
+      expect(service.deriveVersionId('1.0.0')).toBe('1.0.0');
     });
   });
 
-  // Note: generatePackageXid is private and tested indirectly through convertToXRegistryServer
-
   describe('groupServersByProvider', () => {
-    it('should group servers by provider', () => {
+    it('groups servers by their exact namespace', () => {
       const servers = [
         { server: { name: 'github/server1' } },
         { server: { name: 'github/server2' } },
@@ -88,20 +82,14 @@ describe('MCPService', () => {
       expect(result.get('gitlab')?.length).toBe(1);
     });
 
-    it('should handle servers without slashes (assigns to "default" provider)', () => {
+    it('skips invalid upstream names that do not contain exactly one slash', () => {
       const servers = [
         { server: { name: 'standalone-server' } },
+        { server: { name: 'too/many/slashes' } },
       ] as any[];
 
       const result = service.groupServersByProvider(servers);
 
-      expect(result.size).toBe(1);
-      expect(result.has('default')).toBe(true);
-      expect(result.get('default')?.length).toBe(1);
-    });
-
-    it('should handle empty server list', () => {
-      const result = service.groupServersByProvider([]);
       expect(result.size).toBe(0);
     });
   });
@@ -113,6 +101,7 @@ describe('MCPService', () => {
           server: {
             name: 'ac.inference.sh/mcp',
             version: '1.0.1',
+            description: 'Inference server',
           },
         },
       ],
@@ -173,12 +162,12 @@ describe('MCPService', () => {
       expect(fs.readdirSync(cacheDir, { withFileTypes: true }).every((entry) => entry.isFile())).toBe(true);
     });
 
-    it('resolves a server detail directly from its xRegistry ID', async () => {
+    it('resolves a server detail directly from its xRegistry identity pair', async () => {
       const versionsSpy = jest.spyOn(service, 'getServerVersions').mockResolvedValue(versionsResponse);
       const catalogSpy = jest.spyOn(service, 'getAllServers');
 
       await expect(
-        service.resolveServerVersions('ac.inference.sh', 'ac.inference.sh_mcp')
+        service.resolveServerVersions('ac.inference.sh', 'mcp')
       ).resolves.toEqual(versionsResponse);
 
       expect(versionsSpy).toHaveBeenCalledWith('ac.inference.sh/mcp');
@@ -187,91 +176,211 @@ describe('MCPService', () => {
   });
 
   describe('convertToXRegistryServer', () => {
-    it('should convert MCP server to xRegistry format', () => {
+    it('maps formal MCP attributes, publisher metadata, and registry-managed metadata', () => {
       const mcpServer = {
         server: {
           name: 'github/test-server',
-          version: '1.0.0',
+          version: '1.0.0+build.5',
           description: 'Test server',
-          icons: [{ src: 'https://example.com/icon.png' }], // icons is an array
+          title: 'Test Server',
           websiteUrl: 'https://example.com',
+          icons: [{
+            src: 'https://example.com/icon.svg',
+            mimeType: 'image/svg+xml',
+            sizes: ['48x48', 'any'],
+            theme: 'dark',
+          }],
+          repository: {
+            url: 'https://github.com/example/test-server',
+            source: 'github',
+            id: 'example/test-server',
+            subfolder: 'server',
+          },
+          _meta: {
+            'io.modelcontextprotocol.registry/publisher-provided': {
+              tier: 'gold',
+            },
+            ignored: {
+              should: 'not-appear',
+            },
+          },
+          prompts: [{ name: 'ignore-me' }],
+          tools: [{ name: 'ignore-me-too' }],
+          resources: [{ name: 'still-ignored' }],
         },
         _meta: {
           'io.modelcontextprotocol.registry/official': {
-            updatedAt: '2025-01-01T00:00:00Z',
+            status: 'deprecated',
+            statusMessage: 'Use v2',
+            statusChangedAt: '2025-01-02T00:00:00Z',
+            publishedAt: '2025-01-01T00:00:00Z',
+            updatedAt: '2025-01-03T00:00:00Z',
+            isLatest: false,
           },
         },
       } as any;
 
       const result = service.convertToXRegistryServer(mcpServer, 'github', 'http://localhost:3600');
+      const meta = service.getServerResourceMetaAttributes(mcpServer);
 
-      // serverid is sanitized from full name: github/test-server -> github_test-server
-      expect(result.serverid).toBe('github_test-server');
-      expect(result.versionid).toBe('1.0.0');
-      expect(result.name).toBe('github/test-server'); // name preserves original
+      expect(result.serverid).toBe('test-server');
+      expect(result.versionid).toBe('1.0.0~build.5');
+      expect(result.name).toBe('github/test-server');
+      expect(result.title).toBe('Test Server');
       expect(result.description).toBe('Test server');
-      expect(result.icon).toBe('https://example.com/icon.png'); // Extracted from icons[0].src
-      expect(result.documentation).toBe('https://example.com');
-      expect(result.self).toContain('/mcpproviders/github/servers/github_test-server');
-      expect(result.xid).toBe('/mcpproviders/github/servers/github_test-server');
+      expect(result.website_url).toBe('https://example.com');
+      expect(result.createdat).toBe('2025-01-01T00:00:00Z');
+      expect(result.modifiedat).toBe('2025-01-03T00:00:00Z');
+      expect(result.icons?.[0]).toEqual({
+        src: 'https://example.com/icon.svg',
+        mime_type: 'image/svg+xml',
+        sizes: ['48x48', 'any'],
+        theme: 'dark',
+      });
+      expect(result.repository).toEqual({
+        url: 'https://github.com/example/test-server',
+        source: 'github',
+        id: 'example/test-server',
+        subfolder: 'server',
+      });
+      expect(result.publisher_meta).toEqual({ tier: 'gold' });
+      expect(result).not.toHaveProperty('documentation');
+      expect(result).not.toHaveProperty('icon');
+      expect(result).not.toHaveProperty('prompts');
+      expect(result).not.toHaveProperty('tools');
+      expect(result).not.toHaveProperty('resources');
+      expect(meta).toEqual({
+        status: 'deprecated',
+        status_message: 'Use v2',
+        status_changed_at: '2025-01-02T00:00:00Z',
+        published_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-03T00:00:00Z',
+        is_latest: false,
+      });
     });
 
-    it('should handle server without metadata', () => {
+    it('maps package, input-descriptor, remote, and cross-registry xid shapes', () => {
       const mcpServer = {
         server: {
           name: 'provider/server',
-          version: '0.1.0',
+          version: '2.0.0',
+          description: 'Server with packages',
+          packages: [
+            {
+              registryType: 'npm',
+              identifier: '@scope/package',
+              registryBaseUrl: 'https://registry.npmjs.org',
+              version: '1.2.3',
+              fileSha256: 'a'.repeat(64),
+              runtimeHint: 'npx',
+              transport: {
+                type: 'streamable-http',
+                url: 'https://packages.example.com/mcp',
+                headers: [{ name: 'Authorization', isSecret: true, isRequired: true }],
+              },
+              runtimeArguments: [{ type: 'named', name: '--config', valueHint: 'config-path', isRepeated: true, format: 'filepath' }],
+              packageArguments: [{ type: 'positional', valueHint: 'workspace', isRequired: true }],
+              environmentVariables: [{ name: 'API_KEY', isSecret: true, format: 'string' }],
+            },
+            {
+              registryType: 'pypi',
+              identifier: 'Example_Package',
+              transport: { type: 'stdio' },
+            },
+            {
+              registryType: 'oci',
+              identifier: 'library/nginx',
+              registryBaseUrl: 'https://registry-1.docker.io/v2/',
+              transport: { type: 'stdio' },
+            },
+            {
+              registryType: 'nuget',
+              identifier: 'Newtonsoft.Json',
+              transport: { type: 'stdio' },
+            },
+            {
+              registryType: 'mcpb',
+              identifier: 'https://example.com/server.mcpb',
+              transport: { type: 'stdio' },
+            },
+          ],
+          remotes: [
+            {
+              type: 'streamable-http',
+              url: 'https://{tenant}.example.com/mcp',
+              headers: [{ name: 'Authorization', isSecret: true }],
+              variables: {
+                tenant: {
+                  description: 'Tenant identifier',
+                  isRequired: true,
+                  format: 'string',
+                },
+              },
+            },
+          ],
         },
       } as any;
 
       const result = service.convertToXRegistryServer(mcpServer, 'provider', 'http://localhost:3600');
 
-      // serverid is sanitized: provider/server -> provider_server
-      expect(result.serverid).toBe('provider_server');
-      expect(result.versionid).toBe('0.1.0');
-      expect(result.createdat).toBeDefined();
-      expect(result.modifiedat).toBeDefined();
-    });
+      expect(result.packages).toEqual([
+        expect.objectContaining({
+          registry_type: 'npm',
+          registry_base_url: 'https://registry.npmjs.org',
+          identifier: '@scope/package',
+          version: '1.2.3',
+          file_sha256: 'a'.repeat(64),
+          runtime_hint: 'npx',
+          packagexid: '/nodescopes/scope/packages/package',
+          transport: {
+            type: 'streamable-http',
+            url: 'https://packages.example.com/mcp',
+            headers: [{ name: 'Authorization', is_required: true, is_secret: true }],
+          },
+          runtime_arguments: [{ type: 'named', name: '--config', value_hint: 'config-path', is_repeated: true, format: 'filepath' }],
+          package_arguments: [{ type: 'positional', value_hint: 'workspace', is_required: true }],
+          environment_variables: [{ name: 'API_KEY', is_secret: true, format: 'string' }],
+        }),
+        expect.objectContaining({
+          registry_type: 'pypi',
+          identifier: 'Example_Package',
+          packagexid: '/pythonregistries/pypi/packages/example-package',
+          transport: { type: 'stdio' },
+        }),
+        expect.objectContaining({
+          registry_type: 'oci',
+          identifier: 'library/nginx',
+          packagexid: '/containerregistries/docker.io/images/library~nginx',
+          transport: { type: 'stdio' },
+        }),
+        expect.objectContaining({
+          registry_type: 'nuget',
+          identifier: 'Newtonsoft.Json',
+          packagexid: '/dotnetregistries/nuget/packages/newtonsoft.json',
+          transport: { type: 'stdio' },
+        }),
+        expect.objectContaining({
+          registry_type: 'mcpb',
+          identifier: 'https://example.com/server.mcpb',
+          packagexid: 'https://example.com/server.mcpb',
+          transport: { type: 'stdio' },
+        }),
+      ]);
 
-    it('should generate packagexid for npm packages', () => {
-      const mcpServer = {
-        server: {
-          name: 'npm/test-package',
-          version: '1.0.0',
-          packages: [{
-            registryType: 'npm', // Must be registryType, not type
-            identifier: '@scope/package',
-            registryBaseUrl: 'https://registry.npmjs.org',
-          }],
+      expect(result.remotes).toEqual([
+        {
+          type: 'streamable-http',
+          url: 'https://{tenant}.example.com/mcp',
+          headers: [{ name: 'Authorization', is_secret: true }],
+          variables: {
+            tenant: {
+              description: 'Tenant identifier',
+              is_required: true,
+              format: 'string',
+            },
+          },
         },
-      } as any;
-
-      const result = service.convertToXRegistryServer(mcpServer, 'npm', 'http://localhost:3600');
-
-      expect(result.packages).toBeDefined();
-      expect(result.packages).toHaveLength(1);
-      if (result.packages && result.packages[0]) {
-        // packagexid uses npmjs.org (hostname mapping) and URL-encodes identifier
-        expect(result.packages[0].packagexid).toBe('/noderegistries/npmjs.org/packages/%40scope%2Fpackage');
-      }
-    });
-
-    it('should include prompts, tools, and resources', () => {
-      const mcpServer = {
-        server: {
-          name: 'provider/server',
-          version: '1.0.0',
-          prompts: [{ name: 'test-prompt', arguments: [] }],
-          tools: [{ name: 'test-tool', inputSchema: {} }],
-          resources: [{ name: 'test-resource', uriTemplate: 'https://example.com/{id}' }],
-        },
-      } as any;
-
-      const result = service.convertToXRegistryServer(mcpServer, 'provider', 'http://localhost:3600');
-
-      expect(result.prompts?.length).toBe(1);
-      expect(result.tools?.length).toBe(1);
-      expect(result.resources?.length).toBe(1);
+      ]);
     });
   });
 });

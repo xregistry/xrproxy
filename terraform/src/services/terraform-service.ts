@@ -4,6 +4,7 @@
  * and TtlCache/FileSystemCacheStore (atomic TTL cache with ETag revalidation).
  */
 
+import * as path from 'path';
 import {
     createCacheKey,
     FileSystemCacheStore,
@@ -27,14 +28,15 @@ import {
     TFModuleVersionsResponse,
     TFProviderDownloadResponse,
     TFProviderVersionsResponse,
+    TFTerraformDiscovery,
     TFV1ModuleSearchResponse,
     TFV2ProvidersResponse,
 } from '../types/terraform';
 
 /** Cache TTLs (ms) */
-const TTL_MS = 6 * 60 * 60 * 1000;        // 6 h – version lists / search results
+const TTL_MS = 6 * 60 * 60 * 1000; // 6 h – version lists / search results
 const PLATFORM_TTL_MS = 24 * 60 * 60 * 1000; // 24 h – download URLs are immutable
-const NEGATIVE_TTL_MS = 10 * 60 * 1000;   // 10 min – 404 responses
+const NEGATIVE_TTL_MS = 10 * 60 * 1000; // 10 min – 404 responses
 const STALE_IF_ERROR_MS = 48 * 60 * 60 * 1000; // 48 h – serve stale on upstream error
 
 export interface TerraformServiceOptions extends HttpClientOptions {
@@ -56,7 +58,7 @@ export class TerraformService {
         });
 
         const store = new FileSystemCacheStore(options.cacheDir);
-        const platformStore = new FileSystemCacheStore(`${options.cacheDir}/platforms`);
+        const platformStore = new FileSystemCacheStore(path.join(options.cacheDir, 'platforms'));
 
         this.cache = new TtlCache(store, {
             ttlMs: TTL_MS,
@@ -70,10 +72,6 @@ export class TerraformService {
             staleIfErrorMs: STALE_IF_ERROR_MS,
         });
     }
-
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
 
     /** Fetch a JSON resource through the TTL cache */
     private async cachedGet<T>(url: string): Promise<T | null> {
@@ -121,6 +119,16 @@ export class TerraformService {
         return result.kind === 'value' ? result.value ?? null : null;
     }
 
+    async fetchServiceDiscovery(): Promise<TFTerraformDiscovery | null> {
+        try {
+            const resp = await this.http.getJson<TFTerraformDiscovery>(TERRAFORM_API.DISCOVERY_URL);
+            return 'value' in resp ? resp.value : null;
+        } catch (error) {
+            if (isUpstreamError(error) && error.code === 'not_found') return null;
+            return null;
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Provider catalogue
     // -----------------------------------------------------------------------
@@ -161,7 +169,7 @@ export class TerraformService {
         type: string,
         version: string,
         os: string,
-        arch: string
+        arch: string,
     ): Promise<TFProviderDownloadResponse | null> {
         const url = TERRAFORM_API.providerDownloadUrl(namespace, type, version, os, arch);
         try {
@@ -185,7 +193,7 @@ export class TerraformService {
                 namespace: m.namespace,
                 name: m.name,
                 provider: m.provider,
-                id: encodeModuleId(m.name, m.provider),
+                id: encodeModuleId(m.namespace, m.name, m.provider),
             }));
         } catch {
             return this.fallbackModules();
@@ -195,7 +203,7 @@ export class TerraformService {
     private fallbackModules(): ModuleEntry[] {
         return FALLBACK_MODULES.map((m) => ({
             ...m,
-            id: encodeModuleId(m.name, m.provider),
+            id: encodeModuleId(m.namespace, m.name, m.provider),
         }));
     }
 
@@ -208,18 +216,28 @@ export class TerraformService {
         return data;
     }
 
-    async fetchModuleVersion(
-        namespace: string,
-        name: string,
-        provider: string,
-        version: string
-    ): Promise<TFModuleVersionDetail> {
+    async fetchModuleVersion(namespace: string, name: string, provider: string, version: string): Promise<TFModuleVersionDetail> {
         const url = TERRAFORM_API.moduleVersionUrl(namespace, name, provider, version);
         const data = await this.cachedGet<TFModuleVersionDetail>(url);
         if (!data) {
             throw new UpstreamError({ code: 'not_found', status: 404, message: `Module version ${namespace}/${name}/${provider}@${version} not found` });
         }
         return data;
+    }
+
+    async fetchModuleDownloadUrl(namespace: string, name: string, provider: string, version: string): Promise<string | null> {
+        const url = TERRAFORM_API.moduleDownloadUrl(namespace, name, provider, version);
+        try {
+            const response = await this.http.request<string | null>({
+                url,
+                method: 'GET',
+                parse: async (raw) => raw.headers.get('x-terraform-get'),
+            });
+            return 'value' in response ? response.value : null;
+        } catch (error) {
+            if (isUpstreamError(error) && error.code === 'not_found') return null;
+            return null;
+        }
     }
 
     async providerExists(namespace: string, type: string): Promise<boolean> {
@@ -300,7 +318,7 @@ export class TerraformService {
         try {
             const resp = await this.cachedGet<TFV2ProvidersResponse>(url);
             const match = resp?.data?.find(
-                (d) => d.attributes.namespace === namespace && d.attributes.name === type
+                (d) => d.attributes.namespace === namespace && d.attributes.name === type,
             );
             if (!match) return null;
             const a = match.attributes;
@@ -320,11 +338,7 @@ export class TerraformService {
         }
     }
 
-    async fetchModuleSearchEntry(
-        namespace: string,
-        name: string,
-        provider: string
-    ): Promise<{
+    async fetchModuleSearchEntry(namespace: string, name: string, provider: string): Promise<{
         downloads?: number;
         verified?: boolean;
         trusted?: boolean;
@@ -338,6 +352,7 @@ export class TerraformService {
             return {
                 downloads: resp.downloads,
                 verified: resp.verified,
+                trusted: resp.trusted,
                 owner: resp.owner,
                 description: resp.description,
             };

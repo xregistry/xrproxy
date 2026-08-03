@@ -4,19 +4,30 @@
     "description": "The Laravel Framework.",
     "time": "2013-01-01T00:00:00+00:00",
     "maintainers": [
-      { "name": "taylorotwell", "avatar_url": "https://www.gravatar.com/avatar/93fc5b56e4b20c5e0f0f6e3e3a6c6d6d?d=identicon" }
+      {
+        "name": "taylorotwell",
+        "avatar_url": "https://www.gravatar.com/avatar/93fc5b56e4b20c5e0f0f6e3e3a6c6d6d?d=identicon"
+      }
     ],
     "versions": {
       "v11.0.0": {
         "name": "laravel/framework",
         "description": "The Laravel Framework.",
-        "keywords": ["framework", "laravel"],
+        "keywords": [
+          "framework",
+          "laravel"
+        ],
         "homepage": "https://laravel.com",
         "version": "v11.0.0",
         "version_normalized": "11.0.0.0",
-        "license": ["MIT"],
+        "license": [
+          "MIT"
+        ],
         "authors": [
-          { "name": "Taylor Otwell", "email": "taylor@laravel.com" }
+          {
+            "name": "Taylor Otwell",
+            "email": "taylor@laravel.com"
+          }
         ],
         "source": {
           "url": "https://github.com/laravel/framework.git",
@@ -42,13 +53,21 @@
       "v10.48.0": {
         "name": "laravel/framework",
         "description": "The Laravel Framework.",
-        "keywords": ["framework", "laravel"],
+        "keywords": [
+          "framework",
+          "laravel"
+        ],
         "homepage": "https://laravel.com",
         "version": "v10.48.0",
         "version_normalized": "10.48.0.0",
-        "license": ["MIT"],
+        "license": [
+          "MIT"
+        ],
         "authors": [
-          { "name": "Taylor Otwell", "email": "taylor@laravel.com" }
+          {
+            "name": "Taylor Otwell",
+            "email": "taylor@laravel.com"
+          }
         ],
         "source": {
           "url": "https://github.com/laravel/framework.git",
@@ -75,6 +94,8 @@
       "monthly": 9000000,
       "daily": 300000
     },
-    "favers": 29000
+    "favers": 29000,
+    "readme": "<h1>Laravel Framework</h1>",
+    "default_branch": "11.x"
   }
 }

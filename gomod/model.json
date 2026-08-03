@@ -10,42 +10,85 @@
           "plural": "modules",
           "singular": "module",
           "hasdocument": false,
+          "metaattributes": {
+            "latest_version": {
+              "type": "string",
+              "description": "The canonical Go version string reported by the GOPROXY @latest endpoint for this module. Module-wide, not a property of any single Version."
+            },
+            "repository": {
+              "type": "url",
+              "description": "VCS repository URL inferred from the module path. Module-wide, not a property of any single Version. Omitted when the mapping is not determinable, for example behind a vanity import domain."
+            },
+            "major_version_suffix": {
+              "type": "string",
+              "description": "The major-version suffix carried by the module path, for example /v2. Absent for v0 and v1 module paths. example.com/m and example.com/m/v2 are distinct modules and are therefore distinct Resources."
+            },
+            "deprecated_message": {
+              "type": "string",
+              "description": "The text of the '// Deprecated:' comment attached to the module directive in the go.mod of the module's latest version. Go carries module deprecation in a go.mod comment rather than in a directive or in proxy metadata. Not named 'deprecated' because that name is reserved by the xRegistry core."
+            },
+            "retractions": {
+              "type": "array",
+              "description": "The effective set of retracted version ranges for this module, aggregated from the retract directives in the go.mod of the module's highest non-retracted version. Retraction applies to ranges of versions and is declared by a later version, so it is a module-wide fact rather than a property of the retracted Version itself.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "low": {
+                    "type": "string",
+                    "description": "Lowest canonical Go version in the retracted range, inclusive.",
+                    "required": true
+                  },
+                  "high": {
+                    "type": "string",
+                    "description": "Highest canonical Go version in the retracted range, inclusive. Equal to 'low' for a single-version retraction.",
+                    "required": true
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "description": "The comment recorded alongside the retract directive, if any."
+                  },
+                  "declared_in": {
+                    "type": "string",
+                    "description": "The canonical Go version whose go.mod declares this retraction."
+                  }
+                }
+              }
+            }
+          },
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The canonical module path (e.g. github.com/pkg/errors)."
+              "required": true,
+              "description": "The canonical Go module path, verbatim and unaltered, including any major-version suffix (e.g. 'github.com/pkg/errors', 'example.com/m/v2'). This is the authoritative name of the module; the moduleid is only an addressing key derived from it and MUST NOT be reversed to recover this value."
+            },
+            "version": {
+              "type": "string",
+              "required": true,
+              "description": "The canonical Go version string exactly as published, including the leading 'v' and any '+incompatible' build metadata (e.g. 'v2.0.0+incompatible'). This is the authoritative version; the versionid is a transliteration of it and MUST NOT be reversed."
             },
             "modulepath": {
               "type": "string",
-              "description": "The canonical Go module path reconstructed from the group and module identity."
-            },
-            "latest_version": {
-              "type": "string",
-              "description": "The latest known version of this module."
-            },
-            "repository": {
-              "type": "string",
-              "description": "VCS repository URL inferred from the module path."
+              "description": "The canonical Go module path reconstructed from the group and module identity, including any major-version suffix."
             },
             "info_url": {
-              "type": "string",
-              "description": "GOPROXY .info endpoint URL for the latest version."
+              "type": "url",
+              "description": "GOPROXY .info endpoint URL for this version."
             },
             "mod_url": {
-              "type": "string",
-              "description": "GOPROXY .mod endpoint URL for the latest version."
+              "type": "url",
+              "description": "GOPROXY .mod endpoint URL for this version."
             },
             "zip_url": {
-              "type": "string",
-              "description": "GOPROXY .zip endpoint URL for the latest version."
+              "type": "url",
+              "description": "GOPROXY .zip endpoint URL for this version."
             },
             "gomod_hash": {
               "type": "string",
-              "description": "Hash of the go.mod file (from Go checksum database)."
+              "description": "The go.sum 'h1:' dirhash of the go.mod file, as recorded in the Go checksum database. The value is the literal 'h1:' prefix followed by the base64 SHA-256 hash-of-hashes, exactly as it appears on the '/go.mod' line of go.sum."
             },
             "zip_hash": {
               "type": "string",
-              "description": "Hash of the module zip file (from Go checksum database)."
+              "description": "The go.sum 'h1:' dirhash of the module zip, as recorded in the Go checksum database. The value is the literal 'h1:' prefix followed by the base64 SHA-256 hash-of-hashes, exactly as it appears on the module line of go.sum."
             },
             "pseudo_version": {
               "type": "boolean",
@@ -55,13 +98,130 @@
               "type": "boolean",
               "description": "Whether this is a pre-release version."
             },
-            "retracted": {
+            "incompatible": {
               "type": "boolean",
-              "description": "Whether this version has been retracted."
+              "description": "Whether the upstream version carries the +incompatible build-metadata suffix, which marks a major version at or above v2 published from a repository whose module path lacks the matching /vN suffix."
             },
-            "retract_rationale": {
+            "go_version": {
               "type": "string",
-              "description": "Rationale for retraction if the version has been retracted."
+              "description": "The language version named by the 'go' directive in this version's go.mod, for example '1.21.0'. Recorded without the leading 'go' keyword."
+            },
+            "toolchain": {
+              "type": "string",
+              "description": "The toolchain name named by the 'toolchain' directive in this version's go.mod, for example 'go1.21.4' or 'default'."
+            },
+            "require": {
+              "type": "array",
+              "description": "The 'require' directives of this version's go.mod. These are minimum-version requirements, not a resolved dependency set: the build list is computed by minimal version selection over the whole module graph.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "path": {
+                    "type": "string",
+                    "description": "Module path of the required module.",
+                    "required": true
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "Minimum canonical Go version required.",
+                    "required": true
+                  },
+                  "indirect": {
+                    "type": "boolean",
+                    "description": "Whether the requirement carries the '// indirect' comment, meaning no package of this module is imported directly by this module."
+                  }
+                }
+              }
+            },
+            "replace": {
+              "type": "array",
+              "description": "The 'replace' directives of this version's go.mod. Replacements take effect only when this module is the main module and are ignored when it is a dependency.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "old_path": {
+                    "type": "string",
+                    "description": "Module path being replaced.",
+                    "required": true
+                  },
+                  "old_version": {
+                    "type": "string",
+                    "description": "Specific version being replaced. Absent when the directive replaces all versions of the module."
+                  },
+                  "new_path": {
+                    "type": "string",
+                    "description": "Replacement module path, or a filesystem path when the replacement is a local directory.",
+                    "required": true
+                  },
+                  "new_version": {
+                    "type": "string",
+                    "description": "Replacement version. Absent when the replacement is a local filesystem directory."
+                  }
+                }
+              }
+            },
+            "exclude": {
+              "type": "array",
+              "description": "The 'exclude' directives of this version's go.mod. Excluded versions are skipped by minimal version selection and, like 'replace', take effect only in the main module.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "path": {
+                    "type": "string",
+                    "description": "Module path of the excluded module.",
+                    "required": true
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "Excluded canonical Go version.",
+                    "required": true
+                  }
+                }
+              }
+            },
+            "retract": {
+              "type": "array",
+              "description": "The 'retract' directives declared by this version's go.mod. Each entry retracts a range of versions of this same module. The retracted versions are other Versions of this Resource and carry no marker of their own; the module-wide effective set is exposed by the 'retractions' meta attribute.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "low": {
+                    "type": "string",
+                    "description": "Lowest canonical Go version in the retracted range, inclusive.",
+                    "required": true
+                  },
+                  "high": {
+                    "type": "string",
+                    "description": "Highest canonical Go version in the retracted range, inclusive. Equal to 'low' for a single-version retraction.",
+                    "required": true
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "description": "The comment recorded alongside the retract directive, if any."
+                  }
+                }
+              }
+            },
+            "godebug": {
+              "type": "map",
+              "description": "The 'godebug' directives of this version's go.mod, as GODEBUG setting name to value, for example 'panicnil' to '1'. Applied only when this module is the main module.",
+              "item": {
+                "type": "string"
+              }
+            },
+            "tool": {
+              "type": "array",
+              "description": "The package paths named by the 'tool' directives of this version's go.mod. Applied only when this module is the main module.",
+              "item": {
+                "type": "string"
+              }
+            },
+            "ignore": {
+              "type": "array",
+              "description": "The directory paths named by the 'ignore' directives of this version's go.mod, whose contents are excluded from the module's file tree.",
+              "item": {
+                "type": "string"
+              }
             }
           }
         }

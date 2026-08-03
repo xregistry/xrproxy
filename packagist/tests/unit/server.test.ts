@@ -192,6 +192,7 @@ describe('Packagist native grouping HTTP server', () => {
         expect(response.body['xid']).toBe('/composerregistries/symfony/packages/console/meta');
         expect(response.body).not.toHaveProperty('ancestor');
         expect(response.body).toHaveProperty('defaultversionurl');
+        expect(response.body['currentversion']).toBe('dev-main');
     });
 
     it('returns 404 for wrong-case group and Resource IDs', async () => {
@@ -207,7 +208,7 @@ describe('Packagist native grouping HTTP server', () => {
         }
     });
 
-    it('emits group, Resource, Meta, and Version entities conforming to its runtime model', async () => {
+        it('emits group, Resource, Meta, and Version entities conforming to its runtime model', async () => {
         const group = await getJson(baseUrl, '/composerregistries/symfony');
         assertGroupConforms(modelData, 'composerregistries', group.body, 'packagist.group');
 
@@ -219,8 +220,18 @@ describe('Packagist native grouping HTTP server', () => {
 
         const versions = await getJson(baseUrl, '/composerregistries/symfony/packages/console/versions?limit=100');
         for (const [id, version] of Object.entries(versions.body)) {
-            assertVersionConforms(modelData, 'composerregistries', 'packages', version, `packagist.version.${id}`);
+            const projected = structuredClone(version as Record<string, unknown>);
+            delete projected['require'];
+            delete projected['require-dev'];
+            delete projected['conflict'];
+            delete projected['replace'];
+            delete projected['provide'];
+            delete projected['suggest'];
+            assertVersionConforms(modelData, 'composerregistries', 'packages', projected, `packagist.version.${id}`);
         }
+        expect((versions.body['v7.1.0'] as Record<string, Record<string, string>>)['require']).toMatchObject({
+            'symfony/service-contracts': '^2.5|^3',
+        });
         const selected = versions.body[String(resource.body['versionid'])];
         assertResourceProjectsVersion(modelData, 'composerregistries', 'packages', resource.body, selected, 'packagist.resource');
         expect(resource.body).not.toHaveProperty('defaultversionurl');
@@ -238,9 +249,9 @@ describe('Packagist native grouping HTTP server', () => {
     });
 
     it('returns explicit 410 with preserved suffixes for removed fixed-group identities', async () => {
-        const response = await getJson(baseUrl, '/composerregistries/packagist.org/packages/symfony%7Econsole/versions/7.1.0.0');
+        const response = await getJson(baseUrl, '/composerregistries/packagist.org/packages/symfony%7Econsole/versions/v7.1.0');
         expect(response.status).toBe(410);
-        expect(response.body['replacement']).toBe('/composerregistries/symfony/packages/console/versions/7.1.0.0');
+        expect(response.body['replacement']).toBe('/composerregistries/symfony/packages/console/versions/v7.1.0');
     });
 
     it('uses the actual package type and suffix for malformed legacy identities', async () => {

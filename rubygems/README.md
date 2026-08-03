@@ -4,7 +4,7 @@ This service exposes the public RubyGems registry as an xRegistry-compatible rea
 
 - **Port:** 4000
 - **Group type:** `rubyregistries`
-- **Group id:** `rubygems.org`
+- **Group id:** `rubygems`
 - **Resource type:** `packages`
 - **Spec version:** `1.0-rc2`
 
@@ -12,16 +12,15 @@ This service exposes the public RubyGems registry as an xRegistry-compatible rea
 
 RubyGems releases use xRegistry's built-in Resource Version mechanism (`maxversions: 0`, `setversionid: true`, `versionmode: createdat`); Versions are not nested Resources.
 
+RubyGems can publish multiple builds for the same version. This proxy follows the spec's identity rules:
 
-RubyGems can publish multiple builds for the same version. This proxy makes those IDs collision-safe:
-
-- `ruby` or `jruby` platform → `1.18.0`
-- platform build → `1.18.0-x86_64-linux`
-- `/` inside platform names is rewritten to `-`
+- `ruby` platform → `1.18.0`
+- any other platform, including `java` → `1.18.0-java`, `1.18.0-x86_64-linux`
+- if `<version>-<platform>` would violate xRegistry Entity ID rules or exceed 128 characters, the proxy emits `xh~<sha256(version/platform)>`
 
 Collection pages are capped at ten complete Resources. Upstream requests are spaced below the public 10 requests/second limit with at most two in flight, and cached version histories avoid repeat hydration. A single history 429 falls back to the already-returned gem summary rather than failing or expanding the page fan-out.
 
-Each Version keeps the raw `number` and `platform`, canonical owning `packageid`, and rc2 `ancestor` lineage. Package collections, exact Resources, `/meta`, and Version endpoints all use the same cached version snapshot: `createdat` ordering with a case-insensitive Version-ID tie-breaker. Resources project the newest snapshot Version and include `metaurl`, `versionsurl`, and `versionscount`; `defaultversionurl` and package-wide download/link aggregates are exposed only by `/meta`.
+Each Version keeps the raw `number` and `platform`, canonical owning `packageid`, and rc2 `ancestor` lineage. Package collections, exact Resources, `/meta`, and Version endpoints all use the same cached version snapshot: `createdat` ordering with a case-insensitive Version-ID tie-breaker. Resources project the newest non-yanked snapshot Version when yanked state is known, surface declared gemspec URI metadata on the Version projection, and keep package-wide aggregates (`owners`, `project_uri`, `downloads`, `reverse_dependencies`, `defaultversionsticky`) on `/meta`.
 
 ## Endpoints
 
@@ -30,12 +29,12 @@ Each Version keeps the raw `number` and `platform`, canonical owning `packageid`
 - `GET /modelsource`
 - `GET /capabilities`
 - `GET /rubyregistries`
-- `GET /rubyregistries/rubygems.org`
-- `GET /rubyregistries/rubygems.org/packages`
-- `GET /rubyregistries/rubygems.org/packages/{name}`
-- `GET /rubyregistries/rubygems.org/packages/{name}/meta`
-- `GET /rubyregistries/rubygems.org/packages/{name}/versions`
-- `GET /rubyregistries/rubygems.org/packages/{name}/versions/{versionId}`
+- `GET /rubyregistries/rubygems`
+- `GET /rubyregistries/rubygems/packages`
+- `GET /rubyregistries/rubygems/packages/{name}`
+- `GET /rubyregistries/rubygems/packages/{name}/meta`
+- `GET /rubyregistries/rubygems/packages/{name}/versions`
+- `GET /rubyregistries/rubygems/packages/{name}/versions/{versionId}`
 - `GET /health`
 
 Supported query parameters on package collections:

@@ -34,6 +34,7 @@ import type {
     PackagistPackageInfo,
     PackagistPackageListResult,
     PackagistSearchResult,
+    PackagistSource,
     PackagistVersion,
 } from '../types/packagist';
 import type { XRegistryEntity, XRegistryResource, XRegistryVersion } from '../types/xregistry';
@@ -108,6 +109,19 @@ function toIso(time?: string): string | undefined {
 
 const UNKNOWN_VERSION_TIME = '1970-01-01T00:00:00.000Z';
 
+function normalizeSourceReference(sourceRef?: string): string | undefined {
+    return sourceRef?.toLowerCase();
+}
+
+function sanitizeSource(source?: PackagistSource): PackagistSource | undefined {
+    if (!source) return undefined;
+    const sanitized: PackagistSource = {};
+    if (source.url !== undefined) sanitized.url = source.url;
+    if (source.type !== undefined) sanitized.type = source.type;
+    if (source.reference !== undefined) sanitized.reference = source.reference;
+    return sanitized;
+}
+
 function versionIdOf(version: PackagistVersion): string {
     return buildVersionId(
         version.version,
@@ -141,14 +155,15 @@ function mapVersion(
     baseUrl: string,
     defaultVersionId: string | undefined,
 ): XRegistryVersion {
-    const sourceRef = v.source?.reference ?? v.dist?.reference;
-    const versionId = buildVersionId(v.version, v.version_normalized, sourceRef);
+    const rawSourceRef = v.source?.reference ?? v.dist?.reference;
+    const sourceRef = normalizeSourceReference(rawSourceRef);
+    const source = sanitizeSource(v.source);
+    const versionId = buildVersionId(v.version, v.version_normalized, rawSourceRef);
     const dev = isDevVersion(v.version);
     const { groupId, resourceId } = packageNameToIdentity(pkgName);
     const xid = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}/versions/${versionId}`;
     const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_CONFIG.TYPE}/${encodeURIComponent(resourceId)}/versions/${encodeURIComponent(versionId)}`;
 
-    // Keep timestamps deterministic even when malformed upstream data omits time.
     const releaseTime = toIso(v.time) ?? UNKNOWN_VERSION_TIME;
 
     const entity: Record<string, unknown> = {
@@ -166,18 +181,22 @@ function mapVersion(
         packagepath: pkgName,
         version: v.version,
         versionnormalized: v.version_normalized,
-        // CRITICAL: mutable flag — dev aliases are not immutable releases
         immutable: !dev,
         type: v.type,
         license: v.license,
         authors: v.authors,
         require: v.require,
-        requiredev: v['require-dev'],
+        'require-dev': v['require-dev'],
         conflict: v.conflict,
         replace: v.replace,
         provide: v.provide,
         suggest: v.suggest,
         autoload: v.autoload,
+        'autoload-dev': v['autoload-dev'],
+        bin: v.bin,
+        scripts: v.scripts,
+        support: v.support,
+        funding: v.funding,
         extra: v.extra,
     };
 
@@ -185,10 +204,10 @@ function mapVersion(
     if (v.homepage !== undefined) entity['homepage'] = v.homepage;
     if (v.keywords !== undefined) entity['keywords'] = v.keywords;
     if (v.abandoned !== undefined) entity['abandoned'] = v.abandoned;
-    if (v.source?.url !== undefined) entity['repository'] = v.source.url;
+    if (source?.url !== undefined) entity['repository'] = source.url;
     if (sourceRef !== undefined) entity['sourcereference'] = sourceRef;
     if (v.dist !== undefined) entity['dist'] = v.dist;
-    if (v.source !== undefined) entity['source'] = v.source;
+    if (source !== undefined) entity['source'] = source;
     const iso = toIso(v.time);
     if (iso !== undefined) entity['time'] = iso;
 
@@ -239,7 +258,6 @@ function mapPackageMeta(pkg: PackagistPackage, baseUrl: string): Record<string, 
         throw new UpstreamError({ code: 'invalid_response', message: `Packagist package ${pkg.name} has no versions` });
     }
     const defaultVersionId = versionIdOf(defaultVersion);
-    const latestStable = [...versions].reverse().find(version => !isDevVersion(version.version));
     const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_CONFIG.TYPE}/${encodeURIComponent(resourceId)}`;
     const createdat = toIso(versions[0]?.time) ?? UNKNOWN_VERSION_TIME;
     const modifiedat = toIso(defaultVersion.time) ?? createdat;
@@ -257,7 +275,9 @@ function mapPackageMeta(pkg: PackagistPackage, baseUrl: string): Record<string, 
         defaultversionsticky: false,
         ...(pkg.downloads !== undefined ? { downloads: pkg.downloads } : {}),
         ...(pkg.favers !== undefined ? { favers: pkg.favers } : {}),
-        ...(latestStable?.version !== undefined ? { currentversion: latestStable.version } : {}),
+        ...(defaultVersion.version !== undefined ? { currentversion: defaultVersion.version } : {}),
+        ...(pkg.readme !== undefined ? { readme: pkg.readme } : {}),
+        ...(pkg.default_branch !== undefined ? { 'default-branch': pkg.default_branch } : {}),
     };
 }
 

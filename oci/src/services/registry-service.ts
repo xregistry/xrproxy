@@ -1,320 +1,320 @@
-﻿/**
- * Registry Service
- * @fileoverview xRegistry-compliant service for OCI Images
- */
-
 import { Request, Response } from 'express';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
 import * as modelData from '../../model.json';
-import { getBaseUrl, GROUP_CONFIG, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
+import { getBaseUrl, GROUP_CONFIG, PAGINATION, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
+import { applyFilterFlag, applySortFlag } from '../middleware/xregistry-flags';
+import { parsePaginationParams } from '../utils/request-utils';
 import { generateETag } from '../utils/xregistry-utils';
 import { ImageService } from './image-service';
+import { ContainerRegistryGroup, ImageMetadata, Registry, VersionMetadata } from '../types/xregistry';
+import { getSourceApiUrl } from '../utils/image-utils';
 
 export interface RegistryServiceOptions {
     imageService: ImageService;
-    logger?: any;
+    logger?: { error(message: string, data?: unknown): void };
 }
 
 export class RegistryService {
     private readonly imageService: ImageService;
-    private readonly logger: any;
+    private readonly logger: { error(message: string, data?: unknown): void } | undefined;
     private readonly entityState: EntityStateManager;
-    private model: any; // Loaded from model.json
+    private readonly model: unknown;
 
     constructor(options: RegistryServiceOptions, entityState: EntityStateManager) {
         this.imageService = options.imageService;
-        this.logger = options.logger || console;
+        this.logger = options.logger;
         this.entityState = entityState;
-        this.loadModel();
+        this.model = modelData;
     }
 
-    /**
-     * Load model.json
-     */
-    private loadModel(): void {
-        this.model = modelData;
+    private getInlineFlags(req: Request): string[] {
+        const flags = (req as Request & { xregistryFlags?: { inline?: string[] } }).xregistryFlags;
+        return flags?.inline || [];
+    }
+
+    private wantsInline(req: Request, attribute: string): boolean {
+        const inlineFlags = this.getInlineFlags(req);
+        const wantsDoc = Boolean((req as Request & { xregistryFlags?: { doc?: boolean } }).xregistryFlags?.doc);
+        return wantsDoc || inlineFlags.includes('*') || inlineFlags.includes(attribute);
+    }
+
+    private createPaginationLink(req: Request, offset: number, limit: number, totalCount: number): string | undefined {
+        if (offset + limit >= totalCount) {
+            return undefined;
+        }
+
+        const baseUrl = getBaseUrl(req);
+        const nextOffset = offset + limit;
+        const query = new URLSearchParams();
+        for (const [key, value] of Object.entries(req.query)) {
+            if (Array.isArray(value)) {
+                value.forEach((item) => query.append(key, String(item)));
+            } else if (value !== undefined && value !== null) {
+                query.set(key, String(value));
+            }
+        }
+        query.set('offset', String(nextOffset));
+        query.set('limit', String(limit));
+        return `<${baseUrl}${req.path}?${query.toString()}>; rel="next"`;
+    }
+
+    private async buildGroupEntity(req: Request, groupId: string, includeImages: boolean): Promise<ContainerRegistryGroup | null> {
+        const backend = this.imageService.getBackend(groupId);
+        if (!backend) {
+            return null;
+        }
+
+        const baseUrl = getBaseUrl(req);
+        const groupPath = `/${GROUP_CONFIG.TYPE}/${backend.id}`;
+        const imagesCount = await this.imageService.getTotalImageCount(backend.id);
+        const group: ContainerRegistryGroup = {
+            containerregistryid: backend.id,
+            name: backend.name,
+            ...(backend.description ? { description: backend.description } : {}),
+            sourceurl: getSourceApiUrl(backend.url),
+            imagesurl: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
+            imagescount: imagesCount,
+            xid: groupPath,
+            self: `${baseUrl}${groupPath}`,
+            epoch: this.entityState.getEpoch(groupPath),
+            createdat: this.entityState.getCreatedAt(groupPath),
+            modifiedat: this.entityState.getModifiedAt(groupPath),
+        };
+
+        if (includeImages) {
+            const { images } = await this.imageService.getAllImages(backend.id, {}, 0, imagesCount || PAGINATION.DEFAULT_PAGE_LIMIT);
+            group.images = this.toImageMap(images);
+        }
+
+        return group;
+    }
+
+    private toImageMap(images: ImageMetadata[]): Record<string, ImageMetadata> {
+        return images.reduce<Record<string, ImageMetadata>>((acc, image) => {
+            acc[image.imageid] = image;
+            return acc;
+        }, {});
+    }
+
+    private toVersionMap(versions: VersionMetadata[]): Record<string, VersionMetadata> {
+        return versions.reduce<Record<string, VersionMetadata>>((acc, version) => {
+            acc[version.versionid] = version;
+            return acc;
+        }, {});
+    }
+
+    private getCapabilitiesObject(): Record<string, unknown> {
+        return {
+            apis: ['/capabilities', '/model', `/${GROUP_CONFIG.TYPE}`],
+            flags: ['collections', 'doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+            formats: [REGISTRY_CONFIG.SCHEMA_VERSION],
+            mutable: [],
+            pagination: true,
+            specversions: [REGISTRY_CONFIG.SPEC_VERSION],
+        };
     }
 
     async getRegistry(req: Request, res: Response): Promise<void> {
         try {
             const baseUrl = getBaseUrl(req);
-            const backends = this.imageService.getBackends();
-
-            const registryPath = '/';
-
-            const registry: any = {
+            const registry: Registry = {
                 specversion: REGISTRY_CONFIG.SPEC_VERSION,
                 registryid: REGISTRY_CONFIG.ID,
                 xid: '/',
                 self: `${baseUrl}/`,
-                xregistryurl: `${baseUrl}/`,
+                epoch: this.entityState.getEpoch('/'),
+                createdat: this.entityState.getCreatedAt('/'),
+                modifiedat: this.entityState.getModifiedAt('/'),
+                name: 'OCI Container Registry Proxy',
+                description: 'xRegistry projection of OCI container registries',
                 modelurl: `${baseUrl}/model`,
                 capabilitiesurl: `${baseUrl}/capabilities`,
-                epoch: this.entityState.getEpoch(registryPath),
-                name: 'OCI Registry Service',
-                description: 'xRegistry-compliant OCI Image registry',
-                docs: 'https://opencontainers.org/',
-                createdat: this.entityState.getCreatedAt(registryPath),
-                modifiedat: this.entityState.getModifiedAt(registryPath),
-                [`${GROUP_CONFIG.TYPE}url`]: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
-                [`${GROUP_CONFIG.TYPE}count`]: backends.length,
                 containerregistriesurl: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
-                containerregistries: backends.length
+                containerregistriescount: this.imageService.getBackends().length,
             };
 
-            // Support inline=true (includes meta)
-            const inlineParam = req.query['inline'];
-            if (inlineParam === 'true' || inlineParam === '*' ||
-                (req.xregistryFlags?.inline?.includes('*'))) {
-                registry.meta = {
-                    type: 'registry',
-                    backend: 'oci-registries',
-                    version: '1.0.0'
-                };
+            if (this.wantsInline(req, 'capabilities')) {
+                registry.capabilities = this.getCapabilitiesObject();
+            }
+            if (this.wantsInline(req, 'model')) {
+                registry.model = this.model as Record<string, unknown>;
+            }
+            if (this.wantsInline(req, GROUP_CONFIG.TYPE)) {
+                const groups = await Promise.all(this.imageService.getBackends().map((backend) => this.buildGroupEntity(req, backend.id, false)));
+                registry.containerregistries = groups.filter((group): group is ContainerRegistryGroup => group !== null).reduce<Record<string, ContainerRegistryGroup>>((acc, group) => {
+                    acc[group.containerregistryid] = group;
+                    return acc;
+                }, {});
             }
 
-            // Support inline=model (includes model definition)
-            if (inlineParam === 'model' ||
-                (req.xregistryFlags?.inline?.includes('model'))) {
-                registry.model = this.getModelInline();
-            }
-
-            const etag = generateETag(registry);
-            res.set('ETag', etag);
+            res.set('ETag', generateETag(registry));
             res.set('Content-Type', 'application/json');
             res.json(registry);
-        } catch (error: any) {
-            this.logger.error('Failed to serve registry root', { error: error.message });
+        } catch (error) {
+            this.logger?.error('Failed to serve registry root', error);
             res.status(500).json({ error: 'Internal server error' });
         }
     }
 
     async getGroups(req: Request, res: Response): Promise<void> {
         try {
-            const baseUrl = getBaseUrl(req);
-            const backends = this.imageService.getBackends();
-
-            const groupsObject: any = {};
-            backends.forEach(backend => {
-                const groupPath = `/${GROUP_CONFIG.TYPE}/${backend.id}`;
-                groupsObject[backend.id] = {
-                    groupid: backend.id,
-                    [`${GROUP_CONFIG.TYPE_SINGULAR}id`]: backend.id,
-                    name: backend.id,
-                    description: backend.description,
-                    xid: groupPath,
-                    self: `${baseUrl}${groupPath}`,
-                    epoch: this.entityState.getEpoch(groupPath),
-                    createdat: this.entityState.getCreatedAt(groupPath),
-                    modifiedat: this.entityState.getModifiedAt(groupPath),
-                    [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                };
-            });
-
+            const includeImages = this.wantsInline(req, RESOURCE_CONFIG.TYPE);
+            const groups = await Promise.all(this.imageService.getBackends().map((backend) => this.buildGroupEntity(req, backend.id, includeImages)));
+            const response = groups.filter((group): group is ContainerRegistryGroup => group !== null).reduce<Record<string, ContainerRegistryGroup>>((acc, group) => {
+                acc[group.containerregistryid] = group;
+                return acc;
+            }, {});
             res.set('Content-Type', 'application/json');
-            res.json(groupsObject);
-        } catch (error: any) {
-            this.logger.error('Failed to get groups', { error: error.message });
+            res.json(response);
+        } catch (error) {
+            this.logger?.error('Failed to get groups', error);
             res.status(500).json({ error: 'Internal server error' });
         }
     }
 
     async getGroup(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'] || req.params['groupId'] || '';
-            const backend = this.imageService.getBackend(groupId);
-
-            if (!backend) {
+            const groupId = String(req.params['groupId'] || '');
+            const group = await this.buildGroupEntity(req, groupId, this.wantsInline(req, RESOURCE_CONFIG.TYPE));
+            if (!group) {
                 res.status(404).json({ error: 'Group not found' });
                 return;
             }
-
-            const baseUrl = getBaseUrl(req);
-            const groupPath = `/${GROUP_CONFIG.TYPE}/${backend.id}`;
-            const group = {
-                groupid: backend.id,
-                [`${GROUP_CONFIG.TYPE_SINGULAR}id`]: backend.id,
-                name: backend.name,
-                description: backend.description,
-                xid: groupPath,
-                self: `${baseUrl}${groupPath}`,
-                epoch: this.entityState.getEpoch(groupPath),
-                createdat: this.entityState.getCreatedAt(groupPath),
-                modifiedat: this.entityState.getModifiedAt(groupPath),
-                [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-            };
-
             res.set('Content-Type', 'application/json');
             res.json(group);
-        } catch (error: any) {
-            this.logger.error('Failed to get group', { error: error.message });
+        } catch (error) {
+            this.logger?.error('Failed to get group', error);
             res.status(500).json({ error: 'Internal server error' });
         }
     }
 
     async getResources(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'] || req.params['groupId'] || '';
-            const limit = parseInt(req.query['limit'] as string) || 50;
-            const offset = parseInt(req.query['offset'] as string) || 0;
-            const filter = req.query['filter'] as string;
+            const groupId = String(req.params['groupId'] || '');
+            const { offset, limit } = parsePaginationParams(req.query as Record<string, unknown>, PAGINATION.DEFAULT_PAGE_LIMIT);
+            const xregistryFlags = (req as Request & { xregistryFlags?: { filter?: string[][]; sort?: { attribute: string; direction: 'asc' | 'desc' } } }).xregistryFlags;
+            const wantsFullScan = Boolean(xregistryFlags?.filter) || Boolean(xregistryFlags?.sort);
 
-            // Parse filter parameter
-            let nameFilter: string | undefined;
-            if (filter) {
-                const filterMatch = filter.match(/name=(.+)/i);
-                if (filterMatch && filterMatch[1]) {
-                    nameFilter = filterMatch[1];
-                } else {
-                    // If filter doesn't have name constraint, return empty result
-                    res.json({});
-                    return;
-                }
+            const result = wantsFullScan
+                ? await this.imageService.getAllImages(groupId, {}, 0, Number.MAX_SAFE_INTEGER)
+                : await this.imageService.getAllImages(groupId, {}, offset, limit);
+
+            let images = result.images;
+            if (xregistryFlags?.filter) {
+                images = applyFilterFlag(images, xregistryFlags.filter) as ImageMetadata[];
+            }
+            if (xregistryFlags?.sort) {
+                images = applySortFlag(images, xregistryFlags.sort) as ImageMetadata[];
+            }
+            if (wantsFullScan) {
+                images = images.slice(offset, offset + limit);
             }
 
-            // Request limit + 1 to check if there are more results
-            let result;
-            try {
-                const fetchLimit = limit + 1;
-                result = await this.imageService.getAllImages(groupId, {}, offset, fetchLimit);
-            } catch (imageError: any) {
-                this.logger.error('Failed to get images from backend', { error: imageError.message });
-                // Return empty result on backend failure
-                res.json({});
-                return;
-            }
-
-            // Apply filter if provided
-            let filteredImages = result.images;
-            if (nameFilter) {
-                const pattern = nameFilter.replace(/\*/g, '.*');
-                const regex = new RegExp(`^${pattern}$`, 'i');
-                filteredImages = result.images.filter(img => {
-                    const imageName = img.name || img.resourceid || '';
-                    return regex.test(imageName);
-                });
-            }
-
-            // Check if there are more results and set Link header
-            const baseUrl = getBaseUrl(req);
-            const hasMore = filteredImages.length > limit;
-            if (hasMore) {
-                const nextOffset = offset + limit;
-                let linkUrl = `${baseUrl}/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}?offset=${nextOffset}&limit=${limit}`;
-                if (filter) {
-                    linkUrl += `&filter=${encodeURIComponent(filter)}`;
-                }
-                res.setHeader('Link', `<${linkUrl}>; rel="next"`);
-            }
-
-            // Apply limit to filtered results (take only what was requested)
-            const limitedImages = filteredImages.slice(0, limit);
-
-            // Convert to object format keyed by image name/resourceid
-            const imagesObject: any = {};
-            for (const img of limitedImages) {
-                const imageId = img.resourceid || img.name || img.xid?.split('/').pop() || '';
-                if (imageId) {
-                    imagesObject[imageId] = img;
-                }
+            const linkHeader = this.createPaginationLink(req, offset, limit, wantsFullScan ? result.images.length : result.totalCount);
+            if (linkHeader) {
+                res.setHeader('Link', linkHeader);
             }
 
             res.set('Content-Type', 'application/json');
-            res.json(imagesObject);
-        } catch (error: any) {
-            this.logger.error('Failed to get resources', { error: error.message });
+            res.json(this.toImageMap(images));
+        } catch (error) {
+            this.logger?.error('Failed to get resources', error);
             res.status(500).json({ error: 'Internal server error' });
         }
     }
 
     async getResource(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'] || req.params['groupId'] || '';
-            const resourceId = req.params['resourceId'] || req.params['resourceId'] || '';
+            const groupId = String(req.params['groupId'] || '');
+            const resourceId = String(req.params['resourceId'] || '');
             const image = await this.imageService.getImage(groupId, resourceId);
+
+            if (this.wantsInline(req, 'meta')) {
+                image.meta = await this.imageService.getImageMeta(groupId, resourceId);
+            }
+            if (this.wantsInline(req, 'versions')) {
+                const versionResult = await this.imageService.getImageVersions(groupId, resourceId, 0, Number.MAX_SAFE_INTEGER);
+                image.versions = this.toVersionMap(versionResult.versions);
+            }
+
+            if ((req as Request & { xregistryFlags?: { collections?: boolean } }).xregistryFlags?.collections) {
+                res.json({
+                    ...(image.meta ? { meta: image.meta } : {}),
+                    ...(image.versions ? { versions: image.versions } : {}),
+                });
+                return;
+            }
 
             res.set('Content-Type', 'application/json');
             res.json(image);
-        } catch (error: any) {
-            this.logger.error('Failed to get resource', { error: error.message });
+        } catch (error) {
+            this.logger?.error('Failed to get resource', error);
             res.status(404).json({ error: 'Resource not found' });
         }
     }
 
     async getVersions(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'] || req.params['groupId'] || '';
-            const resourceId = req.params['resourceId'] || req.params['resourceId'] || '';
-            const limit = parseInt(req.query['limit'] as string) || 50;
-            const offset = parseInt(req.query['offset'] as string) || 0;
+            const groupId = String(req.params['groupId'] || '');
+            const resourceId = String(req.params['resourceId'] || '');
+            const { offset, limit } = parsePaginationParams(req.query as Record<string, unknown>, PAGINATION.DEFAULT_PAGE_LIMIT);
+            const versionResult = await this.imageService.getImageVersions(groupId, resourceId, 0, Number.MAX_SAFE_INTEGER);
 
-            const result = await this.imageService.getImageVersions(groupId, resourceId, offset, limit);
+            let versions = versionResult.versions;
+            const xregistryFlags = (req as Request & { xregistryFlags?: { filter?: string[][]; sort?: { attribute: string; direction: 'asc' | 'desc' } } }).xregistryFlags;
+            if (xregistryFlags?.filter) {
+                versions = applyFilterFlag(versions, xregistryFlags.filter) as VersionMetadata[];
+            }
+            if (xregistryFlags?.sort) {
+                versions = applySortFlag(versions, xregistryFlags.sort) as VersionMetadata[];
+            }
+
+            const pagedVersions = versions.slice(offset, offset + limit);
+            const linkHeader = this.createPaginationLink(req, offset, limit, versions.length);
+            if (linkHeader) {
+                res.setHeader('Link', linkHeader);
+            }
 
             res.set('Content-Type', 'application/json');
-            res.json({
-                versions: result.versions,
-                count: result.versions.length,
-                total: result.totalCount
-            });
-        } catch (error: any) {
-            this.logger.error('Failed to get versions', { error: error.message });
-            res.status(500).json({ error: 'Internal server error' });
+            res.json(this.toVersionMap(pagedVersions));
+        } catch (error) {
+            this.logger?.error('Failed to get versions', error);
+            res.status(404).json({ error: 'Versions not found' });
         }
     }
 
     async getVersion(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'] || req.params['groupId'] || '';
-            const resourceId = req.params['resourceId'] || req.params['resourceId'] || '';
-            const versionId = req.params['versionId'] || req.params['versionId'] || '';
+            const groupId = String(req.params['groupId'] || '');
+            const resourceId = String(req.params['resourceId'] || '');
+            const versionId = String(req.params['versionId'] || '');
             const version = await this.imageService.getImageVersion(groupId, resourceId, versionId);
-
             res.set('Content-Type', 'application/json');
             res.json(version);
-        } catch (error: any) {
-            this.logger.error('Failed to get version', { error: error.message });
+        } catch (error) {
+            this.logger?.error('Failed to get version', error);
             res.status(404).json({ error: 'Version not found' });
         }
     }
 
-    /**
-     * Get capabilities in flat xRegistry 1.0-rc2 format
-     */
-    private getCapabilitiesObject(): any {
-        // Per core spec §"Design: JSON Serialization". `apis` is the list of
-        // optional endpoints implemented (not a wire-format identifier);
-        // `flags` carries the supported query-parameter feature names;
-        // `mutable` is an array of mutable areas (empty = read-only).
-        return {
-            apis: ['/capabilities', '/model', '/export'],
-            flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
-            formats: ['xRegistry-json/1.0-rc2'],
-            mutable: [],
-            pagination: true,
-            specversions: ['1.0-rc2']
-        };
+    async getMeta(req: Request, res: Response): Promise<void> {
+        try {
+            const groupId = String(req.params['groupId'] || '');
+            const resourceId = String(req.params['resourceId'] || '');
+            const meta = await this.imageService.getImageMeta(groupId, resourceId);
+            res.set('Content-Type', 'application/json');
+            res.json(meta);
+        } catch (error) {
+            this.logger?.error('Failed to get meta', error);
+            res.status(404).json({ error: 'Meta not found' });
+        }
     }
 
-    /**
-     * Get capabilities
-     */
     async getCapabilities(_req: Request, res: Response): Promise<void> {
         res.json(this.getCapabilitiesObject());
     }
 
-    /**
-     * Get model
-     */
     async getModel(_req: Request, res: Response): Promise<void> {
-        // Return the full model.json content
         res.json(this.model);
-    }
-
-    /**
-     * Get model inline (for inline expansion)
-     */
-    private getModelInline(): any {
-        // Return model.model for inline expansion
-        return this.model.model || this.model;
     }
 }

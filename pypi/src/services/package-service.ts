@@ -1,11 +1,25 @@
 /**
- * Package Service - Handles package and version metadata operations
+ * Package Service - Handles package and version metadata operations.
  */
 
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import { REGISTRY_METADATA } from '../config/constants';
-import { PyPIPackageFile } from '../types/pypi';
+import {
+    PyPIPackageFile,
+    PyPIPackageInfo,
+    PyPIPackageResponse,
+    PyPISimpleFile,
+    PyPISimpleProjectResponse,
+    PyPIVulnerability,
+} from '../types/pypi';
 import { entityNotFound } from '../utils/xregistry-errors';
+import {
+    buildPackagePath,
+    buildPackageXid,
+    buildVersionPath,
+    extractDependencyPackageId,
+    normalizePackageId,
+    toVersionId,
+} from '../utils/identity';
 import { PyPIService } from './pypi-service';
 
 export class PackageService {
@@ -17,162 +31,137 @@ export class PackageService {
         this.entityState = entityState;
     }
 
-    /**
-     * Get package metadata
-     */
     async getPackageMetadata(packageName: string, baseUrl: string): Promise<any> {
-        const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE, RESOURCE_TYPE_SINGULAR } =
-            REGISTRY_METADATA;
-
-        const packageData = await this.pypiService.fetchPackageMetadata(packageName);
-        const { info } = packageData;
-        const versions = Object.keys(packageData.releases);
-
-        const resourceBasePath = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}`;
-        const resourcePath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}`;
-
-        const docsUrl = this.extractDocsUrl(info.project_urls);
+        const packageId = normalizePackageId(packageName);
+        const [packageData, simpleProject] = await Promise.all([
+            this.pypiService.fetchPackageMetadata(packageId),
+            this.pypiService.fetchSimpleProject(packageId),
+        ]);
+        const versions = this.getVersionSequence(packageData, simpleProject);
+        const releaseVersion = packageData.info.version;
+        const versionId = toVersionId(releaseVersion);
+        const resourcePath = buildPackagePath(packageId);
+        const resourceBasePath = `${baseUrl}${resourcePath}`;
 
         return {
-            [`${RESOURCE_TYPE_SINGULAR}id`]: packageName,
+            packageid: packageId,
+            versionid: versionId,
             xid: resourcePath,
-            name: info.name,
-            description: info.summary || '',
-            epoch: this.entityState.getEpoch(resourcePath),
-            createdat: this.entityState.getCreatedAt(resourcePath),
-            modifiedat: this.entityState.getModifiedAt(resourcePath),
             self: resourceBasePath,
-            // xRegistry required attributes
-            versionid: info.version,
-            isdefault: true,
+            ...this.buildCoreVersionFields(
+                resourcePath,
+                packageData.info.name,
+                packageData.info.description,
+                releaseVersion,
+                packageData.urls,
+                versions,
+                packageData.info.version
+            ),
+            ...this.mapInfoToAttributes(packageData.info),
+            urls: this.mapDistributionFiles(packageData.urls, simpleProject),
+            vulnerabilities: this.mapVulnerabilities(packageData.vulnerabilities),
+            ...(this.mapReplacedBy(simpleProject) ?? {}),
             metaurl: `${resourceBasePath}/meta`,
             versionsurl: `${resourceBasePath}/versions`,
             versionscount: versions.length,
-            // PyPI-specific attributes
-            license: info.license || '',
-            author: info.author || '',
-            author_email: info.author_email || '',
-            maintainer: info.maintainer || '',
-            maintainer_email: info.maintainer_email || '',
-            home_page: info.home_page || '',
-            project_url: info.project_url || '',
-            project_urls: info.project_urls || {},
-            documentation: docsUrl,
-            requires_python: info.requires_python || '',
-            classifiers: info.classifiers || [],
-            yanked: info.yanked || false,
-            yanked_reason: info.yanked_reason || null,
         };
     }
 
-    /**
-     * Get package versions list
-     */
-    async getPackageVersions(packageName: string, baseUrl: string): Promise<any> {
-        const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE } = REGISTRY_METADATA;
-
-        const versions = await this.pypiService.getPackageVersions(packageName);
-        const versionBasePath = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}/versions`;
-        const packageId = packageName;
-        const latestVersion = versions[versions.length - 1] ?? '';
-
+    async getPackageVersions(packageName: string, baseUrl: string): Promise<Record<string, any>> {
+        const packageId = normalizePackageId(packageName);
+        const [packageData, simpleProject] = await Promise.all([
+            this.pypiService.fetchPackageMetadata(packageId),
+            this.pypiService.fetchSimpleProject(packageId),
+        ]);
+        const versions = this.getVersionSequence(packageData, simpleProject);
+        const versionBasePath = `${baseUrl}${buildPackagePath(packageId)}/versions`;
         const versionEntries: Record<string, any> = {};
 
-        for (let i = 0; i < versions.length; i++) {
-            const versionId = versions[i];
-            const versionPath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}/versions/${versionId}`;
-            const ancestor = i > 0 ? versions[i - 1] : versionId;
+        for (const releaseVersion of versions) {
+            const versionId = toVersionId(releaseVersion);
+            const versionPath = buildVersionPath(packageId, versionId);
+            const files = packageData.releases[releaseVersion] || [];
 
             versionEntries[versionId] = {
+                packageid: packageId,
                 versionid: versionId,
                 xid: versionPath,
-                name: versionId,
-                epoch: this.entityState.getEpoch(versionPath),
-                createdat: this.entityState.getCreatedAt(versionPath),
-                modifiedat: this.entityState.getModifiedAt(versionPath),
                 self: `${versionBasePath}/${versionId}`,
-                // xRegistry required attributes
-                packageid: packageId,
-                isdefault: versionId === latestVersion,
-                ancestor: ancestor,
-                contenttype: 'application/x-python-package',
+                ...this.buildCoreVersionFields(
+                    versionPath,
+                    releaseVersion,
+                    undefined,
+                    releaseVersion,
+                    files,
+                    versions,
+                    packageData.info.version
+                ),
             };
         }
 
         return versionEntries;
     }
 
-    /**
-     * Get specific version details
-     */
     async getVersionDetails(
         packageName: string,
-        versionId: string,
+        requestedVersionId: string,
         baseUrl: string
     ): Promise<any> {
-        const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE } = REGISTRY_METADATA;
+        const packageId = normalizePackageId(packageName);
+        const [packageData, simpleProject] = await Promise.all([
+            this.pypiService.fetchPackageMetadata(packageId),
+            this.pypiService.fetchSimpleProject(packageId),
+        ]);
+        const versions = this.getVersionSequence(packageData, simpleProject);
+        const releaseVersion = this.findReleaseVersion(versions, requestedVersionId);
 
-        const versionFiles = await this.pypiService.getVersionInfo(packageName, versionId);
-
-        if (!versionFiles) {
+        if (!releaseVersion) {
             throw entityNotFound(
-                `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}/versions/${versionId}`,
+                `${buildPackagePath(packageId)}/versions/${requestedVersionId}`,
                 'version',
-                versionId
+                requestedVersionId
             );
         }
 
-        const versionBasePath = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}/versions/${versionId}`;
-        const versionPath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}/versions/${versionId}`;
-
-        // Get all versions to determine lineage and default
-        const allVersions = await this.pypiService.getPackageVersions(packageName);
-        const latestVersion = allVersions[allVersions.length - 1] ?? '';
-        const versionIndex = allVersions.indexOf(versionId);
-        const ancestor = versionIndex > 0 ? allVersions[versionIndex - 1] : versionId;
-
-        // Extract metadata from files
-        const firstFile = versionFiles[0];
-        const yanked = firstFile?.yanked || false;
-        const yankedReason = firstFile?.yanked_reason || null;
-        const requiresPython = firstFile?.requires_python || null;
+        const versionData = releaseVersion === packageData.info.version
+            ? packageData
+            : await this.pypiService.fetchVersionMetadata(packageId, releaseVersion);
+        const versionId = toVersionId(releaseVersion);
+        const versionPath = buildVersionPath(packageId, versionId);
+        const versionBasePath = `${baseUrl}${versionPath}`;
 
         return {
+            packageid: packageId,
             versionid: versionId,
             xid: versionPath,
-            name: versionId,
-            epoch: this.entityState.getEpoch(versionPath),
-            createdat: this.entityState.getCreatedAt(versionPath),
-            modifiedat: this.entityState.getModifiedAt(versionPath),
             self: versionBasePath,
-            // xRegistry required attributes
-            packageid: packageName,
-            isdefault: versionId === latestVersion,
-            ancestor: ancestor,
-            contenttype: 'application/x-python-package',
-            // PyPI-specific attributes
-            yanked,
-            yanked_reason: yankedReason,
-            requires_python: requiresPython,
-            files: versionFiles.map(this.mapFileInfo),
+            ...this.buildCoreVersionFields(
+                versionPath,
+                releaseVersion,
+                versionData.info.description,
+                releaseVersion,
+                versionData.urls,
+                versions,
+                packageData.info.version
+            ),
+            ...this.mapInfoToAttributes(versionData.info),
+            urls: this.mapDistributionFiles(versionData.urls, simpleProject),
+            vulnerabilities: this.mapVulnerabilities(versionData.vulnerabilities),
+            ...(this.mapReplacedBy(simpleProject) ?? {}),
         };
     }
 
-    /**
-     * Get package meta information
-     */
     async getPackageMeta(packageName: string, baseUrl: string): Promise<any> {
-        const { GROUP_TYPE, GROUP_ID, RESOURCE_TYPE, RESOURCE_TYPE_SINGULAR } =
-            REGISTRY_METADATA;
-
-        const packageData = await this.pypiService.fetchPackageMetadata(packageName);
-        const { info } = packageData;
-
-        const resourceBasePath = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}`;
-        const metaPath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}/meta`;
+        const packageId = normalizePackageId(packageName);
+        const [packageData, simpleProject] = await Promise.all([
+            this.pypiService.fetchPackageMetadata(packageId),
+            this.pypiService.fetchSimpleProject(packageId),
+        ]);
+        const resourceBasePath = `${baseUrl}${buildPackagePath(packageId)}`;
+        const metaPath = `${buildPackagePath(packageId)}/meta`;
 
         return {
-            [`${RESOURCE_TYPE_SINGULAR}id`]: packageName,
+            packageid: packageId,
             xid: metaPath,
             self: `${resourceBasePath}/meta`,
             epoch: this.entityState.getEpoch(metaPath),
@@ -180,15 +169,13 @@ export class PackageService {
             modifiedat: this.entityState.getModifiedAt(metaPath),
             readonly: true,
             compatibility: 'none',
-            defaultversionid: info.version,
-            defaultversionurl: `${resourceBasePath}/versions/${info.version}`,
+            defaultversionid: toVersionId(packageData.info.version),
+            defaultversionurl: `${resourceBasePath}/versions/${toVersionId(packageData.info.version)}`,
             defaultversionsticky: true,
+            ...this.mapOrganization(simpleProject),
         };
     }
 
-    /**
-     * Get package documentation
-     */
     async getPackageDoc(packageName: string): Promise<{ content: string; contentType: string }> {
         const packageData = await this.pypiService.fetchPackageMetadata(packageName);
         const { info } = packageData;
@@ -199,40 +186,305 @@ export class PackageService {
         };
     }
 
-    /**
-     * Extract documentation URL from project URLs
-     */
-    private extractDocsUrl(projectUrls?: Record<string, string>): string | null {
-        if (!projectUrls) {
-            return null;
+    private buildCoreVersionFields(
+        entityPath: string,
+        entityName: string,
+        entityDescription: string | null | undefined,
+        releaseVersion: string,
+        files: PyPIPackageFile[],
+        orderedVersions: string[],
+        defaultVersion: string
+    ): Record<string, any> {
+        const timestamps = this.getVersionTimestamps(entityPath, files);
+
+        return {
+            epoch: this.entityState.getEpoch(entityPath),
+            createdat: timestamps.createdat,
+            modifiedat: timestamps.modifiedat,
+            name: entityName || releaseVersion,
+            ...(entityDescription ? { description: entityDescription } : {}),
+            version: releaseVersion,
+            ancestor: this.getAncestorVersionId(orderedVersions, releaseVersion),
+            isdefault: releaseVersion === defaultVersion,
+        };
+    }
+
+    private mapInfoToAttributes(info: PyPIPackageInfo): Record<string, any> {
+        const attributes: Record<string, any> = {};
+
+        this.setIfPresent(attributes, 'documentation', this.extractDocumentationUrl(info));
+        this.setIfPresent(attributes, 'summary', info.summary);
+        if (info.license_expression) {
+            this.setIfPresent(attributes, 'license_expression', info.license_expression);
+        } else {
+            this.setIfPresent(attributes, 'license', info.license);
+        }
+        if (info.license_files && info.license_files.length > 0) {
+            attributes['license_files'] = info.license_files;
+        }
+        this.setIfPresent(attributes, 'author', info.author);
+        this.setIfPresent(attributes, 'author_email', info.author_email);
+        this.setIfPresent(attributes, 'maintainer', info.maintainer);
+        this.setIfPresent(attributes, 'maintainer_email', info.maintainer_email);
+        this.setIfPresent(attributes, 'home_page', info.home_page);
+        this.setIfPresent(attributes, 'project_url', info.project_url);
+        if (info.project_urls && Object.keys(info.project_urls).length > 0) {
+            attributes['project_urls'] = info.project_urls;
+        }
+        this.setIfPresent(attributes, 'keywords', info.keywords);
+        this.setIfPresent(attributes, 'description_content_type', info.description_content_type);
+        if (info.requires_dist && info.requires_dist.length > 0) {
+            attributes['requires_dist'] = info.requires_dist.map((specifier) => {
+                const dependencyPackageId = extractDependencyPackageId(specifier);
+                return {
+                    specifier,
+                    ...(dependencyPackageId
+                        ? { package: buildPackageXid(dependencyPackageId) }
+                        : {}),
+                };
+            });
+        }
+        this.setIfPresent(attributes, 'requires_python', info.requires_python);
+        if (info.classifiers && info.classifiers.length > 0) {
+            attributes['classifiers'] = info.classifiers;
+        }
+        if (info.provides_extra && info.provides_extra.length > 0) {
+            attributes['provides_extra'] = info.provides_extra;
+        }
+        this.setIfPresent(attributes, 'platform', info.platform);
+        if (info.dynamic && info.dynamic.length > 0) {
+            attributes['dynamic'] = info.dynamic;
         }
 
+        return attributes;
+    }
+
+    private mapDistributionFiles(
+        files: PyPIPackageFile[],
+        simpleProject: PyPISimpleProjectResponse
+    ): any[] | undefined {
+        if (!files || files.length === 0) {
+            return undefined;
+        }
+
+        const simpleFilesByName = new Map<string, PyPISimpleFile>();
+        for (const simpleFile of simpleProject.files || []) {
+            simpleFilesByName.set(simpleFile.filename, simpleFile);
+        }
+
+        return files.map((file) => {
+            const simpleFile = simpleFilesByName.get(file.filename);
+            const digests = {
+                sha256: file.digests?.sha256 || simpleFile?.hashes?.['sha256'],
+                md5: file.digests?.md5 || simpleFile?.hashes?.['md5'] || file.md5_digest,
+                blake2b_256: file.digests?.blake2b_256 || simpleFile?.hashes?.['blake2b_256'],
+            };
+            const coreMetadata = this.normalizeCoreMetadata(
+                file['core-metadata'] ?? simpleFile?.['core-metadata'] ?? simpleFile?.['data-dist-info-metadata']
+            );
+
+            const mapped: Record<string, any> = {
+                filename: file.filename,
+                url: file.url,
+            };
+
+            this.setIfPresent(mapped, 'packagetype', file.packagetype);
+            this.setIfPresent(mapped, 'python_version', file.python_version);
+            this.setIfPresent(
+                mapped,
+                'requires_python',
+                file.requires_python ?? simpleFile?.['requires-python']
+            );
+            if (typeof file.size === 'number') {
+                mapped['size'] = file.size;
+            } else if (typeof simpleFile?.size === 'number') {
+                mapped['size'] = simpleFile.size;
+            }
+            this.setIfPresent(
+                mapped,
+                'upload_time',
+                file.upload_time || file.upload_time_iso_8601 || simpleFile?.['upload-time']
+            );
+            this.setIfPresent(
+                mapped,
+                'upload_time_iso_8601',
+                file.upload_time_iso_8601 || simpleFile?.['upload-time']
+            );
+            if (typeof file.yanked === 'boolean') {
+                mapped['yanked'] = file.yanked;
+            } else if (typeof simpleFile?.yanked === 'boolean') {
+                mapped['yanked'] = simpleFile.yanked;
+            }
+            this.setIfPresent(mapped, 'yanked_reason', file.yanked_reason);
+            if (coreMetadata !== undefined) {
+                mapped['core_metadata'] = coreMetadata;
+            }
+            if (simpleFile?.provenance) {
+                mapped['provenance'] = simpleFile.provenance;
+            }
+
+            const digestMap: Record<string, string> = {};
+            this.setIfPresent(digestMap, 'sha256', digests.sha256);
+            this.setIfPresent(digestMap, 'md5', digests.md5);
+            this.setIfPresent(digestMap, 'blake2b_256', digests.blake2b_256);
+            if (Object.keys(digestMap).length > 0) {
+                mapped['digests'] = digestMap;
+            }
+
+            return mapped;
+        });
+    }
+
+    private mapVulnerabilities(vulnerabilities?: PyPIVulnerability[]): any[] | undefined {
+        if (!vulnerabilities || vulnerabilities.length === 0) {
+            return undefined;
+        }
+
+        return vulnerabilities.map((vulnerability) => {
+            const mapped: Record<string, any> = {
+                id: vulnerability.id,
+            };
+
+            if (vulnerability.aliases && vulnerability.aliases.length > 0) {
+                mapped['aliases'] = vulnerability.aliases;
+            }
+            this.setIfPresent(mapped, 'summary', vulnerability.summary);
+            this.setIfPresent(mapped, 'details', vulnerability.details);
+            if (vulnerability.fixed_in && vulnerability.fixed_in.length > 0) {
+                mapped['fixed_in'] = vulnerability.fixed_in;
+            }
+            this.setIfPresent(mapped, 'link', vulnerability.link);
+            this.setIfPresent(mapped, 'source', vulnerability.source);
+            this.setIfPresent(mapped, 'withdrawn', vulnerability.withdrawn);
+
+            return mapped;
+        });
+    }
+
+    private mapOrganization(simpleProject: PyPISimpleProjectResponse): Record<string, any> {
+        const organization = this.getStringProperty(simpleProject as unknown as Record<string, unknown>, 'organization');
+        return organization ? { organization } : {};
+    }
+
+    private mapReplacedBy(simpleProject: PyPISimpleProjectResponse): Record<string, any> | undefined {
+        const status = simpleProject['project-status'];
+        const replacement = status?.['replaced-by'] || status?.replaced_by;
+        if (!replacement) {
+            return undefined;
+        }
+
+        return {
+            replacedby: buildPackageXid(normalizePackageId(replacement)),
+        };
+    }
+
+    private extractDocumentationUrl(info: PyPIPackageInfo): string | undefined {
+        if (info.docs_url) {
+            return info.docs_url;
+        }
+
+        const projectUrls = info.project_urls || {};
         const docKeys = ['Documentation', 'Docs', 'docs', 'documentation'];
         for (const key of docKeys) {
-            if (projectUrls[key]) {
-                return projectUrls[key];
+            const url = projectUrls[key];
+            if (url) {
+                return url;
             }
         }
 
-        return null;
+        return undefined;
     }
 
-    /**
-     * Map PyPI file information to simplified format
-     */
-    private mapFileInfo(file: PyPIPackageFile): any {
+    private getVersionSequence(
+        packageData: PyPIPackageResponse,
+        simpleProject: PyPISimpleProjectResponse
+    ): string[] {
+        const versions = simpleProject.versions && simpleProject.versions.length > 0
+            ? simpleProject.versions
+            : Object.keys(packageData.releases || {});
+        const unique: string[] = [];
+
+        for (const version of versions) {
+            if (!unique.includes(version)) {
+                unique.push(version);
+            }
+        }
+
+        if (packageData.info.version && !unique.includes(packageData.info.version)) {
+            unique.push(packageData.info.version);
+        }
+
+        return unique;
+    }
+
+    private getAncestorVersionId(orderedVersions: string[], releaseVersion: string): string {
+        const index = orderedVersions.indexOf(releaseVersion);
+        if (index <= 0) {
+            return toVersionId(releaseVersion);
+        }
+
+        return toVersionId(orderedVersions[index - 1]);
+    }
+
+    private findReleaseVersion(orderedVersions: string[], requestedVersionId: string): string | undefined {
+        return orderedVersions.find((version) =>
+            toVersionId(version) === requestedVersionId || version === requestedVersionId
+        );
+    }
+
+    private getVersionTimestamps(entityPath: string, files: PyPIPackageFile[]): {
+        createdat: string;
+        modifiedat: string;
+    } {
+        const timestamps = files
+            .map((file) => file.upload_time_iso_8601 || file.upload_time)
+            .filter((value): value is string => Boolean(value))
+            .map((value) => ({ value, time: Date.parse(value) }))
+            .filter((entry) => !Number.isNaN(entry.time))
+            .sort((a, b) => a.time - b.time);
+
+        if (timestamps.length === 0) {
+            return {
+                createdat: this.entityState.getCreatedAt(entityPath),
+                modifiedat: this.entityState.getModifiedAt(entityPath),
+            };
+        }
+
         return {
-            filename: file.filename,
-            url: file.url,
-            size: file.size,
-            packagetype: file.packagetype,
-            python_version: file.python_version,
-            upload_time: file.upload_time_iso_8601,
-            sha256: file.digests.sha256,
-            md5: file.digests.md5,
-            requires_python: file.requires_python,
-            yanked: file.yanked,
-            yanked_reason: file.yanked_reason,
+            createdat: timestamps[0]?.value || this.entityState.getCreatedAt(entityPath),
+            modifiedat: timestamps[timestamps.length - 1]?.value || this.entityState.getModifiedAt(entityPath),
         };
+    }
+
+    private normalizeCoreMetadata(
+        value: boolean | Record<string, string> | null | undefined
+    ): boolean | Record<string, string> | undefined {
+        if (value === true) {
+            return true;
+        }
+
+        if (value && typeof value === 'object') {
+            return value;
+        }
+
+        return undefined;
+    }
+
+    private getStringProperty(record: Record<string, unknown>, key: string): string | undefined {
+        const value = record[key];
+        return typeof value === 'string' && value.length > 0 ? value : undefined;
+    }
+
+    private setIfPresent(target: Record<string, any>, key: string, value: unknown): void {
+        if (typeof value === 'string') {
+            if (value.length > 0) {
+                target[key] = value;
+            }
+            return;
+        }
+
+        if (value !== undefined && value !== null) {
+            target[key] = value;
+        }
     }
 }

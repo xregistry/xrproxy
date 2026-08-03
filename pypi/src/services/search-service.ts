@@ -1,17 +1,17 @@
 /**
- * Search and package enumeration service
- * Handles package caching, refresh, and filtering
+ * Search and package enumeration service.
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { SERVER_CONFIG } from '../config/constants';
 import { PackageNameEntry } from '../types/pypi';
+import { normalizePackageId } from '../utils/identity';
 import { PyPIService } from './pypi-service';
 
 export class SearchService {
     private pypiService: PyPIService;
     private packageNamesCache: PackageNameEntry[] = [];
-    private lastRefreshTime: number = 0;
+    private lastRefreshTime = 0;
     private refreshInterval: number;
     private refreshTimer?: NodeJS.Timeout;
 
@@ -20,18 +20,12 @@ export class SearchService {
         this.refreshInterval = refreshInterval || SERVER_CONFIG.REFRESH_INTERVAL;
     }
 
-    /**
-     * Initialize the search service and perform initial package load
-     */
     async initialize(): Promise<void> {
         console.log('[INFO] Initializing PyPI search service...');
         await this.refreshPackageNames();
         this.schedulePeriodicRefresh();
     }
 
-    /**
-     * Refresh package names cache from PyPI
-     */
     async refreshPackageNames(): Promise<boolean> {
         const operationId = uuidv4();
         console.log('[INFO] Refreshing PyPI package names cache...', {
@@ -65,18 +59,12 @@ export class SearchService {
         }
     }
 
-    /**
-     * Schedule periodic refresh of package names
-     */
     private schedulePeriodicRefresh(): void {
         this.refreshTimer = setInterval(async () => {
             await this.refreshPackageNames();
         }, this.refreshInterval);
     }
 
-    /**
-     * Stop periodic refresh
-     */
     stopPeriodicRefresh(): void {
         if (this.refreshTimer) {
             clearInterval(this.refreshTimer);
@@ -84,45 +72,33 @@ export class SearchService {
         }
     }
 
-    /**
-     * Get all cached package names
-     */
     getAllPackages(): PackageNameEntry[] {
         return this.packageNamesCache;
     }
 
-    /**
-     * Get package count
-     */
     getPackageCount(): number {
         return this.packageNamesCache.length;
     }
 
-    /**
-     * Check if a package exists in cache
-     */
     packageExistsInCache(packageName: string): boolean {
-        return this.packageNamesCache.some((pkg) => pkg.name === packageName);
+        const packageId = normalizePackageId(packageName);
+        return this.packageNamesCache.some((pkg) => pkg.name === packageId);
     }
 
-    /**
-     * Check if a package exists (cache or API)
-     */
     async packageExists(packageName: string): Promise<boolean> {
-        // Check cache first
-        if (this.packageExistsInCache(packageName)) {
+        const packageId = normalizePackageId(packageName);
+
+        if (this.packageExistsInCache(packageId)) {
             return true;
         }
 
-        // Fall back to API check
-        const exists = await this.pypiService.packageExists(packageName);
+        const exists = await this.pypiService.packageExists(packageId);
 
-        // If it exists but wasn't in cache, add it
-        if (exists && !this.packageExistsInCache(packageName)) {
-            this.packageNamesCache.push({ name: packageName });
+        if (exists && !this.packageExistsInCache(packageId)) {
+            this.packageNamesCache.push({ name: packageId });
             this.packageNamesCache.sort((a, b) => a.name.localeCompare(b.name));
             console.log('[INFO] Package dynamically added to PyPI cache', {
-                packageName,
+                packageName: packageId,
                 newCacheSize: this.packageNamesCache.length,
             });
         }
@@ -130,15 +106,12 @@ export class SearchService {
         return exists;
     }
 
-    /**
-     * Get cache status
-     */
     getCacheStatus(): {
         packageCount: number;
         lastRefreshTime: string;
         isStale: boolean;
     } {
-        const maxAge = 60000; // 1 minute
+        const maxAge = 60000;
         const isStale =
             this.packageNamesCache.length === 0 ||
             Date.now() - this.lastRefreshTime > maxAge;
@@ -150,10 +123,7 @@ export class SearchService {
         };
     }
 
-    /**
-     * Force immediate refresh
-     */
     async forceRefresh(): Promise<boolean> {
-        return await this.refreshPackageNames();
+        return this.refreshPackageNames();
     }
 }

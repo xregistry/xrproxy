@@ -3,9 +3,6 @@
  * @fileoverview Type definitions for Maven Central API responses and data structures
  */
 
-/**
- * Maven Search Response from Maven Central API
- */
 export interface MavenSearchResponse {
     responseHeader: {
         status: number;
@@ -17,113 +14,38 @@ export interface MavenSearchResponse {
         start: number;
         docs: MavenArtifactDoc[];
     };
-}
-
-/**
- * Maven Artifact Document from Search API
- */
-export interface MavenArtifactDoc {
-    id: string;
-    g: string; // groupId
-    a: string; // artifactId
-    latestVersion: string;
-    repositoryId: string;
-    p: string; // packaging
-    timestamp: number;
-    versionCount: number;
-    text?: string[];
-    ec?: string[]; // extension classifier
-}
-
-/**
- * Maven Artifact Metadata from Repository
- */
-export interface MavenArtifactMetadata {
-    groupId: string;
-    artifactId: string;
-    versioning: {
-        latest: string;
-        release: string;
-        versions: {
-            version: string[];
-        };
-        lastUpdated: string;
+    facet_counts?: {
+        facet_fields?: Record<string, Array<string | number>>;
     };
 }
 
-/**
- * Maven Version Metadata
- */
-export interface MavenVersionMetadata {
+export interface MavenArtifactDoc {
+    id: string;
+    g: string;
+    a: string;
+    v?: string;
+    latestVersion: string;
+    repositoryId: string;
+    p: string;
+    timestamp: number;
+    versionCount: number;
+    text?: string[];
+    ec?: string[];
+}
+
+export interface MavenArtifactMetadata {
     groupId: string;
     artifactId: string;
-    version: string;
-    packaging?: string;
-    name?: string;
-    description?: string;
-    url?: string;
-    licenses?: MavenLicense[];
-    developers?: MavenDeveloper[];
-    scm?: MavenScm;
-    dependencies?: MavenDependency[];
-    parent?: MavenParent;
+    versioning?: {
+        latest?: string;
+        release?: string;
+        versions?: {
+            version?: string[] | string;
+        };
+        lastUpdated?: string;
+    };
 }
 
-/**
- * Maven License Information
- */
-export interface MavenLicense {
-    name: string;
-    url?: string;
-    distribution?: string;
-}
-
-/**
- * Maven Developer Information
- */
-export interface MavenDeveloper {
-    id?: string;
-    name?: string;
-    email?: string;
-    organization?: string;
-    organizationUrl?: string;
-}
-
-/**
- * Maven SCM Information
- */
-export interface MavenScm {
-    connection?: string;
-    developerConnection?: string;
-    url?: string;
-    tag?: string;
-}
-
-/**
- * Maven Dependency Information
- */
-export interface MavenDependency {
-    groupId: string;
-    artifactId: string;
-    version: string;
-    scope?: string;
-    optional?: boolean;
-    type?: string;
-}
-
-/**
- * Maven Parent POM Reference
- */
-export interface MavenParent {
-    groupId: string;
-    artifactId: string;
-    version: string;
-    relativePath?: string;
-}
-
-/**
- * Maven Package Coordinates
- */
 export interface MavenCoordinates {
     groupId: string;
     artifactId: string;
@@ -132,72 +54,139 @@ export interface MavenCoordinates {
     classifier?: string;
 }
 
-/**
- * Maven Package Search Query
- */
 export interface MavenSearchQuery {
     q?: string;
-    g?: string; // groupId
-    a?: string; // artifactId
-    v?: string; // version
-    p?: string; // packaging
-    c?: string; // classifier
+    g?: string;
+    a?: string;
+    v?: string;
+    p?: string;
+    c?: string;
     rows?: number;
     start?: number;
     core?: string;
-    wt?: string; // writer type (json, xml)
+    wt?: string;
 }
 
-/**
- * SQLite Package Search Result
- */
-export interface PackageSearchResult {
-    groupId: string;
-    artifactId: string;
-    packageId: string; // "groupId:artifactId"
-    latestVersion?: string;
-    versionCount?: number;
-}
-
-/**
- * Database Package Record
- */
-export interface DatabasePackageRecord {
-    groupId: string;
-    artifactId: string;
-    latestVersion?: string;
-    description?: string;
-    timestamp?: number;
-}
-
-/**
- * Maven Index Entry
- */
-export interface MavenIndexEntry {
-    groupId: string;
-    artifactId: string;
-    version: string;
-    packaging: string;
-    classifier?: string;
-    name?: string;
-    description?: string;
-    sha1?: string;
-}
-
-/**
- * Package Metadata Cache Entry
- */
 export interface CachedPackageMetadata {
-    data: any;
+    data: unknown;
     timestamp: number;
     etag?: string;
 }
 
-/**
- * Filter Result Cache Entry
- */
-export interface FilterResultCache {
-    results: any[];
-    timestamp: number;
-    filterKey: string;
+export interface MavenOrganization {
+    name?: string;
+    url?: string;
+}
+
+export interface MavenDeveloper {
+    id?: string;
+    name?: string;
+    email?: string;
+    url?: string;
+}
+
+export interface MavenLicense {
+    name?: string;
+    url?: string;
+    distribution?: string;
+    comments?: string;
+}
+
+export interface MavenScm {
+    url?: string;
+    connection?: string;
+    developer_connection?: string;
+}
+
+export interface MavenIssueManagement {
+    system?: string;
+    url?: string;
+}
+
+export interface MavenExclusion {
+    group_id?: string;
+    artifact_id?: string;
+}
+
+export interface MavenParentReference {
+    group_id?: string;
+    artifact_id?: string;
+    version?: string;
+    relative_path?: string;
+    package?: string;
+}
+
+export interface MavenDependency {
+    group_id: string;
+    artifact_id: string;
+    version?: string;
+    classifier?: string;
+    type?: string;
+    scope?: string;
+    optional?: boolean;
+    system_path?: string;
+    exclusions?: MavenExclusion[];
+    resolved_version?: string;
+    managed?: boolean;
+    package?: string;
+}
+
+export interface MavenProfile {
+    id?: string;
+    active_by_default?: boolean;
+    activation_jdk?: string;
+    activation_os?: string;
+    activation_property?: string;
+    activation_file?: string;
+    applied?: boolean;
+}
+
+export interface MavenChecksum {
+    filename: string;
+    classifier?: string;
+    extension?: string;
+    url?: string;
+    size?: number;
+    sha1?: string;
+    md5?: string;
+    sha256?: string;
+    sha512?: string;
+}
+
+export interface MavenSignature {
+    filename: string;
+    url?: string;
+    format?: string;
+    key_id?: string;
+    verified?: boolean;
+}
+
+export interface MavenResolvedVersion {
+    groupId: string;
+    artifactId: string;
+    version: string;
+    versionId: string;
+    createdAt?: string;
+    modifiedAt?: string;
+    packaging?: string;
+    classifier?: string;
+    classifiers?: string[];
+    snapshot?: boolean;
+    pom_resolution?: 'raw' | 'effective';
+    name?: string;
+    description?: string;
+    homepage?: string;
+    parent?: MavenParentReference;
+    modules?: string[];
+    properties?: Record<string, string>;
+    profiles?: MavenProfile[];
+    checksums?: MavenChecksum[];
+    signatures?: MavenSignature[];
+    organization?: MavenOrganization;
+    developers?: MavenDeveloper[];
+    licenses?: MavenLicense[];
+    scm?: MavenScm;
+    issue_management?: MavenIssueManagement;
+    dependencies?: MavenDependency[];
+    dependency_management?: MavenDependency[];
 }

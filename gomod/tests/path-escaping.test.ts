@@ -5,12 +5,19 @@
 import {
     escapePath,
     escapeVersion,
+    identityToModulePath,
+    isHashedModuleId,
+    isIncompatibleVersion,
     isPreRelease,
     isPseudoVersion,
     isValidModulePath,
+    majorVersionSuffix,
+    modulePathToIdentity,
     pseudoVersionTimestamp,
     unescapePath,
     unescapeVersion,
+    versionIdToVersion,
+    versionToId,
 } from '../src/utils/path-escaping';
 
 describe('escapePath', () => {
@@ -56,6 +63,35 @@ describe('unescapeVersion', () => {
     it('is the inverse of escapeVersion', () => {
         const v = 'v1.2.3-Pre.Release';
         expect(unescapeVersion(escapeVersion(v))).toBe(v);
+    });
+});
+
+describe('version identity helpers', () => {
+    it('transliterates + to ~ and back', () => {
+        expect(versionToId('v2.0.0+incompatible')).toBe('v2.0.0~incompatible');
+        expect(versionIdToVersion('v2.0.0~incompatible')).toBe('v2.0.0+incompatible');
+    });
+
+    it('detects incompatible versions', () => {
+        expect(isIncompatibleVersion('v2.0.0+incompatible')).toBe(true);
+        expect(isIncompatibleVersion('v1.2.3')).toBe(false);
+    });
+});
+
+describe('module identity helpers', () => {
+    it('extracts a major-version suffix when present', () => {
+        expect(majorVersionSuffix('example.com/m/v2')).toBe('/v2');
+        expect(majorVersionSuffix('example.com/m')).toBeUndefined();
+    });
+
+    it('recognizes hashed module IDs', () => {
+        expect(isHashedModuleId('xh~' + 'a'.repeat(64))).toBe(true);
+        expect(isHashedModuleId('pkg:errors')).toBe(false);
+    });
+
+    it('reconstructs reversible identities', () => {
+        const identity = modulePathToIdentity('github.com/pkg/errors');
+        expect(identityToModulePath(identity.groupId, identity.moduleId)).toBe('github.com/pkg/errors');
     });
 });
 

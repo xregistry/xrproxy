@@ -1,71 +1,142 @@
 /**
- * TypeScript definitions for xRegistry protocol
- * Based on xRegistry specification 1.0-rc1
- * 
- * Ensures compliance with xRegistry core specification:
- * - All entities MUST have xid, self, epoch, createdat, modifiedat
- * - xid MUST be a path starting with /
- * - self MUST be an absolute URL
- * - epoch MUST be a positive integer
- * - Timestamps MUST be RFC3339 format
+ * TypeScript definitions for the xRegistry npm projection.
  */
 
 export interface XRegistryEntity {
-    xid: string;           // REQUIRED: Path identifier starting with /
-    name?: string;         // OPTIONAL: Human readable name
-    description?: string;  // OPTIONAL: Description
-    epoch: number;         // REQUIRED: Positive integer for versioning
-    createdat: string;     // REQUIRED: RFC3339 timestamp
-    modifiedat: string;    // REQUIRED: RFC3339 timestamp  
-    labels?: Record<string, string>;  // OPTIONAL: Key-value labels
-    documentation?: string; // OPTIONAL: Documentation URL
-    shortself?: string;    // OPTIONAL: Short self-reference
-    self: string;          // REQUIRED: Absolute URL to this entity
-    [key: string]: any;    // Allow additional properties for dynamic content
+    xid: string;
+    self: string;
+    epoch: number;
+    createdat: string;
+    modifiedat: string;
+    name?: string | undefined;
+    description?: string | undefined;
+    labels?: Record<string, string>;
+    documentation?: string | undefined;
+    shortself?: string | undefined;
+    [key: string]: any;
+}
+
+export interface Person {
+    name?: string | undefined;
+    email?: string | undefined;
+    url?: string | undefined;
+}
+
+export interface DependencyReference {
+    name: string;
+    version?: string | undefined;
+    package?: string;
+}
+
+export interface BundleDependencyReference {
+    name: string;
+    package?: string;
+}
+
+export interface DistMetadata {
+    tarball: string;
+    shasum?: string;
+    integrity?: string;
+    file_count?: number;
+    unpacked_size?: number;
+    'npm-signature'?: string;
 }
 
 export interface Registry extends XRegistryEntity {
     specversion: string;
     registryid: string;
-    capabilities: string;
-    capabilitiesurl: string;
-    model: string;
-    modelurl: string;
-    groups: string;
-    noderegistriesurl: string;
-    noderegistriescount: number;
-    noderegistries: string;
+    modelurl?: string | undefined;
+    capabilitiesurl?: string | undefined;
+    nodescopesurl: string;
+    nodescopescount: number;
+    nodescopes?: Record<string, Group>;
+    model?: unknown;
+    capabilities?: unknown;
+    modelsource?: unknown;
 }
 
 export interface Group extends XRegistryEntity {
-    [key: string]: any; // For dynamic URL properties like packagesurl
+    nodescopeid: string;
+    scope?: string;
+    sourceurl?: string | undefined;
+    packagesurl: string;
+    packagescount: number;
+    packages?: Record<string, Resource>;
 }
 
 export interface Resource extends XRegistryEntity {
-    packageid: string;     // REQUIRED: Unique package identifier
-    author?: string;       // OPTIONAL: Package author
-    license?: string;      // OPTIONAL: License information
-    homepage?: string;     // OPTIONAL: Homepage URL
-    repository?: string;   // OPTIONAL: Repository URL
-    keywords?: string[];   // OPTIONAL: Package keywords
-    versionid?: string;    // OPTIONAL: Current/latest version ID
-    versionsurl?: string;  // OPTIONAL: URL to versions collection
-    metaurl?: string;      // OPTIONAL: URL to metadata
-    docsurl?: string;      // OPTIONAL: URL to documentation
+    packageid: string;
+    versionid?: string;
+    version?: string | undefined;
+    ancestor?: string | undefined;
+    dist?: DistMetadata | undefined;
+    license?: string | undefined;
+    author?: Person;
+    homepage?: string | undefined;
+    repository?: Record<string, unknown> | undefined;
+    bugs?: Record<string, unknown> | undefined;
+    engines?: Record<string, string> | undefined;
+    os?: string[] | undefined;
+    cpu?: string[] | undefined;
+    keywords?: string[] | undefined;
+    maintainers?: Person[] | undefined;
+    contributors?: Person[] | undefined;
+    'dist-tags'?: Record<string, string> | undefined;
+    deprecated_message?: string | undefined;
+    deprecated?: Record<string, unknown> | undefined;
+    dependencies?: DependencyReference[] | undefined;
+    dev_dependencies?: DependencyReference[] | undefined;
+    peer_dependencies?: DependencyReference[] | undefined;
+    optional_dependencies?: DependencyReference[] | undefined;
+    bundle_dependencies?: BundleDependencyReference[] | undefined;
+    replacedby?: string | undefined;
+    versionsurl?: string | undefined;
+    versionscount?: number | undefined;
+    versions?: Record<string, VersionMetadata> | undefined;
+    metaurl?: string | undefined;
+    meta?: unknown;
 }
 
 export interface Version extends XRegistryEntity {
     versionid: string;
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
+    version?: string | undefined;
+    packageid?: string;
+    ancestor?: string | undefined;
+    isdefault?: boolean;
+}
+
+export interface VersionMetadata extends Version {
+    name: string;
+    packageid: string;
+    dist: DistMetadata;
+    license?: string | undefined;
+    author?: Person;
+    homepage?: string | undefined;
+    repository?: Record<string, unknown> | undefined;
+    bugs?: Record<string, unknown> | undefined;
+    engines?: Record<string, string> | undefined;
+    os?: string[] | undefined;
+    cpu?: string[] | undefined;
+    keywords?: string[] | undefined;
+    maintainers?: Person[] | undefined;
+    contributors?: Person[] | undefined;
+    'dist-tags'?: Record<string, string> | undefined;
+    deprecated_message?: string | undefined;
+    deprecated?: Record<string, unknown> | undefined;
+    dependencies?: DependencyReference[] | undefined;
+    dev_dependencies?: DependencyReference[] | undefined;
+    peer_dependencies?: DependencyReference[] | undefined;
+    optional_dependencies?: DependencyReference[] | undefined;
+    bundle_dependencies?: BundleDependencyReference[] | undefined;
+    replacedby?: string | undefined;
 }
 
 export interface Meta extends XRegistryEntity {
-    readonly: boolean;     // REQUIRED: Whether the resource is read-only
-    compatibility: string; // REQUIRED: Compatibility mode
-    defaultversionid?: string;     // OPTIONAL: Default version identifier
-    defaultversionurl?: string;    // OPTIONAL: URL to default version
-    defaultversionsticky?: boolean; // OPTIONAL: Whether default version is sticky
+    readonly: boolean;
+    compatibility: string;
+    defaultversionid?: string;
+    defaultversionurl?: string | undefined;
+    defaultversionsticky?: boolean;
 }
 
 export interface ErrorResponse {
@@ -91,11 +162,11 @@ export interface PaginationInfo {
 }
 
 export interface XRegistryGroupResponse {
-    [key: string]: XRegistryEntity[];
+    [key: string]: Record<string, XRegistryEntity>;
 }
 
 export interface XRegistryResourceResponse {
-    [key: string]: XRegistryEntity[];
+    [key: string]: Record<string, XRegistryEntity>;
 }
 
 export interface CacheStats {
@@ -118,76 +189,10 @@ export interface InlineParams {
     attributes: string[];
 }
 
-/**
- * NPM Package metadata extending xRegistry Resource
- */
-export interface PackageMetadata extends Omit<Resource, 'author' | 'repository'> {
-    distTags: Record<string, string>;
+export interface PackageMetadata extends Resource {
+    dist?: DistMetadata | undefined;
     versions: Record<string, any>;
     time: Record<string, string>;
-    maintainers?: Array<{ name: string; email: string }>;
-    author?: { name: string; email?: string };
-    repository?: {
-        type: string;
-        url: string;
-    };
-    homepage?: string;
-    bugs?: {
-        url?: string;
-        email?: string;
-    };
-    license?: string;
-    keywords?: string[];
-    readme?: string;
-    readmeFilename?: string;
-    main?: string;
-    scripts?: Record<string, string>;
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    bundledDependencies?: string[];
-    engines?: Record<string, string>;
-    os?: string[];
-    cpu?: string[];
+    readme?: string | undefined;
+    readmeFilename?: string | undefined;
 }
-
-/**
- * NPM Version metadata extending xRegistry Version
- */
-export interface VersionMetadata extends Version {
-    version: string;
-    main?: string;
-    scripts?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    bundledDependencies?: string[];
-    engines?: Record<string, string>;
-    os?: string[];
-    cpu?: string[];
-    keywords?: string[];
-    author?: { name: string; email?: string };
-    license?: string;
-    repository?: {
-        type: string;
-        url: string;
-    };
-    bugs?: {
-        url?: string;
-        email?: string;
-    };
-    homepage?: string;
-    dist: {
-        integrity?: string;
-        shasum: string;
-        tarball: string;
-        fileCount?: number;
-        unpackedSize?: number;
-    };
-    _id: string;
-    _nodeVersion?: string;
-    _npmVersion?: string;
-    _npmUser?: { name: string; email: string };
-    _hasShrinkwrap?: boolean;
-} 

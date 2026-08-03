@@ -4,8 +4,8 @@
 
 import { UpstreamError } from '@xregistry/registry-core';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import { REGISTRY_METADATA } from '../config/constants';
-import type { PubDevPackageResponse, PubDevVersion } from '../types/pubdev';
+import { normalizeSourceUrl, REGISTRY_METADATA } from '../config/constants';
+import type { PubDevPackageResponse, PubDevScore, PubDevVersion, Pubspec } from '../types/pubdev';
 import { PubDevService, compareVersions } from './pubdev-service';
 import { decodePubDevVersionId, encodePubDevVersionId } from '../utils/version-id';
 
@@ -20,25 +20,162 @@ function notFound(path: string, kind: string, id: string): never {
   });
 }
 
-function repoString(repo: unknown): string {
-  if (typeof repo === 'string') return repo;
-  if (repo && typeof repo === 'object' && 'url' in repo && typeof (repo as Record<string, unknown>)['url'] === 'string') {
-    return (repo as Record<string, string>)['url']!;
-  }
-  return '';
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function buildDeps(deps: Record<string, unknown> | undefined): Array<{ name: string; constraint: string; package: string }> {
-  if (!deps) return [];
-  return Object.entries(deps).map(([name, constraint]) => ({
-    name,
-    constraint: typeof constraint === 'string'
-      ? constraint
-      : constraint && typeof constraint === 'object' && 'version' in constraint
-        ? String((constraint as Record<string, unknown>)['version'])
-        : 'any',
-    package: `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`,
-  }));
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function repoString(repo: unknown): string | undefined {
+  if (typeof repo === 'string' && repo.length > 0) return repo;
+  if (isPlainObject(repo) && typeof repo['url'] === 'string' && repo['url'].length > 0) {
+    return repo['url'];
+  }
+  return undefined;
+}
+
+function projectStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
+function projectEnvironment(environment: Pubspec['environment']): Record<string, string> | undefined {
+  if (!isPlainObject(environment)) return undefined;
+  return Object.fromEntries(
+    Object.entries(environment).filter(([, constraint]) => typeof constraint === 'string'),
+  ) as Record<string, string>;
+}
+
+function projectDeclaredPlatforms(platforms: Pubspec['platforms']): Record<string, unknown> | undefined {
+  if (!isPlainObject(platforms)) return undefined;
+  return Object.fromEntries(Object.entries(platforms).filter(([, value]) => value !== undefined));
+}
+
+function sameRegistryUrl(left: string, right: string): boolean {
+  return normalizeSourceUrl(left) === normalizeSourceUrl(right);
+}
+
+function projectDependency(
+  dependencyName: string,
+  value: unknown,
+  upstreamBase: string,
+): Record<string, unknown> | undefined {
+  if (typeof value === 'string') {
+    return {
+      source: 'hosted',
+      constraint: value,
+      package: `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${dependencyName}`,
+    };
+  }
+
+  if (!isPlainObject(value)) return undefined;
+
+  if (typeof value['sdk'] === 'string') {
+    return {
+      source: 'sdk',
+      sdk: value['sdk'],
+      ...(typeof value['version'] === 'string' ? { constraint: value['version'] } : {}),
+    };
+  }
+
+  if (Object.hasOwn(value, 'git')) {
+    const git = value['git'];
+    if (typeof git === 'string') {
+      return { source: 'git', git_url: git };
+    }
+    if (isPlainObject(git)) {
+      const dependency: Record<string, unknown> = { source: 'git' };
+      if (typeof git['url'] === 'string') dependency['git_url'] = git['url'];
+      if (typeof git['ref'] === 'string') dependency['git_ref'] = git['ref'];
+      if (typeof git['path'] === 'string') dependency['git_path'] = git['path'];
+      return dependency;
+    }
+    return { source: 'git' };
+  }
+
+  if (typeof value['path'] === 'string') {
+    return { source: 'path', path: value['path'] };
+  }
+
+  if (!Object.hasOwn(value, 'version') && !Object.hasOwn(value, 'hosted')) {
+    return undefined;
+  }
+
+  const dependency: Record<string, unknown> = { source: 'hosted' };
+  if (typeof value['version'] === 'string') dependency['constraint'] = value['version'];
+
+  let hostedUrl: string | undefined;
+  let hostedName: string | undefined;
+  const hosted = value['hosted'];
+  if (typeof hosted === 'string') {
+    hostedUrl = hosted;
+  } else if (isPlainObject(hosted)) {
+    hostedUrl = stringValue(hosted['url']);
+    hostedName = stringValue(hosted['name']);
+  }
+
+  if (hostedName && hostedName !== dependencyName) {
+    dependency['hosted_name'] = hostedName;
+  }
+
+  if (hostedUrl && !sameRegistryUrl(hostedUrl, upstreamBase)) {
+    dependency['hosted_url'] = hostedUrl;
+  } else {
+    const packageName = hostedName ?? dependencyName;
+    dependency['package'] = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}`;
+  }
+
+  return dependency;
+}
+
+function projectDependencyMap(
+  dependencies: Record<string, unknown> | undefined,
+  upstreamBase: string,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!isPlainObject(dependencies)) return undefined;
+  return Object.fromEntries(
+    Object.entries(dependencies)
+      .map(([name, value]) => [name, projectDependency(name, value, upstreamBase)] as const)
+      .filter(([, value]) => value !== undefined),
+  ) as Record<string, Record<string, unknown>>;
+}
+
+function projectScoreMeta(score: PubDevScore | null): Record<string, unknown> {
+  if (!score) return {};
+
+  const projected: Record<string, unknown> = {};
+  if (Number.isInteger(score.likeCount)) projected['likes'] = score.likeCount;
+  if (Number.isInteger(score.grantedPoints) && Number.isInteger(score.maxPoints)) {
+    projected['pub_points'] = score.grantedPoints;
+    projected['max_points'] = score.maxPoints;
+  }
+  if (Number.isInteger(score.downloadCount30Days)) {
+    projected['download_count_30_days'] = score.downloadCount30Days;
+  }
+  if (Array.isArray(score.tags)) {
+    const tags = score.tags.filter((tag): tag is string => typeof tag === 'string');
+    projected['tags'] = tags;
+
+    const licenses = Array.from(new Set(
+      tags
+        .filter(tag => tag.startsWith('license:'))
+        .map(tag => tag.slice('license:'.length).toLowerCase())
+        .filter(tag => tag.length > 0),
+    ));
+    if (licenses.length > 0) projected['license'] = licenses;
+
+    const detectedPlatforms = Array.from(new Set(
+      tags
+        .filter(tag => tag.startsWith('platform:'))
+        .map(tag => tag.slice('platform:'.length))
+        .filter(tag => tag.length > 0),
+    ));
+    if (detectedPlatforms.length > 0) projected['detected_platforms'] = detectedPlatforms;
+  }
+
+  return projected;
 }
 
 export class PackageService {
@@ -55,26 +192,36 @@ export class PackageService {
     );
   }
 
+  private selectDefaultVersion(pkg: PubDevPackageResponse, sorted: PubDevVersion[]): PubDevVersion | undefined {
+    const upstreamLatestVersion = stringValue(pkg.latest?.version);
+    const latestMatch = upstreamLatestVersion
+      ? sorted.find(candidate => candidate.version === upstreamLatestVersion) ?? pkg.latest
+      : undefined;
+
+    if (latestMatch && latestMatch.retracted !== true) {
+      return latestMatch;
+    }
+
+    const highestSelectable = [...sorted].reverse().find(candidate => candidate.retracted !== true);
+    return highestSelectable ?? latestMatch ?? sorted.at(-1);
+  }
+
   async getPackageMetadata(name: string, baseUrl: string): Promise<Record<string, unknown>> {
     const pkg = await this.pubdev.fetchPackage(name);
     if (!pkg) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`, 'package', name);
+
     const sorted = this.orderedVersions(pkg);
-    const selected = sorted.at(-1);
+    const selected = this.selectDefaultVersion(pkg, sorted);
     if (!selected) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`, 'package', name);
+
     const defaultVersionId = encodePubDevVersionId(selected.version);
-    const selectedIndex = sorted.length - 1;
+    const selectedIndex = sorted.findIndex(candidate => candidate.version === selected.version);
     const ancestor = encodePubDevVersionId(selectedIndex > 0 ? sorted[selectedIndex - 1]!.version : selected.version);
     const versionPath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}/versions/${defaultVersionId}`;
     const resourcePath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`;
     const resourceBase = `${baseUrl}${resourcePath}`;
-    const projected = this.formatVersion(
-      name,
-      selected,
-      selected.version,
-      ancestor,
-      versionPath,
-      `${baseUrl}${versionPath}`,
-    );
+    const projected = this.formatVersion(name, selected, selected.version, ancestor, versionPath, `${baseUrl}${versionPath}`);
+
     return {
       ...projected,
       [`${RESOURCE_TYPE_SINGULAR}id`]: name,
@@ -89,10 +236,12 @@ export class PackageService {
   async getPackageVersions(name: string, baseUrl: string): Promise<Record<string, unknown>> {
     const pkg = await this.pubdev.fetchPackage(name);
     if (!pkg) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`, 'package', name);
+
     const sorted = this.orderedVersions(pkg);
-    const selected = sorted.at(-1)?.version;
+    const selected = this.selectDefaultVersion(pkg, sorted)?.version;
     const versionsBase = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}/versions`;
     const entries: Record<string, unknown> = {};
+
     for (let index = 0; index < sorted.length; index += 1) {
       const version = sorted[index]!;
       const versionId = encodePubDevVersionId(version.version);
@@ -107,17 +256,20 @@ export class PackageService {
         `${versionsBase}/${encodeURIComponent(versionId)}`,
       );
     }
+
     return entries;
   }
 
   async getVersionDetails(name: string, versionId: string, baseUrl: string): Promise<Record<string, unknown>> {
     const pkg = await this.pubdev.fetchPackage(name);
     if (!pkg) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`, 'package', name);
+
     const rawVersion = decodePubDevVersionId(versionId);
     const version = rawVersion === null ? undefined : (pkg.versions ?? []).find(candidate => candidate.version === rawVersion);
     if (!version) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}/versions/${versionId}`, 'version', versionId);
+
     const sorted = this.orderedVersions(pkg);
-    const selected = sorted.at(-1)?.version;
+    const selected = this.selectDefaultVersion(pkg, sorted)?.version;
     const index = sorted.findIndex(candidate => candidate.version === rawVersion);
     const ancestor = encodePubDevVersionId(index > 0 ? sorted[index - 1]!.version : version.version);
     const versionPath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}/versions/${versionId}`;
@@ -127,9 +279,11 @@ export class PackageService {
   async getPackageMeta(name: string, baseUrl: string): Promise<Record<string, unknown>> {
     const pkg = await this.pubdev.fetchPackage(name);
     if (!pkg) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`, 'package', name);
+
     const sorted = this.orderedVersions(pkg);
-    const selected = sorted.at(-1);
+    const selected = this.selectDefaultVersion(pkg, sorted);
     if (!selected) notFound(`/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`, 'package', name);
+
     const selectedVersionId = encodePubDevVersionId(selected.version);
     const resourceBase = `${baseUrl}/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}`;
     const metaPath = `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${name}/meta`;
@@ -137,6 +291,7 @@ export class PackageService {
       this.pubdev.fetchScore(name),
       this.pubdev.fetchPublisher(name),
     ]);
+
     return {
       [`${RESOURCE_TYPE_SINGULAR}id`]: name,
       xid: metaPath,
@@ -149,24 +304,33 @@ export class PackageService {
       defaultversionid: selectedVersionId,
       defaultversionurl: `${resourceBase}/versions/${encodeURIComponent(selectedVersionId)}`,
       defaultversionsticky: false,
-      ...(publisher?.publisherId !== undefined ? { publisher: publisher.publisherId } : {}),
-      ...(score ? {
-        likes: score.likeCount,
-        pub_points: score.grantedPoints,
-        popularity: score.popularityScore,
-      } : {}),
+      ...(typeof pkg.isDiscontinued === 'boolean' ? { is_discontinued: pkg.isDiscontinued } : {}),
+      ...(pkg.isDiscontinued === true && typeof pkg.replacedBy === 'string' ? { replaced_by: pkg.replacedBy } : {}),
+      ...(typeof pkg.advisoriesUpdated === 'string' ? { advisories_updated: pkg.advisoriesUpdated } : {}),
+      ...(typeof publisher?.publisherId === 'string' && publisher.publisherId.length > 0 ? { publisher: publisher.publisherId } : {}),
+      ...projectScoreMeta(score),
     };
   }
 
   private formatVersion(
     packageName: string,
     version: PubDevVersion,
-    selectedVersion: string | undefined,
+    defaultVersion: string | undefined,
     ancestor: string,
     versionPath: string,
     versionUrl: string,
   ): Record<string, unknown> {
-    const pubspec = version.pubspec ?? {};
+    const observedAt = this.entityState.getCreatedAt(versionPath);
+    const modifiedAt = this.entityState.getModifiedAt(versionPath);
+    const pubspec = version.pubspec ?? ({ name: packageName } as Pubspec);
+    const environment = projectEnvironment(pubspec.environment);
+    const topics = projectStringArray(pubspec.topics);
+    const declaredPlatforms = projectDeclaredPlatforms(pubspec.platforms);
+    const dependencies = projectDependencyMap(pubspec.dependencies, this.pubdev.getUpstreamBase());
+    const devDependencies = projectDependencyMap(pubspec.dev_dependencies, this.pubdev.getUpstreamBase());
+    const dependencyOverrides = projectDependencyMap(pubspec.dependency_overrides, this.pubdev.getUpstreamBase());
+    const repository = repoString(pubspec.repository);
+
     return {
       versionid: encodePubDevVersionId(version.version),
       version: version.version,
@@ -174,30 +338,30 @@ export class PackageService {
       self: versionUrl,
       [`${RESOURCE_TYPE_SINGULAR}id`]: packageName,
       name: pubspec.name ?? packageName,
-      description: pubspec.description ?? '',
       epoch: this.entityState.getEpoch(versionPath),
-      createdat: version.published ?? this.entityState.getCreatedAt(versionPath),
-      modifiedat: version.published ?? this.entityState.getModifiedAt(versionPath),
-      isdefault: version.version === selectedVersion,
+      createdat: version.published ?? observedAt,
+      modifiedat: version.published ?? modifiedAt,
+      isdefault: version.version === defaultVersion,
       ancestor,
-      contenttype: 'application/zip',
-      homepage: typeof pubspec.homepage === 'string' ? pubspec.homepage : '',
-      repository: repoString(pubspec.repository),
-      issue_tracker: typeof pubspec.issue_tracker === 'string' ? pubspec.issue_tracker : '',
-      documentation: typeof pubspec.documentation === 'string' ? pubspec.documentation : '',
-      sdk_constraint: pubspec.environment?.sdk ?? '',
-      flutter_constraint: pubspec.environment?.flutter ?? '',
-      keywords: pubspec.topics ?? [],
-      platforms: pubspec.platforms ? Object.keys(pubspec.platforms) : [],
-      dependencies: buildDeps(pubspec.dependencies),
-      dev_dependencies: buildDeps(pubspec.dev_dependencies),
+      ...(typeof pubspec.description === 'string' ? { description: pubspec.description } : {}),
+      ...(typeof pubspec.documentation === 'string' ? { documentation: pubspec.documentation } : {}),
+      ...(typeof pubspec.homepage === 'string' ? { homepage: pubspec.homepage } : {}),
+      ...(repository ? { repository } : {}),
+      ...(typeof pubspec.issue_tracker === 'string' ? { issue_tracker: pubspec.issue_tracker } : {}),
+      ...(topics !== undefined ? { topics } : {}),
+      ...(environment !== undefined ? { environment } : {}),
+      ...(environment?.sdk ? { sdk_constraint: environment.sdk } : {}),
+      ...(environment?.flutter ? { flutter_constraint: environment.flutter } : {}),
+      ...(declaredPlatforms !== undefined ? { declared_platforms: declaredPlatforms } : {}),
+      ...(typeof version.retracted === 'boolean' ? { retracted: version.retracted } : {}),
+      ...(typeof version.published === 'string' ? { published: version.published } : {}),
+      ...(typeof version.archive_url === 'string' ? { archive_url: version.archive_url } : {}),
+      ...(typeof version.archive_sha256 === 'string' ? { archive_sha256: version.archive_sha256 } : {}),
+      ...(version.pubspec !== undefined ? { pubspec: version.pubspec } : {}),
+      ...(dependencies !== undefined ? { dependencies } : {}),
+      ...(devDependencies !== undefined ? { dev_dependencies: devDependencies } : {}),
+      ...(dependencyOverrides !== undefined ? { dependency_overrides: dependencyOverrides } : {}),
       package: `/${GROUP_TYPE}/${GROUP_ID}/${RESOURCE_TYPE}/${packageName}`,
-      retracted: version.retracted ?? false,
-      pubspec,
-      ...(typeof pubspec.license === 'string' ? { license: pubspec.license } : {}),
-      ...(version.published !== undefined ? { published: version.published } : {}),
-      ...(version.archive_url !== undefined ? { archive_url: version.archive_url } : {}),
-      ...(version.archive_sha256 !== undefined ? { archive_sha256: version.archive_sha256 } : {}),
     };
   }
 }

@@ -23,6 +23,8 @@ export interface PackagistPackage {
     suggesters?: number;
     downloads?: PackagistDownloads;
     favers?: number;
+    readme?: string;
+    default_branch?: string;
 }
 
 export interface PackagistMaintainer {
@@ -45,11 +47,15 @@ export interface PackagistVersion {
     version_normalized: string;
     license?: string[];
     authors?: PackagistAuthor[];
-    source?: PackagistDist;
+    source?: PackagistSource;
     dist?: PackagistDist;
     type?: string;
     time?: string;
     autoload?: Record<string, unknown>;
+    'autoload-dev'?: Record<string, unknown>;
+    bin?: string[];
+    scripts?: Record<string, unknown> | string[] | string;
+    support?: PackagistSupport;
     extra?: Record<string, unknown>;
     require?: Record<string, string>;
     'require-dev'?: Record<string, string>;
@@ -68,11 +74,30 @@ export interface PackagistAuthor {
     role?: string;
 }
 
+export interface PackagistSource {
+    url?: string;
+    type?: string;
+    reference?: string;
+}
+
 export interface PackagistDist {
     url?: string;
     type?: string;
     shasum?: string;
     reference?: string;
+}
+
+export interface PackagistSupport {
+    email?: string;
+    issues?: string;
+    forum?: string;
+    wiki?: string;
+    irc?: string;
+    chat?: string;
+    source?: string;
+    docs?: string;
+    rss?: string;
+    security?: string;
 }
 
 export interface PackagistFunding {

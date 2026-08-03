@@ -1,5 +1,5 @@
 /**
- * Unit tests for NPM Service
+ * Unit tests for NPM Service.
  */
 
 import axios from 'axios';
@@ -7,230 +7,141 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { CacheManager } from '../../../src/cache/cache-manager';
-import { NpmPackageManifest, NpmService, NpmVersionManifest } from '../../../src/services/npm-service';
+import { NpmPackageManifest, NpmService } from '../../../src/services/npm-service';
 
-// Mock axios
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-// Test utilities
-const createTempDir = (): string => {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'npm-service-test-'));
-};
-
+const createTempDir = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'npm-service-test-'));
 const removeTempDir = (dirPath: string): void => {
     try {
         fs.rmSync(dirPath, { recursive: true, force: true });
-    } catch (error) {
-        // Ignore cleanup errors
+    } catch {
+        // ignore
     }
 };
 
-// Mock data
 const mockPackageManifest: NpmPackageManifest = {
-    _id: 'express',
-    name: 'express',
-    description: 'Fast, unopinionated, minimalist web framework',
+    _id: '@scope/pkg',
+    name: '@scope/pkg',
+    description: 'Scoped package',
     'dist-tags': {
-        latest: '4.18.2'
+        latest: '1.0.0+build.1',
     },
     versions: {
-        '4.18.2': {
-            name: 'express',
-            version: '4.18.2',
-            description: 'Fast, unopinionated, minimalist web framework',
-            main: 'index.js',
-            scripts: {
-                test: 'mocha --require test/support/env --reporter spec --bail --check-leaks test/ test/acceptance/'
-            },
+        '1.0.0+build.1': {
+            _id: '@scope/pkg@1.0.0+build.1',
+            name: '@scope/pkg',
+            version: '1.0.0+build.1',
+            description: 'Scoped package',
             dependencies: {
-                'accepts': '~1.3.8',
-                'array-flatten': '1.1.1'
+                react: '^18.0.0',
             },
             devDependencies: {
-                'after': '0.8.2',
-                'connect-redis': '3.4.2'
+                typescript: '^5.0.0',
             },
+            peerDependencies: {
+                webpack: '^5.0.0',
+            },
+            optionalDependencies: {
+                fsevents: '^2.3.0',
+            },
+            bundleDependencies: ['left-pad'],
             engines: {
-                node: '>= 0.10.0'
+                node: '>=18',
             },
-            keywords: [
-                'express',
-                'framework',
-                'sinatra',
-                'web',
-                'http',
-                'rest',
-                'restful',
-                'router',
-                'app',
-                'api'
-            ],
-            author: {
-                name: 'TJ Holowaychuk',
-                email: 'tj@vision-media.ca'
-            },
+            os: ['linux', '!win32'],
+            cpu: ['x64', '!arm'],
+            keywords: ['scope', 'pkg'],
+            author: 'Author Example <author@example.com> (https://author.example.com)',
+            maintainers: [{ name: 'maintainer', email: 'maintainer@example.com' }],
+            contributors: ['Contributor <contrib@example.com>'],
             license: 'MIT',
             repository: {
                 type: 'git',
-                url: 'git+https://github.com/expressjs/express.git'
+                url: 'git+https://github.com/example/repo.git',
             },
             bugs: {
-                url: 'https://github.com/expressjs/express/issues'
+                url: 'https://github.com/example/repo/issues',
             },
-            homepage: 'http://expressjs.com/',
+            homepage: 'https://example.com/pkg',
+            deprecated: 'use @scope/new-pkg',
+            replacedBy: '@scope/new-pkg',
             dist: {
-                integrity: 'sha512-5/PsL6iGPdfQ/lKM1UuielYgv3BUoJfz1aUwU9vHZ+J7gyvwdQXFEBIEIaxeGf0GIcreATNyBExtalisDbuMqQ==',
-                shasum: '5cb9a9f7a2a0137b9f0a86fd6f0e69a0fbd7b5f3',
-                tarball: 'https://registry.npmjs.org/express/-/express-4.18.2.tgz',
-                fileCount: 16,
-                unpackedSize: 208736
+                tarball: 'https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz',
+                shasum: 'abc123',
+                integrity: 'sha512-xyz',
+                fileCount: 8,
+                unpackedSize: 12345,
+                'npm-signature': 'signed',
             },
-            _id: 'express@4.18.2',
-            _nodeVersion: '16.17.1',
-            _npmVersion: '8.15.0',
-            _npmUser: {
-                name: 'dougwilson',
-                email: 'doug@somethingdoug.com'
-            },
-            _hasShrinkwrap: false
-        }
+        },
     },
     time: {
-        created: '2010-12-29T19:38:25.450Z',
-        modified: '2022-10-08T15:15:56.041Z',
-        '4.18.2': '2022-10-08T15:15:56.041Z'
+        created: '2024-01-01T00:00:00.000Z',
+        modified: '2024-01-02T00:00:00.000Z',
+        '1.0.0+build.1': '2024-01-02T00:00:00.000Z',
     },
-    maintainers: [
-        {
-            name: 'dougwilson',
-            email: 'doug@somethingdoug.com'
-        }
-    ],
-    author: {
-        name: 'TJ Holowaychuk',
-        email: 'tj@vision-media.ca'
-    },
+    maintainers: [{ name: 'maintainer', email: 'maintainer@example.com' }],
+    author: 'Author Example <author@example.com> (https://author.example.com)',
+    contributors: ['Contributor <contrib@example.com>'],
     repository: {
         type: 'git',
-        url: 'git+https://github.com/expressjs/express.git'
+        url: 'git+https://github.com/example/repo.git',
     },
-    homepage: 'http://expressjs.com/',
+    homepage: 'https://example.com/pkg',
     bugs: {
-        url: 'https://github.com/expressjs/express/issues'
+        url: 'https://github.com/example/repo/issues',
     },
     license: 'MIT',
-    keywords: [
-        'express',
-        'framework',
-        'sinatra',
-        'web',
-        'http',
-        'rest',
-        'restful',
-        'router',
-        'app',
-        'api'
-    ],
-    readme: '# Express\n\nFast, unopinionated, minimalist web framework for [node](http://nodejs.org).',
-    readmeFilename: 'README.md'
+    keywords: ['scope', 'pkg'],
 };
 
-const mockVersionManifest: NpmVersionManifest = mockPackageManifest.versions['4.18.2']!;
 
 const mockSearchResults = {
     objects: [
         {
             package: {
                 name: 'express',
-                scope: 'unscoped',
                 version: '4.18.2',
-                description: 'Fast, unopinionated, minimalist web framework',
-                keywords: ['express', 'framework', 'web'],
-                date: '2022-10-08T15:15:56.041Z',
-                links: {
-                    npm: 'https://www.npmjs.com/package/express',
-                    homepage: 'http://expressjs.com/',
-                    repository: 'https://github.com/expressjs/express',
-                    bugs: 'https://github.com/expressjs/express/issues'
-                },
-                author: {
-                    name: 'TJ Holowaychuk',
-                    email: 'tj@vision-media.ca'
-                },
-                publisher: {
-                    username: 'dougwilson',
-                    email: 'doug@somethingdoug.com'
-                },
-                maintainers: [
-                    {
-                        username: 'dougwilson',
-                        email: 'doug@somethingdoug.com'
-                    }
-                ]
+                description: 'Express framework',
+                keywords: ['express', 'framework'],
+                date: '2024-01-01T00:00:00.000Z',
+                author: { name: 'TJ', email: 'tj@example.com' },
+                maintainers: [{ username: 'tj', email: 'tj@example.com' }],
             },
             score: {
-                final: 0.8971109853058676,
-                detail: {
-                    quality: 0.9237841281241451,
-                    popularity: 0.8956348551148226,
-                    maintenance: 0.8717608098444818
-                }
+                final: 1,
+                detail: { quality: 1, popularity: 1, maintenance: 1 },
             },
-            searchScore: 100000.914
-        }
+            searchScore: 100,
+        },
     ],
     total: 1,
-    time: 'Wed Jan 01 2023 00:00:00 GMT+0000 (UTC)'
+    time: 'now',
 };
 
-const mockDownloadStats = {
-    downloads: 25000000,
-    start: '2023-01-01',
-    end: '2023-01-07',
-    package: 'express'
-};
-
-const mockRegistryStats = {
-    doc_count: 2000000,
-    doc_del_count: 50000,
-    update_seq: 15000000,
-    purge_seq: 0,
-    compact_running: false,
-    disk_size: 500000000000,
-    data_size: 400000000000,
-    instance_start_time: '1640995200000',
-    disk_format_version: 8
-};
-
-describe('NPM Service', () => {
+describe('NpmService', () => {
     let npmService: NpmService;
     let cacheManager: CacheManager;
     let tempDir: string;
     let mockAxiosInstance: any;
 
     beforeEach(() => {
-        // Setup cache
         tempDir = createTempDir();
-        cacheManager = new CacheManager({
-            baseDir: tempDir,
-            defaultTtl: 1000,
-            cleanupInterval: 0
-        });
+        cacheManager = new CacheManager({ baseDir: tempDir, defaultTtl: 1000, cleanupInterval: 0 });
 
-        // Setup mock axios instance
         mockAxiosInstance = {
             get: jest.fn(),
             head: jest.fn(),
-            defaults: { headers: {} }
+            defaults: { headers: {} },
         };
 
         mockedAxios.create.mockReturnValue(mockAxiosInstance);
-
-        // Create service
         npmService = new NpmService({
             cacheManager,
-            cacheTtl: 1000
+            cacheTtl: 1000,
+            knownPackageNames: ['react', 'typescript', 'webpack', 'fsevents', 'left-pad', '@scope/new-pkg', '@scope/pkg'],
         });
     });
 
@@ -240,379 +151,96 @@ describe('NPM Service', () => {
         jest.clearAllMocks();
     });
 
-    describe('constructor', () => {
-        test('should create service with default config', () => {
-            const service = new NpmService();
-            expect(service).toBeInstanceOf(NpmService);
-        });
-
-        test('should create service with custom config', () => {
-            const service = new NpmService({
-                registryUrl: 'https://custom-registry.com',
-                timeout: 5000,
-                userAgent: 'Custom-Agent/1.0.0',
-                cacheManager,
-                cacheTtl: 2000
-            });
-            expect(service).toBeInstanceOf(NpmService);
-        });
-
-        test('should configure axios instance correctly', () => {
-            expect(mockedAxios.create).toHaveBeenCalledWith({
-                baseURL: 'https://registry.npmjs.org',
-                timeout: 30000,
-                headers: {
-                    'User-Agent': 'xRegistry-NPM-Wrapper/1.0',
-                    'Accept': 'application/json'
-                }
-            });
+    test('configures axios with the npm registry defaults', () => {
+        expect(mockedAxios.create).toHaveBeenCalledWith({
+            baseURL: 'https://registry.npmjs.org',
+            timeout: 30000,
+            headers: {
+                'User-Agent': 'xRegistry-NPM-Wrapper/1.0',
+                'Accept': 'application/json',
+            },
         });
     });
 
-    describe('getPackageMetadata', () => {
-        test('should fetch and convert package metadata', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockPackageManifest,
-                headers: {
-                    'etag': '"abc123"',
-                    'last-modified': 'Wed, 01 Jan 2023 00:00:00 GMT'
-                }
-            });
+    test('maps package metadata to the nodescope/package model', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ status: 200, data: mockPackageManifest, headers: {} });
 
-            const result = await npmService.getPackageMetadata('express');
+        const result = await npmService.getPackageMetadata('@scope/pkg');
 
-            expect(result).toBeDefined();
-            expect(result?.['name']).toBe('express');
-            expect(result?.['description']).toBe('Fast, unopinionated, minimalist web framework');
-            expect(result?.distTags).toEqual({ latest: '4.18.2' });
-            expect(result?.versions['4.18.2']).toBeDefined();
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith('/express');
+        expect(result?.packageid).toBe('pkg');
+        expect(result?.name).toBe('@scope/pkg');
+        expect(result?.versionid).toBe('1.0.0~build.1');
+        expect(result?.version).toBe('1.0.0+build.1');
+        expect(result?.createdat).toBe('2024-01-01T00:00:00.000Z');
+        expect(result?.modifiedat).toBe('2024-01-02T00:00:00.000Z');
+        expect(result?.['dist-tags']).toEqual({ latest: '1.0.0+build.1' });
+        expect(result?.dist).toEqual({
+            tarball: 'https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz',
+            shasum: 'abc123',
+            integrity: 'sha512-xyz',
+            file_count: 8,
+            unpacked_size: 12345,
+            'npm-signature': 'signed',
         });
-
-        test('should handle scoped packages', async () => {
-            const scopedManifest = { ...mockPackageManifest, name: '@types/node' };
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: scopedManifest,
-                headers: {}
-            });
-
-            const result = await npmService.getPackageMetadata('@types/node');
-
-            expect(result).toBeDefined();
-            expect(result?.['name']).toBe('@types/node');
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith('/@types%2Fnode');
+        expect(result?.author).toEqual({
+            name: 'Author Example',
+            email: 'author@example.com',
+            url: 'https://author.example.com',
         });
-
-        test('should return cached data when available', async () => {
-            // First call - should fetch and cache
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockPackageManifest,
-                headers: {}
-            });
-
-            const result1 = await npmService.getPackageMetadata('express');
-            expect(result1).toBeDefined();
-
-            // Second call - should use cache
-            const result2 = await npmService.getPackageMetadata('express');
-            expect(result2).toBeDefined();
-            expect(result2).toEqual(result1);
-
-            // Should only call API once
-            expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
-        });
-
-        test('should return null for non-existent package', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Not found'));
-
-            const result = await npmService.getPackageMetadata('non-existent-package');
-
-            expect(result).toBeNull();
-        });
-
-        test('should return null for non-200 response', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 404,
-                data: null
-            });
-
-            const result = await npmService.getPackageMetadata('not-found');
-
-            expect(result).toBeNull();
-        });
+        expect(result?.dependencies).toEqual([{ name: 'react', version: '^18.0.0', package: '/nodescopes/_/packages/react' }]);
+        expect(result?.dev_dependencies).toEqual([{ name: 'typescript', version: '^5.0.0', package: '/nodescopes/_/packages/typescript' }]);
+        expect(result?.peer_dependencies).toEqual([{ name: 'webpack', version: '^5.0.0', package: '/nodescopes/_/packages/webpack' }]);
+        expect(result?.optional_dependencies).toEqual([{ name: 'fsevents', version: '^2.3.0', package: '/nodescopes/_/packages/fsevents' }]);
+        expect(result?.bundle_dependencies).toEqual([{ name: 'left-pad', package: '/nodescopes/_/packages/left-pad' }]);
+        expect(result?.deprecated_message).toBe('use @scope/new-pkg');
+        expect(result?.deprecated).toEqual({});
+        expect(result?.replacedby).toBe('/nodescopes/scope/packages/new-pkg');
     });
 
-    describe('getVersionMetadata', () => {
-        test('should fetch and convert version metadata', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockVersionManifest,
-                headers: {
-                    'etag': '"version123"',
-                    'last-modified': 'Wed, 01 Jan 2023 00:00:00 GMT'
-                }
-            });
+    test('maps version metadata using upstream publish timestamps and version ids', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ status: 200, data: mockPackageManifest, headers: {} });
 
-            const result = await npmService.getVersionMetadata('express', '4.18.2');
+        const result = await npmService.getVersionMetadata('@scope/pkg', '1.0.0~build.1');
 
-            expect(result).toBeDefined();
-            expect(result?.version).toBe('4.18.2');
-            expect(result?.name).toBe('4.18.2');
-            expect(result?.dependencies).toBeDefined();
-            expect(result?.dist).toBeDefined();
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith('/express/4.18.2');
-        });
-
-        test('should return cached version data when available', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockVersionManifest,
-                headers: {}
-            });
-
-            const result1 = await npmService.getVersionMetadata('express', '4.18.2');
-            const result2 = await npmService.getVersionMetadata('express', '4.18.2');
-
-            expect(result1).toEqual(result2);
-            expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
-        });
-
-        test('should return null for non-existent version', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Not found'));
-
-            const result = await npmService.getVersionMetadata('express', '999.999.999');
-
-            expect(result).toBeNull();
-        });
+        expect(result?.versionid).toBe('1.0.0~build.1');
+        expect(result?.version).toBe('1.0.0+build.1');
+        expect(result?.packageid).toBe('pkg');
+        expect(result?.createdat).toBe('2024-01-02T00:00:00.000Z');
+        expect(result?.modifiedat).toBe('2024-01-02T00:00:00.000Z');
+        expect(result?.dist.tarball).toContain('pkg-1.0.0.tgz');
     });
 
-    describe('getPackageTarball', () => {
-        test('should fetch tarball data', async () => {
-            // Mock version metadata call
-            mockAxiosInstance.get
-                .mockResolvedValueOnce({
-                    status: 200,
-                    data: mockVersionManifest,
-                    headers: {}
-                })
-                // Mock tarball download
-                .mockResolvedValueOnce({
-                    status: 200,
-                    data: Buffer.from('tarball content'),
-                    headers: {
-                        'etag': '"tarball123"',
-                        'last-modified': 'Wed, 01 Jan 2023 00:00:00 GMT'
-                    }
-                });
+    test('caches package metadata', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ status: 200, data: mockPackageManifest, headers: {} });
 
-            const result = await npmService.getPackageTarball('express', '4.18.2');
+        const first = await npmService.getPackageMetadata('@scope/pkg');
+        const second = await npmService.getPackageMetadata('@scope/pkg');
 
-            expect(result).toBeInstanceOf(Buffer);
-            expect(result?.toString()).toBe('tarball content');
-            expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
-        });
-
-        test('should return cached tarball when available', async () => {
-            // First call
-            mockAxiosInstance.get
-                .mockResolvedValueOnce({
-                    status: 200,
-                    data: mockVersionManifest,
-                    headers: {}
-                })
-                .mockResolvedValueOnce({
-                    status: 200,
-                    data: Buffer.from('tarball content'),
-                    headers: {}
-                });
-
-            const result1 = await npmService.getPackageTarball('express', '4.18.2');
-
-            // Second call - should use cache for tarball
-            const result2 = await npmService.getPackageTarball('express', '4.18.2');
-
-            expect(result1).toEqual(result2);
-            // Should call version metadata once for each call, but tarball only once due to caching
-            expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2); // 2 for first call (version + tarball), second call uses cache
-        });
-
-        test('should return null when version metadata not found', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Not found'));
-
-            const result = await npmService.getPackageTarball('express', '999.999.999');
-
-            expect(result).toBeNull();
-        });
+        expect(first).toEqual(second);
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
     });
 
-    describe('searchPackages', () => {
-        test('should search packages with default options', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockSearchResults
-            });
+    test('uses the search endpoint and maps summaries', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ status: 200, data: mockSearchResults });
 
-            const result = await npmService.searchPackages('express');
+        const result = await npmService.searchPackages('express');
 
-            expect(result).toBeDefined();
-            expect(result?.objects).toHaveLength(1);
-            expect(result?.total).toBe(1);
-            expect(result?.objects[0]?.package['name']).toBe('express');
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith('/-/v1/search?text=express&size=20&from=0');
-        });
-
-        test('should search packages with custom options', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockSearchResults
-            });
-
-            const result = await npmService.searchPackages('express', {
-                size: 10,
-                from: 5,
-                quality: 0.8,
-                popularity: 0.9,
-                maintenance: 0.7
-            });
-
-            expect(result).toBeDefined();
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith(
-                '/-/v1/search?text=express&size=10&from=5&quality=0.8&popularity=0.9&maintenance=0.7'
-            );
-        });
-
-        test('should return null for failed search', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Search failed'));
-
-            const result = await npmService.searchPackages('invalid-query');
-
-            expect(result).toBeNull();
-        });
+        expect(result?.objects[0]?.package.packageid).toBe('express');
+        expect(result?.objects[0]?.package.versionid).toBe('4.18.2');
+        expect(mockAxiosInstance.get).toHaveBeenCalledWith('/-/v1/search?text=express&size=20&from=0');
     });
 
-    describe('getDownloadStats', () => {
-        test('should fetch download statistics', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockDownloadStats
-            });
+    test('uses canonical package names for download stats', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ status: 200, data: { downloads: 1, start: 'x', end: 'y', package: '@scope/pkg' } });
 
-            const result = await npmService.getDownloadStats('express', 'last-week');
+        await npmService.getDownloadStats('@scope/pkg');
 
-            expect(result).toBeDefined();
-            expect(result?.downloads).toBe(25000000);
-            expect(result?.package).toBe('express');
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith(
-                'https://api.npmjs.org/downloads/point/last-week/express'
-            );
-        });
-
-        test('should handle scoped packages in download stats', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: { ...mockDownloadStats, package: '@types/node' }
-            });
-
-            const result = await npmService.getDownloadStats('@types/node');
-
-            expect(result).toBeDefined();
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith(
-                'https://api.npmjs.org/downloads/point/last-week/@types~node'
-            );
-        });
-
-        test('should return null for failed stats request', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Stats failed'));
-
-            const result = await npmService.getDownloadStats('non-existent');
-
-            expect(result).toBeNull();
-        });
+        expect(mockAxiosInstance.get).toHaveBeenCalledWith('https://api.npmjs.org/downloads/point/last-week/@scope%2Fpkg');
     });
 
-    describe('packageExists', () => {
-        test('should return true for existing package', async () => {
-            mockAxiosInstance.head.mockResolvedValue({ status: 200 });
-
-            const result = await npmService.packageExists('express');
-
-            expect(result).toBe(true);
-            expect(mockAxiosInstance.head).toHaveBeenCalledWith('/express');
-        });
-
-        test('should return false for non-existent package', async () => {
-            mockAxiosInstance.head.mockRejectedValue(new Error('Not found'));
-
-            const result = await npmService.packageExists('non-existent');
-
-            expect(result).toBe(false);
-        });
+    test('resolves canonical package names from nodescope and packageid', async () => {
+        await expect(npmService.resolveCanonicalPackageName('scope', 'pkg')).resolves.toBe('@scope/pkg');
+        await expect(npmService.resolveCanonicalPackageName('_', 'react')).resolves.toBe('react');
+        await expect(npmService.resolveCanonicalPackageName('scope', 'missing')).resolves.toBeNull();
     });
-
-    describe('versionExists', () => {
-        test('should return true for existing version', async () => {
-            mockAxiosInstance.head.mockResolvedValue({ status: 200 });
-
-            const result = await npmService.versionExists('express', '4.18.2');
-
-            expect(result).toBe(true);
-            expect(mockAxiosInstance.head).toHaveBeenCalledWith('/express/4.18.2');
-        });
-
-        test('should return false for non-existent version', async () => {
-            mockAxiosInstance.head.mockRejectedValue(new Error('Not found'));
-
-            const result = await npmService.versionExists('express', '999.999.999');
-
-            expect(result).toBe(false);
-        });
-    });
-
-    describe('getRegistryStats', () => {
-        test('should fetch registry statistics', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: mockRegistryStats
-            });
-
-            const result = await npmService.getRegistryStats();
-
-            expect(result).toBeDefined();
-            expect(result?.doc_count).toBe(2000000);
-            expect(result?.disk_size).toBe(500000000000);
-            expect(mockAxiosInstance.get).toHaveBeenCalledWith('/');
-        });
-
-        test('should return null for failed stats request', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Stats failed'));
-
-            const result = await npmService.getRegistryStats();
-
-            expect(result).toBeNull();
-        });
-    });
-
-    describe('error handling', () => {
-        test('should handle network errors gracefully', async () => {
-            mockAxiosInstance.get.mockRejectedValue(new Error('Network error'));
-
-            const result = await npmService.getPackageMetadata('express');
-
-            expect(result).toBeNull();
-        });
-
-        test('should handle malformed responses gracefully', async () => {
-            mockAxiosInstance.get.mockResolvedValue({
-                status: 200,
-                data: null // Invalid response
-            });
-
-            const result = await npmService.getPackageMetadata('express');
-
-            expect(result).toBeNull();
-        });
-    });
-}); 
+});

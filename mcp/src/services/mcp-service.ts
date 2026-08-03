@@ -1,24 +1,42 @@
 /**
- * MCP Registry Service
- * @fileoverview Service for interacting with MCP official registry and converting to xRegistry format
+ * MCP Registry Service.
  */
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CACHE_CONFIG, MCP_REGISTRY } from '../config/constants';
 import {
     CachedResponse,
     CacheMetadata,
+    MCPIcon,
+    MCPInput,
+    MCPNamedInput,
+    MCPPackage,
+    MCPRemote,
+    MCPRepository,
     MCPServerListResponse,
     MCPServerResponse,
-    MCPPackage
+    MCPTransport,
+    MCPVariableInput,
 } from '../types/mcp';
-import { ServerMetadata, ProviderMetadata } from '../types/xregistry';
+import {
+    ServerMetaAttributes,
+    ServerMetadata,
+    XRegistryIcon,
+    XRegistryInputDescriptor,
+    XRegistryNamedInputDescriptor,
+    XRegistryPackage,
+    XRegistryRemote,
+    XRegistryRepository,
+    XRegistryTransport,
+    XRegistryVariableDescriptor,
+} from '../types/xregistry';
 
-/**
- * Service configuration
- */
+const ENTITY_ID_PATTERN = /^[A-Za-z0-9._~:@-]+$/;
+const PYPI_NORMALIZATION_PATTERN = /[-_.]+/g;
+
 export interface MCPServiceConfig {
     baseUrl?: string;
     timeout?: number;
@@ -27,17 +45,17 @@ export interface MCPServiceConfig {
     cacheTtl?: number;
 }
 
-/**
- * MCP Registry Service
- * Implements MCP official registry API integration
- */
+interface ParsedServerName {
+    providerId: string;
+    serverName: string;
+}
+
 export class MCPService {
     private httpClient: AxiosInstance;
     private cacheDir: string;
     private cacheTtl: number;
     private baseUrl: string;
-    private serverNamesCache: string[] = [];
-    private lastFetchTime: number = 0;
+    private lastFetchTime = 0;
 
     constructor(config: MCPServiceConfig = {}) {
         this.baseUrl = config.baseUrl || MCP_REGISTRY.BASE_URL;
@@ -48,38 +66,32 @@ export class MCPService {
             timeout: config.timeout ?? MCP_REGISTRY.TIMEOUT_MS,
             headers: {
                 'User-Agent': config.userAgent || MCP_REGISTRY.USER_AGENT,
-                'Accept': 'application/json',
+                Accept: 'application/json',
             },
             validateStatus: (status) => status >= 200 && status < 500,
         });
 
-        // Ensure cache directory exists
         if (!fs.existsSync(this.cacheDir)) {
             fs.mkdirSync(this.cacheDir, { recursive: true });
         }
 
-        // Load cache metadata
         this.loadCacheMetadata();
     }
 
-    /**
-     * Load cache metadata
-     */
     private loadCacheMetadata(): void {
         const metadataFile = path.join(this.cacheDir, 'cache-metadata.json');
-        if (fs.existsSync(metadataFile)) {
-            try {
-                const metadata: CacheMetadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
-                this.lastFetchTime = metadata.lastUpdated;
-            } catch (error) {
-                console.warn('Failed to load cache metadata:', error);
-            }
+        if (!fs.existsSync(metadataFile)) {
+            return;
+        }
+
+        try {
+            const metadata: CacheMetadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
+            this.lastFetchTime = metadata.lastUpdated;
+        } catch (error) {
+            console.warn('Failed to load cache metadata:', error);
         }
     }
 
-    /**
-     * Save cache metadata
-     */
     private saveCacheMetadata(serverCount: number, etag?: string): void {
         const metadataFile = path.join(this.cacheDir, 'cache-metadata.json');
         const metadata: CacheMetadata = {
@@ -87,19 +99,16 @@ export class MCPService {
             serverCount,
             etag,
         };
+
         fs.writeFileSync(metadataFile, JSON.stringify(metadata, null, 2));
         this.lastFetchTime = metadata.lastUpdated;
     }
 
-    /**
-     * Cached HTTP GET with ETag support
-     */
     private async cachedGet<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
         const cacheFile = path.join(this.cacheDir, Buffer.from(url).toString('base64url'));
         let etag: string | null = null;
         let cachedData: T | null = null;
 
-        // Check for cached data
         if (fs.existsSync(cacheFile)) {
             try {
                 const cached: CachedResponse<T> = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
@@ -109,8 +118,8 @@ export class MCPService {
                 if (Date.now() - cached.timestamp < this.cacheTtl) {
                     return cached.data;
                 }
-            } catch (error) {
-                // Invalid cache file, ignore
+            } catch {
+                // Ignore malformed cache entries.
             }
         }
 
@@ -134,24 +143,26 @@ export class MCPService {
                 };
                 fs.writeFileSync(cacheFile, JSON.stringify(cacheData));
                 return response.data;
-            } else if (response.status === 304 && cachedData) {
+            }
+
+            if (response.status === 304 && cachedData) {
                 fs.writeFileSync(cacheFile, JSON.stringify({
                     etag,
                     data: cachedData,
                     timestamp: Date.now(),
                 } satisfies CachedResponse<T>));
                 return cachedData;
-            } else if (response.status >= 400) {
+            }
+
+            if (response.status >= 400) {
                 if (cachedData) {
-                    // Use cache on HTTP errors
                     return cachedData;
                 }
                 throw new Error(`HTTP ${response.status}: ${JSON.stringify(response.data)}`);
             }
         } catch (error: unknown) {
-            // On network errors, use cached data if available
-            if (axios.isAxiosError(error)) {
-                if ((error.code === 'ECONNABORTED' || error.code === 'ENOTFOUND' || error.code === 'ETIMEDOUT') && cachedData) {
+            if (axios.isAxiosError(error) && cachedData) {
+                if (error.code === 'ECONNABORTED' || error.code === 'ENOTFOUND' || error.code === 'ETIMEDOUT') {
                     return cachedData;
                 }
             }
@@ -162,7 +173,6 @@ export class MCPService {
             throw error;
         }
 
-        // Fallback to cached data
         if (cachedData) {
             return cachedData;
         }
@@ -170,16 +180,12 @@ export class MCPService {
         throw new Error(`Failed to fetch ${url} and no cache available`);
     }
 
-    /**
-     * Get all servers from MCP registry (with pagination)
-     */
     async getAllServers(options: { limit?: number; search?: string; version?: string; updatedSince?: string } = {}): Promise<MCPServerListResponse> {
         const allServers: MCPServerResponse[] = [];
-        let cursor: string | undefined = undefined;
-        const pageLimit = 100; // MCP registry max limit is 100
-        
-        // If a specific limit is requested and it's <= 100, just fetch that
-        if (options.limit && options.limit <= 100) {
+        let cursor: string | undefined;
+        const pageLimit = 100;
+
+        if (options.limit && options.limit <= pageLimit) {
             let url = `${this.baseUrl}${MCP_REGISTRY.SERVERS_ENDPOINT}`;
             const params: string[] = [`limit=${options.limit}`];
 
@@ -193,11 +199,10 @@ export class MCPService {
                 params.push(`updated_since=${encodeURIComponent(options.updatedSince)}`);
             }
 
-            url += '?' + params.join('&');
-            return await this.cachedGet<MCPServerListResponse>(url);
+            url += `?${params.join('&')}`;
+            return this.cachedGet<MCPServerListResponse>(url);
         }
 
-        // Otherwise, paginate through all results
         do {
             let url = `${this.baseUrl}${MCP_REGISTRY.SERVERS_ENDPOINT}`;
             const params: string[] = [`limit=${pageLimit}`];
@@ -215,47 +220,35 @@ export class MCPService {
                 params.push(`updated_since=${encodeURIComponent(options.updatedSince)}`);
             }
 
-            url += '?' + params.join('&');
-            
-            console.log(`Fetching page with cursor: ${cursor || 'none'}`);
+            url += `?${params.join('&')}`;
             const response = await this.cachedGet<MCPServerListResponse>(url);
-            
-            if (response.servers && response.servers.length > 0) {
+
+            if (response.servers.length > 0) {
                 allServers.push(...response.servers);
-                console.log(`Fetched ${response.servers.length} servers, total: ${allServers.length}`);
             }
 
             cursor = response.metadata?.nextCursor;
-            
-            // If we've hit the requested limit, stop
             if (options.limit && allServers.length >= options.limit) {
                 break;
             }
         } while (cursor);
 
-        console.log(`Total servers fetched: ${allServers.length}`);
-        
-        // Update cache metadata
         this.saveCacheMetadata(allServers.length);
 
         return {
-            servers: allServers,
+            servers: options.limit ? allServers.slice(0, options.limit) : allServers,
             metadata: {
-                count: allServers.length,
-                nextCursor: undefined
-            }
+                count: options.limit ? Math.min(allServers.length, options.limit) : allServers.length,
+                nextCursor: undefined,
+            },
         };
     }
 
-    /**
-     * Get a specific server by name
-     */
-    async getServer(serverName: string, version: string = 'latest'): Promise<MCPServerResponse | null> {
+    async getServer(serverName: string, version = 'latest'): Promise<MCPServerResponse | null> {
         try {
             const encodedName = encodeURIComponent(serverName);
             const encodedVersion = encodeURIComponent(version);
             const url = `${this.baseUrl}${MCP_REGISTRY.SERVERS_ENDPOINT}/${encodedName}/versions/${encodedVersion}`;
-            
             return await this.cachedGet<MCPServerResponse>(url);
         } catch (error) {
             if (this.isNotFoundError(error)) {
@@ -265,14 +258,10 @@ export class MCPService {
         }
     }
 
-    /**
-     * Get all versions of a specific server
-     */
     async getServerVersions(serverName: string): Promise<MCPServerListResponse | null> {
         try {
             const encodedName = encodeURIComponent(serverName);
             const url = `${this.baseUrl}${MCP_REGISTRY.SERVERS_ENDPOINT}/${encodedName}/versions`;
-            
             return await this.cachedGet<MCPServerListResponse>(url);
         } catch (error) {
             if (this.isNotFoundError(error)) {
@@ -282,52 +271,45 @@ export class MCPService {
         }
     }
 
-    /**
-     * Resolve an xRegistry server ID to its upstream MCP server and versions.
-     * This avoids loading the complete MCP catalog for resource detail requests.
-     */
     async resolveServerVersions(providerId: string, serverId: string): Promise<MCPServerListResponse | null> {
-        const sanitizedProvider = this.sanitizeId(providerId);
-        const providerPrefix = `${sanitizedProvider}_`;
-        const candidates = new Set<string>();
-
-        if (serverId.startsWith(providerPrefix)) {
-            candidates.add(`${providerId}/${serverId.substring(providerPrefix.length)}`);
-        }
-        candidates.add(`${providerId}/${serverId}`);
-
-        for (const candidate of candidates) {
-            const response = await this.getServerVersions(candidate);
-            if (this.containsServer(response, providerId, serverId)) {
-                return response;
+        if (!serverId.startsWith('xh~')) {
+            const direct = await this.getServerVersions(`${providerId}/${serverId}`);
+            if (this.containsServer(direct, providerId, serverId)) {
+                return direct;
             }
         }
 
-        const searchResponse = await this.getAllServers({
-            limit: 100,
-            search: providerId
-        });
-        const matchingServer = searchResponse.servers.find(response =>
-            this.extractProviderId(response.server.name) === providerId &&
-            this.sanitizeId(response.server.name) === serverId
-        );
+        const searched = await this.getAllServers({ limit: 100, search: providerId });
+        const searchedMatch = this.findMatchingServerName(searched.servers, providerId, serverId);
+        if (searchedMatch) {
+            return this.getServerVersions(searchedMatch);
+        }
 
-        if (!matchingServer) {
+        const allServers = await this.getAllServers();
+        const fullMatch = this.findMatchingServerName(allServers.servers, providerId, serverId);
+        if (!fullMatch) {
             return null;
         }
 
-        return this.getServerVersions(matchingServer.server.name);
+        return this.getServerVersions(fullMatch);
     }
 
-    private containsServer(
-        response: MCPServerListResponse | null,
-        providerId: string,
-        serverId: string
-    ): boolean {
-        return response?.servers?.some(server =>
-            this.extractProviderId(server.server.name) === providerId &&
-            this.sanitizeId(server.server.name) === serverId
-        ) ?? false;
+    private findMatchingServerName(servers: MCPServerResponse[], providerId: string, serverId: string): string | null {
+        const match = servers.find((server) => this.matchesIdentity(server, providerId, serverId));
+        return match?.server.name ?? null;
+    }
+
+    private containsServer(response: MCPServerListResponse | null, providerId: string, serverId: string): boolean {
+        return response?.servers?.some((server) => this.matchesIdentity(server, providerId, serverId)) ?? false;
+    }
+
+    private matchesIdentity(server: MCPServerResponse, providerId: string, serverId: string): boolean {
+        const parsed = this.parseServerName(server.server.name);
+        if (!parsed) {
+            return false;
+        }
+
+        return parsed.providerId === providerId && this.deriveServerId(parsed.serverName) === serverId;
     }
 
     private isNotFoundError(error: unknown): boolean {
@@ -335,170 +317,422 @@ export class MCPService {
             (error instanceof Error && error.message.startsWith('HTTP 404:'));
     }
 
-    /**
-     * Generate packagexid for cross-referencing packages in their respective registries
-     */
-    private generatePackageXid(pkg: MCPPackage): string | undefined {
-        if (!pkg.identifier) {
-            return undefined;
-        }
-
-        // Determine registry instance ID from registryBaseUrl
-        const getRegistryId = (url?: string): string => {
-            if (!url) {
-                // Default registry IDs when URL is not specified
-                switch (pkg.registryType) {
-                    case 'npm': return 'npmjs.org';
-                    case 'pypi': return 'pypi.org';
-                    case 'nuget': return 'nuget.org';
-                    case 'oci': return 'docker.io';
-                    default: return 'default';
-                }
-            }
-
-            try {
-                const parsedUrl = new URL(url);
-                const hostname = parsedUrl.hostname;
-                
-                // Map common registry URLs to their IDs
-                if (hostname.includes('npmjs.org') || hostname.includes('registry.npmjs.org')) {
-                    return 'npmjs.org';
-                } else if (hostname.includes('pypi.org')) {
-                    return 'pypi.org';
-                } else if (hostname.includes('nuget.org') || hostname.includes('api.nuget.org')) {
-                    return 'nuget.org';
-                } else if (hostname.includes('docker.io') || hostname.includes('hub.docker.com')) {
-                    return 'docker.io';
-                } else if (hostname.includes('ghcr.io') || hostname.includes('github.com')) {
-                    return 'ghcr.io';
-                } else if (hostname.includes('gitlab.com')) {
-                    return 'gitlab.com';
-                }
-                
-                return hostname;
-            } catch {
-                return 'default';
-            }
-        };
-
-        const registryId = getRegistryId(pkg.registryBaseUrl);
-        const encodedIdentifier = encodeURIComponent(pkg.identifier);
-
-        // Generate xid based on registry type
-        switch (pkg.registryType) {
-            case 'npm':
-                return `/noderegistries/${registryId}/packages/${encodedIdentifier}`;
-            case 'pypi':
-                return `/pythonregistries/${registryId}/packages/${encodedIdentifier}`;
-            case 'oci':
-                return `/containerregistries/${registryId}/images/${encodedIdentifier}`;
-            case 'nuget':
-                return `/dotnetregistries/${registryId}/packages/${encodedIdentifier}`;
-            case 'mcpb':
-                // MCPB bundles might not follow the same group/resource pattern
-                return `/mcpbundles/${encodedIdentifier}`;
-            default:
-                return undefined;
-        }
-    }
-
-    /**
-     * Convert MCP server response to xRegistry server metadata
-     */
     convertToXRegistryServer(mcpResponse: MCPServerResponse, providerId: string, baseUrl: string): ServerMetadata {
-        const { server, _meta } = mcpResponse;
-        const serverId = this.sanitizeId(server.name);
-        const now = new Date().toISOString();
-        
-        // Extract registry metadata timestamps
-        const publishedAt = _meta?.['io.modelcontextprotocol.registry/official']?.publishedAt || now;
-        const updatedAt = _meta?.['io.modelcontextprotocol.registry/official']?.updatedAt || now;
-        const status = _meta?.['io.modelcontextprotocol.registry/official']?.status || 'active';
-        const isLatest = _meta?.['io.modelcontextprotocol.registry/official']?.isLatest ?? true;
-        
-        // Generate packagexid for each package
-        const packagesWithXid = server.packages?.map(pkg => ({
-            ...pkg,
-            packagexid: pkg.packagexid || this.generatePackageXid(pkg)
-        }));
+        const { server } = mcpResponse;
+        const parsed = this.parseServerName(server.name);
+        const effectiveProviderId = parsed?.providerId ?? providerId;
+        const serverName = parsed?.serverName ?? server.name;
+        const serverId = this.deriveServerId(serverName);
+        const versionId = this.deriveVersionId(server.version);
+        const resourcePath = `/mcpproviders/${effectiveProviderId}/servers/${serverId}`;
+        const timestamps = this.getTimestamps(mcpResponse);
 
-        return {
+        const result: ServerMetadata = {
             serverid: serverId,
-            versionid: server.version || '1.0.0',
-            self: `${baseUrl}/mcpproviders/${providerId}/servers/${serverId}`,
-            xid: `/mcpproviders/${providerId}/servers/${serverId}`,
+            versionid: versionId,
+            self: `${baseUrl}${resourcePath}`,
+            xid: resourcePath,
             epoch: 1,
-            name: server.title || server.name,
-            title: server.title,
+            name: server.name,
             description: server.description,
-            documentation: server.websiteUrl,
-            icon: server.icons && server.icons.length > 0 ? server.icons[0].src : undefined,
-            labels: {
-                status,
-                isLatest: String(isLatest),
-            },
-            createdat: publishedAt,
-            modifiedat: updatedAt,
-            isdefault: isLatest,
-            schemaurl: server.$schema,
+            createdat: timestamps.createdat,
+            modifiedat: timestamps.modifiedat,
+            ancestor: resourcePath,
             version: server.version,
-            websiteUrl: server.websiteUrl,
-            icons: server.icons,
-            packages: packagesWithXid,
-            remotes: server.remotes,
-            repository: server.repository,
-            prompts: server.prompts || [],
-            tools: server.tools || [],
-            resources: server.resources || [],
-            _meta: server._meta,
         };
-    }
 
-    /**
-     * Sanitize ID to meet xRegistry requirements
-     */
-    sanitizeId(name: string): string {
-        // Convert to lowercase and replace invalid characters with underscores
-        return name.toLowerCase()
-            .replace(/[^a-z0-9._~:@-]/g, '_')
-            .replace(/^[^a-z0-9_]/g, '_');
-    }
-
-    /**
-     * Extract provider ID from server name (namespace before /)
-     */
-    extractProviderId(serverName: string): string {
-        const parts = serverName.split('/');
-        if (parts.length > 1) {
-            return this.sanitizeId(parts[0]);
+        if (server.$schema) {
+            result.schemaurl = server.$schema;
         }
-        return 'default';
+        if (server.title) {
+            result.title = server.title;
+        }
+        if (server.websiteUrl) {
+            result.website_url = server.websiteUrl;
+        }
+
+        const icons = this.mapIcons(server.icons);
+        if (icons?.length) {
+            result.icons = icons;
+        }
+
+        const repository = this.mapRepository(server.repository);
+        if (repository) {
+            result.repository = repository;
+        }
+
+        const packages = server.packages?.map((pkg) => this.mapPackage(pkg)).filter((pkg): pkg is XRegistryPackage => pkg !== null);
+        if (packages?.length) {
+            result.packages = packages;
+        }
+
+        const remotes = server.remotes?.map((remote) => this.mapRemote(remote)).filter((remote): remote is XRegistryRemote => remote !== null);
+        if (remotes?.length) {
+            result.remotes = remotes;
+        }
+
+        const publisherMeta = server._meta?.['io.modelcontextprotocol.registry/publisher-provided'];
+        if (publisherMeta) {
+            result.publisher_meta = publisherMeta;
+        }
+
+        return result;
     }
 
-    /**
-     * Group servers by provider
-     */
+    getServerResourceMetaAttributes(mcpResponse: MCPServerResponse): ServerMetaAttributes {
+        const official = mcpResponse._meta?.['io.modelcontextprotocol.registry/official'];
+        const result: ServerMetaAttributes = {};
+
+        if (official?.status) {
+            result.status = official.status;
+        }
+        if (official?.statusMessage) {
+            result.status_message = official.statusMessage;
+        }
+        if (official?.statusChangedAt) {
+            result.status_changed_at = official.statusChangedAt;
+        }
+        if (official?.publishedAt) {
+            result.published_at = official.publishedAt;
+        }
+        if (official?.updatedAt) {
+            result.updated_at = official.updatedAt;
+        }
+        if (official?.isLatest !== undefined) {
+            result.is_latest = official.isLatest;
+        }
+
+        return result;
+    }
+
+    deriveVersionId(version: string): string {
+        return version.replace(/\+/g, '~');
+    }
+
+    deriveServerId(name: string): string {
+        return this.deriveEntityId(name);
+    }
+
+    extractProviderId(serverName: string): string | null {
+        return this.parseServerName(serverName)?.providerId ?? null;
+    }
+
     groupServersByProvider(servers: MCPServerResponse[]): Map<string, MCPServerResponse[]> {
         const grouped = new Map<string, MCPServerResponse[]>();
-        
+
         for (const serverResponse of servers) {
-            const providerId = this.extractProviderId(serverResponse.server.name);
-            if (!grouped.has(providerId)) {
-                grouped.set(providerId, []);
+            const parsed = this.parseServerName(serverResponse.server.name);
+            if (!parsed) {
+                continue;
             }
-            grouped.get(providerId)!.push(serverResponse);
+
+            if (!grouped.has(parsed.providerId)) {
+                grouped.set(parsed.providerId, []);
+            }
+            grouped.get(parsed.providerId)!.push(serverResponse);
         }
-        
+
         return grouped;
     }
 
-    /**
-     * Get cache statistics
-     */
     getCacheStats(): { lastUpdated: number; cacheDir: string } {
         return {
             lastUpdated: this.lastFetchTime,
             cacheDir: this.cacheDir,
         };
+    }
+
+    private getTimestamps(mcpResponse: MCPServerResponse): { createdat: string; modifiedat: string } {
+        const now = new Date().toISOString();
+        const official = mcpResponse._meta?.['io.modelcontextprotocol.registry/official'];
+
+        return {
+            createdat: official?.publishedAt || now,
+            modifiedat: official?.updatedAt || official?.publishedAt || now,
+        };
+    }
+
+    private parseServerName(serverName: string): ParsedServerName | null {
+        const separator = serverName.indexOf('/');
+        if (separator <= 0 || separator !== serverName.lastIndexOf('/')) {
+            return null;
+        }
+
+        return {
+            providerId: serverName.slice(0, separator),
+            serverName: serverName.slice(separator + 1),
+        };
+    }
+
+    private deriveEntityId(value: string): string {
+        if (value.length <= 128 && ENTITY_ID_PATTERN.test(value) && !value.startsWith('xh~')) {
+            return value;
+        }
+
+        return `xh~${createHash('sha256').update(value, 'utf8').digest('hex')}`;
+    }
+
+    private normalizePythonPackageId(identifier: string): string {
+        return identifier.toLowerCase().replace(PYPI_NORMALIZATION_PATTERN, '-');
+    }
+
+    private normalizeOciRegistryId(url?: string): string {
+        if (!url) {
+            return 'docker.io';
+        }
+
+        try {
+            const hostname = new URL(url).hostname.toLowerCase();
+            if (hostname === 'registry-1.docker.io' || hostname === 'index.docker.io') {
+                return 'docker.io';
+            }
+            return hostname;
+        } catch {
+            return 'docker.io';
+        }
+    }
+
+    private generatePackageXid(pkg: MCPPackage): string | undefined {
+        if (!pkg.identifier) {
+            return undefined;
+        }
+
+        switch (pkg.registryType) {
+            case 'npm': {
+                const match = pkg.identifier.match(/^@([^/]+)\/(.+)$/);
+                const scope = match ? match[1] : '_';
+                const packageName = match ? match[2] : pkg.identifier;
+                return `/nodescopes/${scope}/packages/${this.deriveEntityId(packageName)}`;
+            }
+            case 'pypi':
+                return `/pythonregistries/pypi/packages/${this.normalizePythonPackageId(pkg.identifier)}`;
+            case 'oci':
+                return `/containerregistries/${this.normalizeOciRegistryId(pkg.registryBaseUrl)}/images/${this.deriveEntityId(pkg.identifier.replace(/\//g, '~'))}`;
+            case 'nuget':
+                return `/dotnetregistries/nuget/packages/${pkg.identifier.toLowerCase()}`;
+            case 'mcpb': {
+                try {
+                    new URL(pkg.identifier);
+                    return pkg.identifier;
+                } catch {
+                    return undefined;
+                }
+            }
+            default:
+                return undefined;
+        }
+    }
+
+    private mapIcons(icons?: MCPIcon[]): XRegistryIcon[] | undefined {
+        return icons?.map((icon) => {
+            const result: XRegistryIcon = { src: icon.src };
+            if (icon.mimeType) {
+                result.mime_type = icon.mimeType;
+            }
+            if (icon.sizes?.length) {
+                result.sizes = [...icon.sizes];
+            }
+            if (icon.theme) {
+                result.theme = icon.theme;
+            }
+            return result;
+        });
+    }
+
+    private mapRepository(repository?: MCPRepository): XRegistryRepository | undefined {
+        if (!repository) {
+            return undefined;
+        }
+
+        const result: XRegistryRepository = {
+            url: repository.url,
+            source: repository.source,
+        };
+        if (repository.id) {
+            result.id = repository.id;
+        }
+        if (repository.subfolder) {
+            result.subfolder = repository.subfolder;
+        }
+        return result;
+    }
+
+    private mapVariableDescriptor(input?: MCPVariableInput): XRegistryVariableDescriptor | undefined {
+        if (!input) {
+            return undefined;
+        }
+
+        const result: XRegistryVariableDescriptor = {};
+        if (input.description) {
+            result.description = input.description;
+        }
+        if (input.isRequired !== undefined) {
+            result.is_required = input.isRequired;
+        }
+        if (input.isSecret !== undefined) {
+            result.is_secret = input.isSecret;
+        }
+        if (input.default !== undefined) {
+            result.default = input.default;
+        }
+        if (input.format) {
+            result.format = input.format;
+        }
+        if (input.value !== undefined) {
+            result.value = input.value;
+        }
+        if (input.choices?.length) {
+            result.choices = [...input.choices];
+        }
+
+        return Object.keys(result).length > 0 ? result : undefined;
+    }
+
+    private mapVariables(variables?: Record<string, MCPVariableInput>): Record<string, XRegistryVariableDescriptor> | undefined {
+        if (!variables) {
+            return undefined;
+        }
+
+        const mapped = Object.entries(variables).reduce<Record<string, XRegistryVariableDescriptor>>((accumulator, [name, descriptor]) => {
+            const converted = this.mapVariableDescriptor(descriptor);
+            if (converted) {
+                accumulator[name] = converted;
+            }
+            return accumulator;
+        }, {});
+
+        return Object.keys(mapped).length > 0 ? mapped : undefined;
+    }
+
+    private mapInputDescriptor(input: MCPInput): XRegistryInputDescriptor {
+        const result: XRegistryInputDescriptor = {};
+        if (input.description) {
+            result.description = input.description;
+        }
+        if (input.isRequired !== undefined) {
+            result.is_required = input.isRequired;
+        }
+        if (input.isSecret !== undefined) {
+            result.is_secret = input.isSecret;
+        }
+        if (input.default !== undefined) {
+            result.default = input.default;
+        }
+        if (input.format) {
+            result.format = input.format;
+        }
+        if (input.value !== undefined) {
+            result.value = input.value;
+        }
+        if (input.placeholder !== undefined) {
+            result.placeholder = input.placeholder;
+        }
+        if (input.choices?.length) {
+            result.choices = [...input.choices];
+        }
+        const variables = this.mapVariables(input.variables);
+        if (variables) {
+            result.variables = variables;
+        }
+        return result;
+    }
+
+    private mapNamedInputDescriptor(input: MCPNamedInput): XRegistryNamedInputDescriptor {
+        return {
+            name: input.name,
+            ...this.mapInputDescriptor(input),
+        };
+    }
+
+    private mapArgumentDescriptor(input: MCPInput & { type: 'positional' | 'named'; name?: string; valueHint?: string; isRepeated?: boolean }): XRegistryInputDescriptor {
+        const result: XRegistryInputDescriptor = {
+            ...this.mapInputDescriptor(input),
+            type: input.type,
+        };
+
+        if (input.name) {
+            result.name = input.name;
+        }
+        if (input.valueHint) {
+            result.value_hint = input.valueHint;
+        }
+        if (input.isRepeated !== undefined) {
+            result.is_repeated = input.isRepeated;
+        }
+        return result;
+    }
+
+    private mapTransport(transport: MCPTransport): XRegistryTransport {
+        const result: XRegistryTransport = { type: transport.type };
+
+        if (transport.type !== 'stdio') {
+            if (transport.url) {
+                result.url = transport.url;
+            }
+            if (transport.headers?.length) {
+                result.headers = transport.headers.map((header) => this.mapNamedInputDescriptor(header));
+            }
+        }
+
+        return result;
+    }
+
+    private mapRemote(remote: MCPRemote): XRegistryRemote | null {
+        const result: XRegistryRemote = {
+            type: remote.type,
+            url: remote.url,
+        };
+
+        if (remote.headers?.length) {
+            result.headers = remote.headers.map((header) => this.mapNamedInputDescriptor(header));
+        }
+
+        const variables = this.mapVariables(remote.variables);
+        if (variables) {
+            result.variables = variables;
+        }
+
+        return result;
+    }
+
+    private mapPackage(pkg: MCPPackage): XRegistryPackage | null {
+        if (!pkg.transport) {
+            return null;
+        }
+
+        const result: XRegistryPackage = {
+            registry_type: pkg.registryType,
+            identifier: pkg.identifier,
+            transport: this.mapTransport(pkg.transport),
+        };
+
+        if (pkg.registryBaseUrl) {
+            result.registry_base_url = pkg.registryBaseUrl;
+        }
+        if (pkg.version) {
+            result.version = pkg.version;
+        }
+        if (pkg.fileSha256) {
+            result.file_sha256 = pkg.fileSha256;
+        }
+        if (pkg.runtimeHint) {
+            result.runtime_hint = pkg.runtimeHint;
+        }
+
+        const packageXid = pkg.packagexid || this.generatePackageXid(pkg);
+        if (packageXid) {
+            result.packagexid = packageXid;
+        }
+        if (pkg.runtimeArguments?.length) {
+            result.runtime_arguments = pkg.runtimeArguments.map((argument) => this.mapArgumentDescriptor(argument));
+        }
+        if (pkg.packageArguments?.length) {
+            result.package_arguments = pkg.packageArguments.map((argument) => this.mapArgumentDescriptor(argument));
+        }
+        if (pkg.environmentVariables?.length) {
+            result.environment_variables = pkg.environmentVariables.map((environmentVariable) => this.mapNamedInputDescriptor(environmentVariable));
+        }
+
+        return result;
     }
 }

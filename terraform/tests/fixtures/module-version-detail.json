@@ -3,11 +3,70 @@
   "owner": "terraform-aws-modules",
   "namespace": "terraform-aws-modules",
   "name": "vpc",
+  "version": "5.1.0",
   "provider": "aws",
   "provider_logo_url": "",
   "description": "Terraform module which creates VPC resources on AWS",
   "source": "https://github.com/terraform-aws-modules/terraform-aws-vpc",
   "published_at": "2023-06-12T10:00:00Z",
   "downloads": 50000000,
-  "verified": true
+  "verified": true,
+  "trusted": true,
+  "providers": ["aws", "azurerm"],
+  "versions": ["5.1.0", "5.0.0", "4.0.0"],
+  "root": {
+    "path": "",
+    "name": "vpc",
+    "readme": "# VPC module",
+    "empty": false,
+    "inputs": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "VPC name",
+        "default": "\"demo\"",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "vpc_id",
+        "description": "Created VPC ID"
+      }
+    ],
+    "dependencies": [
+      {
+        "name": "network",
+        "source": "terraform-aws-modules/network/aws",
+        "version": ">= 1.0.0"
+      }
+    ],
+    "provider_dependencies": [
+      {
+        "name": "aws",
+        "namespace": "hashicorp",
+        "source": "hashicorp/aws",
+        "version": ">= 5.0.0"
+      }
+    ],
+    "resources": [
+      {
+        "name": "this",
+        "type": "aws_vpc"
+      }
+    ]
+  },
+  "submodules": [
+    {
+      "path": "modules/flow-logs",
+      "name": "flow-logs",
+      "readme": "# Flow logs submodule",
+      "empty": false,
+      "inputs": [],
+      "outputs": [],
+      "dependencies": [],
+      "provider_dependencies": [],
+      "resources": []
+    }
+  ]
 }

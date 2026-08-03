@@ -23,19 +23,12 @@ export interface ServerOptions {
     logger?: Logger;
 }
 
-/**
- * Maven xRegistry Server
- */
 export class MavenXRegistryServer {
     private readonly app: Express;
     private readonly options: Required<ServerOptions>;
     private readonly logger: Logger;
     private server: any = null;
-
-    // Entity state management
     private readonly entityState: EntityStateManager;
-
-    // Services
     private readonly mavenService: MavenService;
     private readonly registryService: RegistryService;
     private readonly packageService: PackageService;
@@ -48,14 +41,9 @@ export class MavenXRegistryServer {
             logger: options.logger || createSimpleLogger()
         };
         this.logger = this.options.logger;
-
-        // Initialize Express app
         this.app = express();
-
-        // Initialize entity state manager
         this.entityState = new EntityStateManager();
 
-        // Initialize services
         this.mavenService = new MavenService({
             apiBaseUrl: MAVEN_REGISTRY.API_BASE_URL,
             repoUrl: MAVEN_REGISTRY.REPO_URL,
@@ -64,68 +52,35 @@ export class MavenXRegistryServer {
             cacheDir: CACHE_CONFIG.CACHE_DIR
         });
 
-        // SearchService is a thin Solr-Search client. The optional offline
-        // stub catalog is selected via the MAVEN_USE_TEST_INDEX env var.
         this.searchService = new SearchService({ mavenService: this.mavenService });
-
-        this.registryService = new RegistryService({
-            entityState: this.entityState,
-            searchService: this.searchService
-        });
-
+        this.registryService = new RegistryService({ entityState: this.entityState, searchService: this.searchService });
         this.packageService = new PackageService({
             mavenService: this.mavenService,
+            searchService: this.searchService,
             entityState: this.entityState
         });
 
-        // Setup middleware and routes
         this.setupMiddleware();
         this.setupRoutes();
         this.setupErrorHandling();
     }
 
-    /**
-     * Setup middleware
-     */
     private setupMiddleware(): void {
-        // Body parsing
         this.app.use(express.json());
         this.app.use(express.urlencoded({ extended: true }));
-
-        // CORS
         this.app.use(corsMiddleware);
-
-        // Standard HTTP headers
         this.app.use((_req, res, next) => {
             res.setHeader('cache-control', 'public, max-age=300');
             next();
         });
-
-        // Logging
         this.app.use(createLoggingMiddleware(this.logger));
-
-        // xRegistry flags parsing
         this.app.use(parseXRegistryFlags);
     }
 
-    /**
-     * Setup routes
-     */
     private setupRoutes(): void {
-        // xRegistry root routes
-        const xregistryRoutes = createXRegistryRoutes({
-            registryService: this.registryService
-        });
-        this.app.use('/', xregistryRoutes);
+        this.app.use('/', createXRegistryRoutes({ registryService: this.registryService }));
+        this.app.use('/', createPackageRoutes({ packageService: this.packageService }));
 
-        // Package routes
-        const packageRoutes = createPackageRoutes({
-            packageService: this.packageService,
-            searchService: this.searchService
-        });
-        this.app.use('/', packageRoutes);
-
-        // Performance stats endpoint
         this.app.get('/performance/stats', (_req: Request, res: Response) => {
             res.json({
                 filterOptimizer: {
@@ -143,7 +98,6 @@ export class MavenXRegistryServer {
             });
         });
 
-        // Health check endpoint
         this.app.get('/health', (_req: Request, res: Response) => {
             res.json({
                 status: 'healthy',
@@ -153,11 +107,7 @@ export class MavenXRegistryServer {
         });
     }
 
-    /**
-     * Setup error handling
-     */
     private setupErrorHandling(): void {
-        // 405 Method Not Allowed - catch unsupported methods before 404
         this.app.all('*', (req: Request, res: Response, next: NextFunction) => {
             if (['PUT', 'PATCH', 'POST', 'DELETE'].includes(req.method)) {
                 res.status(405).json({
@@ -172,10 +122,7 @@ export class MavenXRegistryServer {
             }
         });
 
-        // xRegistry error handler
         this.app.use(xregistryErrorHandler);
-
-        // Generic error handler (fallback)
         this.app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
             this.logger.error('Unhandled error', {
                 error: err.message,
@@ -194,16 +141,11 @@ export class MavenXRegistryServer {
         });
     }
 
-    /**
-     * Start the server
-     */
     async start(): Promise<void> {
         try {
-            // Start HTTP server. SearchService is now Solr-direct, no DB
-            // initialization needed before accepting requests.
             return new Promise((resolve, reject) => {
                 this.server = this.app.listen(this.options.port, this.options.host, () => {
-                    this.logger.info(`Maven xRegistry server started`, {
+                    this.logger.info('Maven xRegistry server started', {
                         host: this.options.host,
                         port: this.options.port,
                         url: `http://${this.options.host}:${this.options.port}`,
@@ -218,16 +160,11 @@ export class MavenXRegistryServer {
                 });
             });
         } catch (error) {
-            this.logger.error('Failed to initialize server', {
-                error: (error as Error).message
-            });
+            this.logger.error('Failed to initialize server', { error: (error as Error).message });
             throw error;
         }
     }
 
-    /**
-     * Stop the server
-     */
     async stop(): Promise<void> {
         if (!this.server) {
             return;
@@ -246,19 +183,12 @@ export class MavenXRegistryServer {
         });
     }
 
-    /**
-     * Get Express app (for testing)
-     */
     getApp(): Express {
         return this.app;
     }
 }
 
-/**
- * Main entry point
- */
 if (require.main === module) {
-    // Parse command line arguments
     const args = process.argv.slice(2);
     let port = process.env['PORT'] ? parseInt(process.env['PORT'], 10) : SERVER_CONFIG.PORT;
     let host = process.env['HOST'] || SERVER_CONFIG.HOST;
@@ -279,7 +209,6 @@ if (require.main === module) {
 
     const server = new MavenXRegistryServer({ port, host });
 
-    // Graceful shutdown
     const shutdown = async (signal: string) => {
         console.log(`\nReceived ${signal}, shutting down gracefully...`);
         try {
@@ -294,7 +223,6 @@ if (require.main === module) {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
 
-    // Start server
     server.start().catch((error) => {
         console.error('Failed to start server:', error);
         process.exit(1);

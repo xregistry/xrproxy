@@ -1,15 +1,12 @@
 /**
- * Unit tests for Registry Service
- * Tests xRegistry compliance and all registry operations
+ * Unit tests for Registry Service.
  */
 
 import { Request, Response } from 'express';
 import { CacheService } from '../../../src/cache/cache-service';
-import { GROUP_CONFIG } from '../../../src/config/constants';
 import { NpmService } from '../../../src/services/npm-service';
 import { RegistryService, RegistryServiceOptions } from '../../../src/services/registry-service';
 
-// Mock dependencies
 jest.mock('../../../src/services/npm-service');
 jest.mock('../../../src/cache/cache-service');
 
@@ -17,263 +14,115 @@ describe('RegistryService', () => {
     let registryService: RegistryService;
     let mockNpmService: jest.Mocked<NpmService>;
     let mockCacheService: jest.Mocked<CacheService>;
-    let mockLogger: any;
     let mockRequest: Partial<Request>;
     let mockResponse: Partial<Response>;
 
     beforeEach(() => {
-        // Setup mocks
         mockNpmService = {
-            getPackageMetadata: jest.fn(),
-            getVersionMetadata: jest.fn(),
-            packageExists: jest.fn(),
-            versionExists: jest.fn(),
-            getPackageTarball: jest.fn(),
-            searchPackages: jest.fn(),
-            getDownloadStats: jest.fn(),
-            getRegistryStats: jest.fn()
+            getKnownPackageNames: jest.fn().mockResolvedValue(['express', '@babel/core']),
+            resolveCanonicalPackageName: jest.fn().mockImplementation(async (nodescopeId: string, packageId: string) => {
+                if (nodescopeId === '_' && packageId === 'express') return 'express';
+                if (nodescopeId === 'babel' && packageId === 'core') return '@babel/core';
+                return null;
+            }),
+            getPackageMetadata: jest.fn().mockResolvedValue({
+                name: '@babel/core',
+                packageid: 'core',
+                xid: '/nodescopes/babel/packages/core',
+                self: 'https://registry.example.com/nodescopes/babel/packages/core',
+                epoch: 1,
+                createdat: '2024-01-01T00:00:00.000Z',
+                modifiedat: '2024-01-02T00:00:00.000Z',
+                versions: { '7.0.0': {} },
+                time: {},
+            } as any),
         } as any;
 
-        mockCacheService = {
-            get: jest.fn(),
-            set: jest.fn(),
-            delete: jest.fn(),
-            clear: jest.fn(),
-            getStats: jest.fn()
-        } as any;
-
-        mockLogger = {
-            info: jest.fn(),
-            warn: jest.fn(),
-            error: jest.fn(),
-            debug: jest.fn()
-        };
+        mockCacheService = { get: jest.fn(), set: jest.fn(), delete: jest.fn(), clear: jest.fn(), getStats: jest.fn() } as any;
 
         const options: RegistryServiceOptions = {
             npmService: mockNpmService,
             cacheService: mockCacheService,
-            logger: mockLogger
+            logger: console,
         };
-
         registryService = new RegistryService(options);
 
-        // Setup request mock
         mockRequest = {
             protocol: 'https',
             get: jest.fn().mockReturnValue('registry.example.com'),
             originalUrl: '/',
             path: '/',
             query: {},
-            params: {}
+            params: {},
         };
 
-        // Setup response mock
         mockResponse = {
             set: jest.fn(),
             json: jest.fn(),
-            status: jest.fn().mockReturnThis()
+            status: jest.fn().mockReturnThis(),
         };
     });
 
-    afterEach(() => {
-        jest.clearAllMocks();
+    test('returns a registry root with nodescopes metadata', async () => {
+        await registryService.getRegistry(mockRequest as Request, mockResponse as Response);
+
+        expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+            xid: '/',
+            self: 'https://registry.example.com',
+            nodescopesurl: 'https://registry.example.com/nodescopes',
+            nodescopescount: 2,
+        }));
     });
 
-    describe('Constructor', () => {
-        test('should create registry service instance', () => {
-            expect(registryService).toBeInstanceOf(RegistryService);
-        });
+    test('returns inline nodescope groups', async () => {
+        mockRequest.query = { inline: 'true' };
 
-        test('should use provided dependencies', () => {
-            expect(registryService['npmService']).toBe(mockNpmService);
-            expect(registryService['cacheService']).toBe(mockCacheService);
-            expect(registryService['logger']).toBe(mockLogger);
-        });
+        await registryService.getRegistry(mockRequest as Request, mockResponse as Response);
 
-        test('should use console as default logger', () => {
-            const serviceWithoutLogger = new RegistryService({
-                npmService: mockNpmService,
-                cacheService: mockCacheService
-            });
-            expect(serviceWithoutLogger['logger']).toBe(console);
-        });
+        expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+            nodescopes: expect.objectContaining({
+                _: expect.objectContaining({ nodescopeid: '_' }),
+                babel: expect.objectContaining({ nodescopeid: 'babel', scope: 'babel' }),
+            }),
+        }));
     });
 
-    describe('getRegistry', () => {
-        test('should return registry root with required xRegistry fields', async () => {
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
+    test('returns a concrete group entity', async () => {
+        mockRequest.params = { nodescopeId: 'babel' };
+        mockRequest.originalUrl = '/nodescopes/babel';
 
-            await registryService.getRegistry(req, res);
+        await registryService.getGroup(mockRequest as Request, mockResponse as Response);
 
-            expect(res.set).toHaveBeenCalledWith('ETag', expect.any(String));
-            expect(res.set).toHaveBeenCalledWith('Content-Type', 'application/json');
-            expect(res.json).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    xid: '/',
-                    self: 'https://registry.example.com',
-                    name: 'NPM Registry Service',
-                    description: 'xRegistry-compliant NPM package registry',
-                    documentation: 'https://docs.npmjs.com/',
-                    epoch: expect.any(Number),
-                    createdat: expect.any(String),
-                    modifiedat: expect.any(String)
-                })
-            );
+        expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+            nodescopeid: 'babel',
+            scope: 'babel',
+            packagesurl: 'https://registry.example.com/nodescopes/babel/packages',
+        }));
+    });
 
-            expect(mockLogger.info).toHaveBeenCalledWith(
-                'Registry root served',
-                expect.objectContaining({
-                    path: req.path
-                })
-            );
-        });
+    test('returns resources scoped by nodescope', async () => {
+        mockRequest.params = { nodescopeId: '_' };
+        mockRequest.originalUrl = '/nodescopes/_/packages';
 
-        test('should handle inline parameter', async () => {
-            mockRequest.query = { inline: 'true' };
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
+        await registryService.getResources(mockRequest as Request, mockResponse as Response);
 
-            await registryService.getRegistry(req, res);
-
-            expect(res.json).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    [GROUP_CONFIG.TYPE]: expect.any(Array)
-                })
-            );
-        });
-
-        test('should handle noreadonly parameter', async () => {
-            mockRequest.query = { noreadonly: 'true' };
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            await registryService.getRegistry(req, res);
-
-            const callArgs = (res.json as jest.Mock).mock.calls[0][0];
-            expect(callArgs).not.toHaveProperty('createdat');
-            expect(callArgs).not.toHaveProperty('modifiedat');
-            // epoch should still be present - noreadonly only removes createdat, modifiedat, readonly
-            expect(callArgs).toHaveProperty('epoch');
-        });
-
-        test('should handle noepoch parameter', async () => {
-            mockRequest.query = { noepoch: 'true' };
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            await registryService.getRegistry(req, res);
-
-            const callArgs = (res.json as jest.Mock).mock.calls[0][0];
-            expect(callArgs).not.toHaveProperty('epoch');
-        });
-
-        test('should handle schema parameter', async () => {
-            mockRequest.query = { schema: 'true' };
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            await registryService.getRegistry(req, res);
-
-            expect(res.json).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    $schema: 'xRegistry-json/1.0-rc1/registry'
-                })
-            );
-        });
-
-        test('should handle errors gracefully', async () => {
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            // Force an error
-            (mockRequest.get as jest.Mock).mockImplementation(() => {
-                throw new Error('Test error');
-            });
-
-            // Service should throw RFC 9457 error
-            await expect(registryService.getRegistry(req, res)).rejects.toMatchObject({
-                type: expect.stringContaining('internal_error'),
-                status: 500,
-                instance: '/',
-                title: expect.any(String),
-                detail: 'Failed to retrieve registry information'
-            });
-
-            expect(mockLogger.error).toHaveBeenCalledWith(
-                'Failed to serve registry root',
-                expect.objectContaining({
-                    error: 'Test error'
-                })
-            );
+        expect(mockResponse.json).toHaveBeenCalledWith({
+            packages: {
+                express: expect.objectContaining({ packageid: 'express', name: 'express' }),
+            },
         });
     });
 
-    describe('xRegistry Compliance', () => {
-        test('should generate valid xRegistry entity structure', async () => {
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
+    test('returns a concrete package resource', async () => {
+        mockRequest.params = { nodescopeId: 'babel', packageId: 'core' };
+        mockRequest.originalUrl = '/nodescopes/babel/packages/core';
 
-            await registryService.getRegistry(req, res);
+        await registryService.getResource(mockRequest as Request, mockResponse as Response);
 
-            const responseData = (res.json as jest.Mock).mock.calls[0][0];
-
-            // Validate required xRegistry fields
-            expect(responseData.xid).toMatch(/^\//); // Must start with /
-            expect(responseData.self).toMatch(/^https?:\/\//); // Must be absolute URL
-            expect(typeof responseData.epoch).toBe('number');
-            expect(responseData.epoch).toBeGreaterThan(0);
-            expect(responseData.createdat).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/); // ISO timestamp
-            expect(responseData.modifiedat).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/); // ISO timestamp
-        });
-
-        test('should generate ETag based on content', async () => {
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            await registryService.getRegistry(req, res);
-
-            expect(res.set).toHaveBeenCalledWith('ETag', expect.stringMatching(/^"[^"]+"/));
-        });
-
-        test('should set proper content type', async () => {
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            await registryService.getRegistry(req, res);
-
-            expect(res.set).toHaveBeenCalledWith('Content-Type', 'application/json');
-        });
+        expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+            packageid: 'core',
+            versionsurl: 'https://registry.example.com/nodescopes/babel/packages/core/versions',
+            metaurl: 'https://registry.example.com/nodescopes/babel/packages/core/meta',
+        }));
     });
-
-    describe('Error Handling', () => {
-        test('should handle npm service errors', async () => {
-            mockNpmService.getPackageMetadata.mockRejectedValue(new Error('NPM API error'));
-
-            mockRequest.params = { groupId: GROUP_CONFIG.ID };
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            // Service should throw RFC 9457 error
-            await expect(registryService.getGroup(req, res)).rejects.toMatchObject({
-                type: expect.stringContaining('internal_error'),
-                status: 500,
-                instance: '/',
-                detail: 'Failed to retrieve group'
-            });
-            expect(mockLogger.error).toHaveBeenCalled();
-        });
-
-        test('should handle cache service errors gracefully', async () => {
-            mockCacheService.get.mockImplementation(() => {
-                throw new Error('Cache error');
-            });
-
-            const req = mockRequest as Request;
-            const res = mockResponse as Response;
-
-            // Should not throw error even if cache fails
-            await expect(registryService.getRegistry(req, res)).resolves.not.toThrow();
-        });
-    });
-}); 
+});

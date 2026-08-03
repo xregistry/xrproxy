@@ -3,6 +3,15 @@
  */
 
 // ---------------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------------
+
+export interface TFTerraformDiscovery {
+    'providers.v1'?: string;
+    'modules.v1'?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Provider types
 // ---------------------------------------------------------------------------
 
@@ -49,21 +58,23 @@ export interface TFSigningKeys {
 
 export interface TFGPGKey {
     key_id: string;
-    ascii_armor: string;
-    trust_signature: string;
-    source: string;
-    source_url: string;
+    ascii_armor?: string;
+    trust_signature?: string;
+    source?: string;
+    source_url?: string;
 }
 
 /** Enriched per-platform distribution info (stored in version resource attributes) */
 export interface ProviderPlatformDistribution {
     os: string;
     arch: string;
-    filename: string;
-    download_url: string;
-    shasums_url: string;
-    shasums_signature_url: string;
-    shasum: string;
+    protocols?: string[];
+    filename?: string;
+    download_url?: string;
+    shasums_url?: string;
+    shasums_signature_url?: string;
+    shasum?: string;
+    signing_keys?: TFSigningKeys;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +86,7 @@ export interface ModuleEntry {
     namespace: string;
     name: string;
     provider: string;
-    id: string; // encoded as name~provider within the namespace group
+    id: string; // encoded as name~provider or xh~hash within the namespace group
 }
 
 /** Raw response from GET /v1/modules/{ns}/{name}/{provider}/versions */
@@ -92,20 +103,68 @@ export interface TFModuleVersionSummary {
     version: string;
 }
 
+export interface TFModuleInput {
+    name: string;
+    type?: string;
+    description?: string;
+    default?: string;
+    required?: boolean;
+}
+
+export interface TFModuleOutput {
+    name: string;
+    description?: string;
+}
+
+export interface TFModuleDependency {
+    name: string;
+    source?: string;
+    version?: string;
+}
+
+export interface TFModuleProviderDependency {
+    name: string;
+    namespace?: string;
+    source?: string;
+    version?: string;
+}
+
+export interface TFModuleDeclaredResource {
+    name: string;
+    type?: string;
+}
+
+export interface TFModuleInterface {
+    path?: string;
+    name?: string;
+    readme?: string;
+    empty?: boolean;
+    inputs?: TFModuleInput[];
+    outputs?: TFModuleOutput[];
+    dependencies?: TFModuleDependency[];
+    provider_dependencies?: TFModuleProviderDependency[];
+    resources?: TFModuleDeclaredResource[];
+}
+
 /** Raw response from GET /v1/modules/{ns}/{name}/{provider}/{version} */
 export interface TFModuleVersionDetail {
     id: string;
-    owner: string;
+    owner?: string;
     namespace: string;
     name: string;
+    version?: string;
     provider: string;
     provider_logo_url?: string;
-    description: string;
-    source: string;
-    published_at: string;
-    downloads: number;
-    verified: boolean;
+    description?: string;
+    source?: string;
+    published_at?: string;
+    downloads?: number;
+    verified?: boolean;
+    trusted?: boolean;
+    providers?: string[];
     versions?: string[];
+    root?: TFModuleInterface;
+    submodules?: TFModuleInterface[];
 }
 
 // ---------------------------------------------------------------------------
@@ -138,8 +197,8 @@ export interface TFV2ProviderData {
 
 export interface TFV2ProviderAttributes {
     namespace: string;
-    name: string;          // provider type identifier
-    'full-name': string;   // namespace/name
+    name: string;
+    'full-name': string;
     description: string;
     downloads: number;
     tier: string;

@@ -1,6 +1,6 @@
 /**
  * xRegistry Routes
- * @fileoverview Express routes implementing xRegistry 1.0-rc1 specification
+ * @fileoverview Express routes implementing the xRegistry endpoints.
  */
 
 import { NextFunction, Request, Response, Router } from 'express';
@@ -14,23 +14,15 @@ export interface XRegistryRouterOptions {
     logger?: any;
 }
 
-/**
- * Create xRegistry-compliant routes
- */
 export function createXRegistryRoutes(options: XRegistryRouterOptions): Router {
     const { registryService, logger } = options;
     const router = Router();
 
-    // Apply middleware
     router.use(corsMiddleware);
     if (logger) {
         router.use(createLoggingMiddleware({ logger }));
     }
 
-    /**
-     * GET /
-     * Registry root endpoint
-     */
     router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         try {
             await registryService.getRegistry(req, res);
@@ -39,11 +31,7 @@ export function createXRegistryRoutes(options: XRegistryRouterOptions): Router {
         }
     });
 
-    /**
-     * GET /groups
-     * Groups collection endpoint
-     */
-    router.get('/groups', async (req: Request, res: Response, next: NextFunction) => {
+    router.get('/nodescopes', async (req: Request, res: Response, next: NextFunction) => {
         try {
             await registryService.getGroups(req, res);
         } catch (error) {
@@ -51,11 +39,7 @@ export function createXRegistryRoutes(options: XRegistryRouterOptions): Router {
         }
     });
 
-    /**
-     * GET /groups/:groupId
-     * Specific group endpoint
-     */
-    router.get('/groups/:groupId', async (req: Request, res: Response, next: NextFunction) => {
+    router.get('/nodescopes/:nodescopeId', async (req: Request, res: Response, next: NextFunction) => {
         try {
             await registryService.getGroup(req, res);
         } catch (error) {
@@ -63,11 +47,7 @@ export function createXRegistryRoutes(options: XRegistryRouterOptions): Router {
         }
     });
 
-    /**
-     * GET /groups/:groupId/packages
-     * Resources (packages) collection endpoint
-     */
-    router.get('/groups/:groupId/packages', async (req: Request, res: Response, next: NextFunction) => {
+    router.get('/nodescopes/:nodescopeId/packages', async (req: Request, res: Response, next: NextFunction) => {
         try {
             await registryService.getResources(req, res);
         } catch (error) {
@@ -75,11 +55,7 @@ export function createXRegistryRoutes(options: XRegistryRouterOptions): Router {
         }
     });
 
-    /**
-     * GET /groups/:groupId/packages/:resourceId
-     * Specific resource (package) endpoint
-     */
-    router.get('/groups/:groupId/packages/:resourceId', async (req: Request, res: Response, next: NextFunction) => {
+    router.get('/nodescopes/:nodescopeId/packages/:packageId', async (req: Request, res: Response, next: NextFunction) => {
         try {
             await registryService.getResource(req, res);
         } catch (error) {
@@ -87,15 +63,10 @@ export function createXRegistryRoutes(options: XRegistryRouterOptions): Router {
         }
     });
 
-    // Error handling middleware
     router.use(errorHandler);
-
     return router;
 }
 
-/**
- * Default router factory
- */
 export function createDefaultXRegistryRoutes(registryService: RegistryService, logger?: any): Router {
     return createXRegistryRoutes({ registryService, logger });
-} 
+}

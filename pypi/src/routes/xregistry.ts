@@ -1,6 +1,5 @@
 /**
- * xRegistry root and group routes
- * Implements /,  /model, /pythonregistries endpoints
+ * xRegistry root and group routes.
  */
 
 import { Request, Response, Router } from 'express';
@@ -11,43 +10,32 @@ export function createXRegistryRoutes(registryService: RegistryService): Router 
     const router = Router();
     const { GROUP_TYPE, GROUP_ID } = REGISTRY_METADATA;
 
-    // Root endpoint
     router.get('/', (req: Request, res: Response) => {
         const baseUrl = getBaseUrl(req);
-        const rootResponse = registryService.getRoot(baseUrl);
-        res.json(rootResponse);
+        res.json(registryService.getRoot(baseUrl));
     });
 
-    // Model endpoint
     router.get('/model', (req: Request, res: Response) => {
         const baseUrl = getBaseUrl(req);
-        const modelResponse = registryService.getModel(baseUrl);
-        res.json(modelResponse);
+        res.json(registryService.getModel(baseUrl));
     });
 
-    // Capabilities endpoint
     router.get('/capabilities', (_req: Request, res: Response) => {
-        const capabilitiesResponse = registryService.getCapabilities();
-        res.json(capabilitiesResponse);
+        res.json(registryService.getCapabilities());
     });
 
-    // Export endpoint
     router.get('/export', (_req: Request, res: Response) => {
         res.redirect(302, '/?doc&inline=*,capabilities,modelsource');
     });
 
-    // Group collection
     router.get(`/${GROUP_TYPE}`, (req: Request, res: Response) => {
         const baseUrl = getBaseUrl(req);
-        const groupsResponse = registryService.getGroups(baseUrl);
-        res.json(groupsResponse);
+        res.json(registryService.getGroups(baseUrl));
     });
 
-    // Single group
     router.get(`/${GROUP_TYPE}/${GROUP_ID}`, (req: Request, res: Response) => {
         const baseUrl = getBaseUrl(req);
-        const groupResponse = registryService.getGroupDetails(baseUrl);
-        res.json(groupResponse);
+        res.json(registryService.getGroupDetails(baseUrl));
     });
 
     return router;

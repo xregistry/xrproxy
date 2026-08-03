@@ -1,10 +1,9 @@
 /**
- * xRegistry utility functions for generating compliant entities and handling xRegistry operations
- * Ensures compliance with xRegistry specification
+ * xRegistry utility functions for generating compliant entities and handling xRegistry operations.
  */
 
 import { Request } from 'express';
-import { getBaseUrl as getBaseUrlFromRequest } from '../config/constants';
+import { getBaseUrl as getBaseUrlFromRequest, REGISTRY_CONFIG } from '../config/constants';
 import { XRegistryEntity } from '../types/xregistry';
 
 export interface EntityGenerationOptions {
@@ -15,7 +14,7 @@ export interface EntityGenerationOptions {
     type: string;
     labels?: Record<string, string>;
     documentation?: string;
-    req?: Request; // Optional request to extract baseUrl from headers
+    req?: Request;
 }
 
 export interface SimpleEntityOptions {
@@ -27,17 +26,12 @@ export interface SimpleEntityOptions {
     docs?: string;
     tags?: Record<string, string>;
     xRegistry?: any;
-    req?: Request; // Optional request to extract baseUrl from headers
+    req?: Request;
 }
 
-/**
- * Generate a compliant xRegistry entity with all required fields
- * Ensures proper xid format and timestamps
- */
 export function generateXRegistryEntity(options: EntityGenerationOptions): XRegistryEntity;
 export function generateXRegistryEntity(options: SimpleEntityOptions): XRegistryEntity;
 export function generateXRegistryEntity(options: EntityGenerationOptions | SimpleEntityOptions): XRegistryEntity {
-    // Handle SimpleEntityOptions (direct xid/self provided)
     if ('xid' in options && 'self' in options) {
         const simpleOptions = options as SimpleEntityOptions;
         const now = new Date().toISOString();
@@ -70,24 +64,17 @@ export function generateXRegistryEntity(options: EntityGenerationOptions | Simpl
         return entity;
     }
 
-    // Handle EntityGenerationOptions (original behavior)
     const { id, name, description, parentUrl, labels, documentation, req } = options as EntityGenerationOptions;
-
-    // Generate xid (path identifier starting with /)
-    const xid = `${parentUrl}/${encodeURIComponent(id)}`;
-
-    // Generate self URL (absolute URL)
+    const xid = `${parentUrl}/${id}`;
     const baseUrl = getBaseUrl(req);
     const self = `${baseUrl}${xid}`;
-
-    // Generate RFC3339 timestamps
     const now = new Date().toISOString();
 
     const entity: XRegistryEntity = {
         xid,
         name: name || id,
         self,
-        epoch: 1, // Start with epoch 1 for new entities
+        epoch: 1,
         createdat: now,
         modifiedat: now,
     };
@@ -105,9 +92,6 @@ export function generateXRegistryEntity(options: EntityGenerationOptions | Simpl
     return entity;
 }
 
-/**
- * Generate a simple xRegistry entity with direct parameters
- */
 export function createXRegistryEntity(options: SimpleEntityOptions): XRegistryEntity & Record<string, any> {
     const now = new Date().toISOString();
 
@@ -139,10 +123,6 @@ export function createXRegistryEntity(options: SimpleEntityOptions): XRegistryEn
     return entity;
 }
 
-/**
- * Handle the inline query parameter for xRegistry responses
- * Controls whether nested resources are inlined or referenced
- */
 export function handleInlineFlag(req: any, entity: any): any {
     const inline = req.query?.inline;
     if (!inline) return entity;
@@ -161,10 +141,6 @@ export function handleInlineFlag(req: any, entity: any): any {
     return result;
 }
 
-/**
- * Handle the epoch query parameter for xRegistry responses
- * Returns the entity with epoch removed if noepoch=true
- */
 export function handleEpochFlag(req: any, entity: any): any {
     const noepoch = req.query?.noepoch;
     if (!noepoch || noepoch !== 'true') return entity;
@@ -174,10 +150,6 @@ export function handleEpochFlag(req: any, entity: any): any {
     return result;
 }
 
-/**
- * Handle the noreadonly query parameter for xRegistry responses
- * Returns the entity with readonly fields removed if noreadonly=true
- */
 export function handleNoReadonlyFlag(req: any, entity: any): any {
     const noreadonly = req.query?.noreadonly;
     if (!noreadonly || noreadonly !== 'true') return entity;
@@ -189,54 +161,34 @@ export function handleNoReadonlyFlag(req: any, entity: any): any {
     return result;
 }
 
-/**
- * Handle the schema query parameter for xRegistry responses
- * Returns the entity with $schema field added if schema=true
- */
 export function handleSchemaFlag(req: any, entity: any, type: string): any {
     const schema = req.query?.schema;
     if (!schema || schema !== 'true') return entity;
 
     const result = { ...entity };
-    result.$schema = `xRegistry-json/1.0-rc1/${type}`;
+    result.$schema = `${REGISTRY_CONFIG.SCHEMA_VERSION}/${type}`;
     return result;
 }
 
-/**
- * Generate ETag for xRegistry resources based on content and modification time
- */
 export function generateETag(entity: any): string {
     const content = JSON.stringify(entity);
     const hash = simpleHash(content);
     const modifiedAt = entity.modifiedat || new Date().toISOString();
-
-    // Combine hash with modification time for unique ETag
     return `"${hash}-${new Date(modifiedAt).getTime()}"`;
 }
 
-/**
- * Validate xRegistry ID format
- * Must be a path starting with / and containing only valid characters
- */
 export function isValidXRegistryId(xid: string): boolean {
     if (!xid || typeof xid !== 'string') {
         return false;
     }
 
-    // Must start with /
     if (!xid.startsWith('/')) {
         return false;
     }
 
-    // Must only contain valid path characters
-    // Allow alphanumeric, hyphen, dot, underscore, tilde, @, valid percent-encoding, and /
-    return /^\/([a-zA-Z0-9\-\._~@\/]|%[0-9A-Fa-f]{2})*$/.test(xid);
+    return /^\/[-a-zA-Z0-9._~@/]*$/.test(xid);
 }
 
-/**
- * Validate xRegistry self URL format
- * Must be an absolute URL
- */
 export function isValidSelfUrl(self: string): boolean {
     if (!self || typeof self !== 'string') {
         return false;
@@ -250,9 +202,6 @@ export function isValidSelfUrl(self: string): boolean {
     }
 }
 
-/**
- * Generate pagination links for xRegistry collections
- */
 export function generatePaginationLinks(
     req: Request,
     totalCount: number,
@@ -267,14 +216,12 @@ export function generatePaginationLinks(
 
     const links: string[] = [];
 
-    // First link
     if (offset > 0) {
         query.set('offset', '0');
         query.set('limit', limit.toString());
         links.push(`<${baseUrl}?${query.toString()}>; rel="first"`);
     }
 
-    // Previous link
     if (offset > 0) {
         const prevOffset = Math.max(0, offset - limit);
         query.set('offset', prevOffset.toString());
@@ -282,7 +229,6 @@ export function generatePaginationLinks(
         links.push(`<${baseUrl}?${query.toString()}>; rel="prev"`);
     }
 
-    // Next link
     if (offset + limit < totalCount) {
         const nextOffset = offset + limit;
         query.set('offset', nextOffset.toString());
@@ -290,7 +236,6 @@ export function generatePaginationLinks(
         links.push(`<${baseUrl}?${query.toString()}>; rel="next"`);
     }
 
-    // Last link
     if (offset + limit < totalCount) {
         const lastOffset = Math.floor((totalCount - 1) / limit) * limit;
         query.set('offset', lastOffset.toString());
@@ -298,37 +243,23 @@ export function generatePaginationLinks(
         links.push(`<${baseUrl}?${query.toString()}>; rel="last"`);
     }
 
-    // Add count and per-page metadata
     links.push(`count="${totalCount}"`);
     links.push(`per-page="${limit}"`);
 
     return links.join(', ');
 }
 
-/**
- * Set standard xRegistry headers on response
- */
 export function setXRegistryHeaders(res: any, entity: any): void {
-    // Set content type
     res.set('Content-Type', 'application/json');
+    res.set('xRegistry-Version', REGISTRY_CONFIG.SPEC_VERSION);
 
-    // Set xRegistry version header
-    res.set('xRegistry-Version', '1.0-rc1');
-
-    // Set ETag if entity has modification time
     if (entity && entity.modifiedat) {
-        const etag = generateETag(entity);
-        res.set('ETag', etag);
+        res.set('ETag', generateETag(entity));
     }
 
-    // Set cache control
-    res.set('Cache-Control', 'public, max-age=300'); // 5 minutes
+    res.set('Cache-Control', 'public, max-age=300');
 }
 
-/**
- * Parse filter expressions from query parameters
- * Supports xRegistry filter syntax
- */
 export function parseFilterExpressions(filterParam: string | string[]): Array<{
     attribute: string;
     operator: string;
@@ -338,8 +269,7 @@ export function parseFilterExpressions(filterParam: string | string[]): Array<{
     const filterStrings = Array.isArray(filterParam) ? filterParam : [filterParam];
 
     for (const filterStr of filterStrings) {
-        // Parse filter format: attribute=value, attribute!=value, etc.
-        const match = filterStr.match(/^([a-zA-Z0-9_]+)(=|!=|~|!~)(.*)$/);
+        const match = filterStr.match(/^([a-zA-Z0-9_\-]+)(=|!=|~|!~)(.*)$/);
         if (match && match[1] && match[2] && match[3] !== undefined) {
             filters.push({
                 attribute: match[1],
@@ -352,13 +282,6 @@ export function parseFilterExpressions(filterParam: string | string[]): Array<{
     return filters;
 }
 
-/**
- * Get base URL for generating absolute URLs
- * Priority:
- * 1. From request headers (via getBaseUrlFromRequest)
- * 2. From BASE_URL environment variable
- * 3. Fallback to localhost
- */
 function getBaseUrl(req?: Request): string {
     if (req) {
         return getBaseUrlFromRequest(req);
@@ -366,15 +289,12 @@ function getBaseUrl(req?: Request): string {
     return process.env['BASE_URL'] || 'http://localhost:3100';
 }
 
-/**
- * Simple hash function for generating ETags
- */
 function simpleHash(str: string): string {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
         const char = str.charCodeAt(i);
         hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32-bit integer
+        hash = hash & hash;
     }
     return Math.abs(hash).toString(36);
-} 
+}

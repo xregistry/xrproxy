@@ -21,29 +21,26 @@ const {
   assertVersionConforms,
 } = require(path.join(repositoryRoot, 'test/helpers/xregistry-model-conformance.cjs'));
 
-test('pub.dev + versions use reversible xRegistry-safe IDs', () => {
+test('pub.dev build metadata transliterates from + to ~', () => {
   const raw = '1.2.3+build.7';
-  const id = encodePubDevVersionId(raw);
-  assert.match(id, /^[A-Za-z0-9_][A-Za-z0-9._~:@-]*$/);
-  assert.ok(!id.includes('+'));
-  assert.equal(decodePubDevVersionId(id), raw);
+  assert.equal(encodePubDevVersionId(raw), '1.2.3~build.7');
+  assert.equal(decodePubDevVersionId('1.2.3~build.7'), raw);
 });
 
-test('safe versions stay stable and encoded-prefix versions cannot collide', () => {
+test('safe version ids stay stable and invalid IDs are rejected', () => {
   assert.equal(encodePubDevVersionId('1.2.3-beta.1'), '1.2.3-beta.1');
-  const encoded = encodePubDevVersionId('xv~collision');
-  assert.notEqual(encoded, 'xv~collision');
-  assert.equal(decodePubDevVersionId(encoded), 'xv~collision');
-  assert.equal(decodePubDevVersionId('xv~%%%'), null);
+  assert.equal(decodePubDevVersionId('1.2.3-beta.1'), '1.2.3-beta.1');
+  assert.equal(decodePubDevVersionId('1.2.3+build.7'), null);
+  assert.equal(decodePubDevVersionId('1.2.3%2Bbuild.7'), null);
 });
 
-test('PackageService retains raw + version while using encoded lineage IDs', async () => {
+test('PackageService retains raw + versions while using transliterated lineage IDs', async () => {
   const pkg = {
     name: 'example',
     latest: {
-      version: '1.0.0+1',
-      pubspec: { name: 'example', version: '1.0.0+1' },
-      published: '2024-01-01T00:00:00.000Z',
+      version: '1.0.0+2',
+      pubspec: { name: 'example', version: '1.0.0+2' },
+      published: '2024-02-01T00:00:00.000Z',
     },
     versions: [
       { version: '1.0.0+1', pubspec: { name: 'example', version: '1.0.0+1' }, published: '2024-01-01T00:00:00.000Z' },
@@ -52,8 +49,9 @@ test('PackageService retains raw + version while using encoded lineage IDs', asy
   };
   const upstream = {
     fetchPackage: async () => pkg,
-    fetchScore: async () => ({ likeCount: 7, grantedPoints: 140, popularityScore: 0.8 }),
+    fetchScore: async () => ({ likeCount: 7, grantedPoints: 140, maxPoints: 160, tags: ['license:MIT'] }),
     fetchPublisher: async () => ({ publisherId: 'example.dev' }),
+    getUpstreamBase: () => 'https://pub.dev',
   } as unknown as PubDevService;
   const service = new PackageService(upstream, new EntityStateManager());
   const base = 'https://registry.example.test';
@@ -88,11 +86,13 @@ test('PackageService retains raw + version while using encoded lineage IDs', asy
   assert.equal(Object.hasOwn(meta, 'ancestor'), false);
   assert.equal(meta['publisher'], 'example.dev');
   assert.equal(meta['likes'], 7);
+  assert.equal(meta['pub_points'], 140);
+  assert.equal(meta['max_points'], 160);
+  assert.deepEqual(meta['license'], ['mit']);
   assertMetaConforms(modelData, 'dartregistries', 'packages', meta, 'pubdev.meta');
 });
 
-
-test('package collection entries are complete and exactly match Resource reads', async () => {
+test('package collection entries are complete and served under the pub route shape', async () => {
   const pkg = {
     name: 'example',
     latest: { version: '1.0.0', pubspec: { name: 'example', version: '1.0.0' }, published: '2024-01-01T00:00:00.000Z' },
@@ -104,6 +104,7 @@ test('package collection entries are complete and exactly match Resource reads',
     fetchPackage: async () => pkg,
     fetchScore: async () => null,
     fetchPublisher: async () => null,
+    getUpstreamBase: () => 'https://pub.dev',
   } as unknown as PubDevService;
   const state = new EntityStateManager();
   const packages = new PackageService(upstream, state);
@@ -114,14 +115,22 @@ test('package collection entries are complete and exactly match Resource reads',
   } as unknown as SearchService;
   const app = express();
   app.use(createPackageRoutes(packages, search, state));
+  app.use((_req, res) => res.status(404).end());
   const server = createServer(app);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
     const base = `http://127.0.0.1:${address.port}`;
-    const collection = await (await fetch(`${base}/dartregistries/pub.dev/packages?limit=1`)).json() as Record<string, unknown>;
-    const exact = await (await fetch(`${base}/dartregistries/pub.dev/packages/example`)).json() as Record<string, unknown>;
+    const collectionResponse = await fetch(`${base}/dartregistries/pub/packages?limit=1`);
+    const collection = await collectionResponse.json() as Record<string, unknown>;
+    const exactResponse = await fetch(`${base}/dartregistries/pub/packages/example`);
+    const exact = await exactResponse.json() as Record<string, unknown>;
+    const legacyResponse = await fetch(`${base}/dartregistries/pub.dev/packages/example`);
+
+    assert.equal(collectionResponse.status, 200);
+    assert.equal(exactResponse.status, 200);
+    assert.equal(legacyResponse.status, 404);
     assert.deepEqual(collection['example'], exact);
     for (const name of ['versionid', 'isdefault', 'ancestor', 'versionscount']) {
       assert.ok((collection['example'] as Record<string, unknown>)[name] !== undefined, name);
