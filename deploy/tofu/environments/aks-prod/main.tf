@@ -291,6 +291,22 @@ resource "azurerm_cdn_frontdoor_route" "default" {
   link_to_default_domain = true
   patterns_to_match      = ["/*"]
   supported_protocols    = ["Http", "Https"]
+
+  cache {
+    compression_enabled = true
+    content_types_to_compress = [
+      "application/javascript",
+      "application/json",
+      "application/xml",
+      "image/svg+xml",
+      "text/css",
+      "text/html",
+      "text/javascript",
+      "text/plain",
+      "text/xml",
+    ]
+    query_string_caching_behavior = "UseQueryString"
+  }
 }
 
 import {

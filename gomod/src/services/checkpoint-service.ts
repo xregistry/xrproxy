@@ -51,10 +51,29 @@ export class CheckpointService {
         this.groupModuleCounts.clear();
 
         const modulePaths = Object.keys(this.catalog.modules).sort();
+        const candidates = modulePaths.map((modulePath) => ({
+            modulePath,
+            identity: modulePathToIdentity(modulePath),
+        }));
+        const collisionGroups = new Map<string, string[]>();
+
+        for (const { modulePath, identity } of candidates) {
+            const collisionKey = `${identity.groupId}\u0000${identity.moduleId.toLowerCase()}`;
+            const paths = collisionGroups.get(collisionKey);
+            if (paths) {
+                paths.push(modulePath);
+            } else {
+                collisionGroups.set(collisionKey, [modulePath]);
+            }
+        }
+
         const groups = new Set<string>();
 
-        for (const modulePath of modulePaths) {
-            const identity = modulePathToIdentity(modulePath, { collidingModulePaths: modulePaths });
+        for (const { modulePath, identity: candidate } of candidates) {
+            const collisionKey = `${candidate.groupId}\u0000${candidate.moduleId.toLowerCase()}`;
+            const identity = modulePathToIdentity(modulePath, {
+                collidingModulePaths: collisionGroups.get(collisionKey),
+            });
             this.identityByPath.set(modulePath, identity);
             this.pathByIdentity.set(`${identity.groupId}\u0000${identity.moduleId}`, modulePath);
             groups.add(identity.groupId);

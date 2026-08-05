@@ -206,6 +206,7 @@ export class GoModuleService {
 
         this.checkpoint.mergeEntries(entries.map((entry) => ({ path: entry.Path, version: entry.Version, timestamp: entry.Timestamp })));
         totalFetched += entries.length;
+        await new Promise<void>((resolve) => setImmediate(resolve));
 
         if (entries.length < this.opts.indexPageLimit) {
           this.checkpoint.updateCheckpoint(nextSince);

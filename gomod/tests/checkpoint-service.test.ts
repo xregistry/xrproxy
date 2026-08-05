@@ -143,6 +143,24 @@ describe('CheckpointService', () => {
         expect(svc.resolveModulePath('github.com', hashedId)).toBe(laterPath);
     });
 
+    it('reassigns case-colliding identities deterministically across refresh pages', () => {
+        const firstPath = 'github.com/case/module';
+        svc.mergeEntries([
+            { path: firstPath, version: 'v1.0.0', timestamp: '2024-01-01T00:00:00Z' },
+        ]);
+        expect(svc.getModuleIdentity(firstPath).moduleId).toBe('case:module');
+
+        const lexicallyFirstPath = 'github.com/Case/Module';
+        svc.mergeEntries([
+            { path: lexicallyFirstPath, version: 'v1.0.0', timestamp: '2024-01-02T00:00:00Z' },
+        ]);
+
+        const hashedId = `xh~${createHash('sha256').update(firstPath, 'utf8').digest('hex')}`;
+        expect(svc.getModuleIdentity(lexicallyFirstPath).moduleId).toBe('Case:Module');
+        expect(svc.getModuleIdentity(firstPath).moduleId).toBe(hashedId);
+        expect(svc.resolveModulePath('github.com', hashedId)).toBe(firstPath);
+    });
+
     it('filters by substring', () => {
         svc.mergeEntries([
             { path: 'github.com/pkg/errors', version: 'v0.9.1', timestamp: '2020-01-01T00:00:00Z' },
