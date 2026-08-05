@@ -2,6 +2,32 @@ viewer:
   enabled: true
   apiPathPrefix: /registry
 
+probes:
+  startup:
+    timeoutSeconds: 15
+  readiness:
+    timeoutSeconds: 15
+  liveness:
+    timeoutSeconds: 15
+
+services:
+  bridge:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  gomod:
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
 gateway:
   enabled: true
   create: true
