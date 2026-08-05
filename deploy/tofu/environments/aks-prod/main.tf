@@ -273,7 +273,6 @@ resource "azurerm_cdn_frontdoor_rule" "registry_get_cache" {
       cache_behavior                = "OverrideAlways"
       cache_duration                = "00:01:00"
       compression_enabled           = true
-      forwarding_protocol           = "HttpOnly"
       query_string_caching_behavior = "UseQueryString"
     }
   }
