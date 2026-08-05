@@ -1,5 +1,32 @@
 import { MavenService } from '../src/services/maven-service';
 
+describe('MavenService namespace discovery', () => {
+    it('falls back to bounded artifact discovery when Maven Central omits facets', async () => {
+        const service = new MavenService({ cacheDir: 'cache' });
+        jest.spyOn(service, 'solrQuery')
+            .mockResolvedValueOnce({
+                response: { numFound: 0, start: 0, docs: [] }
+            } as any)
+            .mockResolvedValueOnce({
+                response: {
+                    numFound: 3,
+                    start: 0,
+                    docs: [
+                        { g: 'org.example', a: 'one' },
+                        { g: 'org.example', a: 'two' },
+                        { g: 'org.other', a: 'three' }
+                    ]
+                }
+            } as any);
+
+        const index = await service.fetchNamespaceIndex();
+
+        expect(index.ids).toEqual(['org.example', 'org.other']);
+        expect(index.counts.get('org.example')).toBe(2);
+        expect(index.counts.get('org.other')).toBe(1);
+    });
+});
+
 describe('MavenService version projection', () => {
     it('projects raw POM attributes, checksums, signatures, and dependency links', async () => {
         const service = new MavenService({ cacheDir: 'cache' });

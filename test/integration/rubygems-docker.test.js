@@ -122,21 +122,21 @@ describe("RubyGems Docker Integration Tests", function () {
   it("serves the group collection", async () => {
     const response = await loggedAxiosGet(`${baseUrl}/rubyregistries`);
     expect(response.status).to.equal(200);
-    expect(response.data).to.have.property("rubygems.org");
+    expect(response.data).to.have.property("rubygems");
   });
 
-  it("serves the rubygems.org group", async () => {
+  it("serves the RubyGems group", async () => {
     const response = await loggedAxiosGet(
-      `${baseUrl}/rubyregistries/rubygems.org`
+      `${baseUrl}/rubyregistries/rubygems`
     );
     expect(response.status).to.equal(200);
-    expect(response.data).to.have.property("name", "rubygems.org");
+    expect(response.data).to.have.property("name", "rubygems");
     expect(response.data).to.have.property("packagesurl");
   });
 
   it("serves a bounded package list", async () => {
     const response = await loggedAxiosGet(
-      `${baseUrl}/rubyregistries/rubygems.org/packages?limit=5`
+      `${baseUrl}/rubyregistries/rubygems/packages?limit=5`
     );
     expect(response.status).to.equal(200);
     expect(response.data).to.be.an("object");
@@ -145,7 +145,7 @@ describe("RubyGems Docker Integration Tests", function () {
 
   it("serves a specific package", async () => {
     const response = await loggedAxiosGet(
-      `${baseUrl}/rubyregistries/rubygems.org/packages/rack`
+      `${baseUrl}/rubyregistries/rubygems/packages/rack`
     );
     expect(response.status).to.equal(200);
     expect(response.data).to.have.property("packageid", "rack");
@@ -156,8 +156,8 @@ describe("RubyGems Docker Integration Tests", function () {
   });
 
   it("serves complete package meta consistent with the Resource", async () => {
-    const resource = await loggedAxiosGet(`${baseUrl}/rubyregistries/rubygems.org/packages/rack`);
-    const meta = await loggedAxiosGet(`${baseUrl}/rubyregistries/rubygems.org/packages/rack/meta`);
+    const resource = await loggedAxiosGet(`${baseUrl}/rubyregistries/rubygems/packages/rack`);
+    const meta = await loggedAxiosGet(`${baseUrl}/rubyregistries/rubygems/packages/rack/meta`);
     expect(meta.status).to.equal(200);
     expect(meta.data).to.include({ readonly: true, compatibility: "none", defaultversionsticky: false });
     expect(meta.data.defaultversionid).to.equal(resource.data.versionid);
@@ -167,7 +167,7 @@ describe("RubyGems Docker Integration Tests", function () {
 
   it("serves package versions", async () => {
     const response = await loggedAxiosGet(
-      `${baseUrl}/rubyregistries/rubygems.org/packages/rack/versions`
+      `${baseUrl}/rubyregistries/rubygems/packages/rack/versions`
     );
     expect(response.status).to.equal(200);
     expect(response.data).to.be.an("object");
@@ -184,7 +184,7 @@ describe("RubyGems Docker Integration Tests", function () {
 
   it("uses collision-safe version IDs for platform builds", async () => {
     const response = await loggedAxiosGet(
-      `${baseUrl}/rubyregistries/rubygems.org/packages/nokogiri/versions`
+      `${baseUrl}/rubyregistries/rubygems/packages/nokogiri/versions`
     );
     expect(response.status).to.equal(200);
 

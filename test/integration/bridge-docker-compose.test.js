@@ -164,7 +164,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
     for (let i = 0; i < 30; i++) {
       try {
         console.log(`⏳ Attempt ${i + 1}/30: Checking routing initialization...`);
-        const response = await axios.get(`${bridgeUrl}/noderegistries`, { timeout: 5000 });
+        const response = await axios.get(`${bridgeUrl}/nodescopes?limit=1`, { timeout: 5000 });
         if (response.status === 200 && response.data && Object.keys(response.data).length > 0) {
           console.log("✅ Bridge routing confirmed ready - registry data available");
           routingReady = true;
@@ -251,7 +251,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
   describe("NPM Registry Integration", () => {
     it("should access NPM packages through bridge", async () => {
-      const response = await loggedAxiosGet(`${bridgeUrl}/noderegistries`);
+      const response = await loggedAxiosGet(`${bridgeUrl}/nodescopes?limit=5`);
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
     });
@@ -259,7 +259,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
     it("should access specific NPM registry through bridge", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${bridgeUrl}/noderegistries/npmjs-org`
+          `${bridgeUrl}/nodescopes/_`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -285,17 +285,17 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
     it("should access specific PyPI registry through bridge", async () => {
       const response = await loggedAxiosGet(
-        `${bridgeUrl}/pythonregistries/pypi.org`
+        `${bridgeUrl}/pythonregistries/pypi`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "pypi.org");
+      expect(response.data).to.have.property("name", "pypi");
     });
 
     it("should access PyPI packages through bridge", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${bridgeUrl}/pythonregistries/pypi.org/packages/requests`
+          `${bridgeUrl}/pythonregistries/pypi/packages/requests`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -314,24 +314,24 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
   describe("Maven Registry Integration", () => {
     it("should access Maven packages through bridge", async () => {
-      const response = await loggedAxiosGet(`${bridgeUrl}/javaregistries`);
+      const response = await loggedAxiosGet(`${bridgeUrl}/javanamespaces`);
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
     });
 
     it("should access specific Maven registry through bridge", async () => {
       const response = await loggedAxiosGet(
-        `${bridgeUrl}/javaregistries/maven-central`
+        `${bridgeUrl}/javanamespaces/junit`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "Maven Central");
+      expect(response.data).to.have.property("javanamespaceid", "junit");
     });
 
     it("should access Maven packages through bridge", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${bridgeUrl}/javaregistries/maven-central/packages/junit:junit`
+          `${bridgeUrl}/javanamespaces/junit/packages/junit`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -365,17 +365,17 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
     it("should access specific NuGet registry through bridge", async () => {
       const response = await loggedAxiosGet(
-        `${bridgeUrl}/dotnetregistries/nuget.org`
+        `${bridgeUrl}/dotnetregistries/nuget`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "nuget.org");
+      expect(response.data).to.have.property("dotnetregistryid", "nuget");
     });
 
     it("should access NuGet packages through bridge", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${bridgeUrl}/dotnetregistries/nuget.org/packages/Newtonsoft.Json`
+          `${bridgeUrl}/dotnetregistries/nuget/packages/Newtonsoft.Json`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -448,7 +448,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
       try {
         const response = await loggedAxiosGet(
-          `${bridgeUrl}/javaregistries`,
+          `${bridgeUrl}/javanamespaces`,
           headers
         );
         expect(response.status).to.equal(200);
@@ -476,7 +476,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
     it("should return 404 for non-existent packages", async () => {
       try {
         await loggedAxiosGet(
-          `${bridgeUrl}/javaregistries/maven-central/packages/non-existent:package-123456789`
+          `${bridgeUrl}/javanamespaces/junit/packages/non-existent-package-123456789`
         );
         expect.fail("Should have thrown an error");
       } catch (error) {
@@ -505,7 +505,8 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
         // Should have at least some of our registry types
         const expectedGroups = [
-          "javaregistries",
+          "javanamespaces",
+          "nodescopes",
           "dotnetregistries",
           "pythonregistries",
           "containerregistries",
@@ -540,8 +541,8 @@ describe("Bridge Docker Compose Integration Tests", function () {
       {
         name: "NPM Server",
         serverUrl: "http://localhost:3001", // Direct NPM server
-        groupsEndpoint: "/noderegistries",
-        groupId: "npmjs.org",
+        groupsEndpoint: "/nodescopes",
+        groupId: "_",
         packageName: "express",
         version: "4.18.2",
       },
@@ -549,7 +550,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
         name: "NuGet Server",
         serverUrl: "http://localhost:3002", // Direct NuGet server
         groupsEndpoint: "/dotnetregistries",
-        groupId: "nuget.org",
+        groupId: "nuget",
         packageName: "Newtonsoft.Json",
         version: "13.0.3",
       },
@@ -557,16 +558,16 @@ describe("Bridge Docker Compose Integration Tests", function () {
         name: "PyPI Server",
         serverUrl: "http://localhost:3003", // Direct PyPI server
         groupsEndpoint: "/pythonregistries",
-        groupId: "pypi.org",
+        groupId: "pypi",
         packageName: "requests",
         version: "2.31.0",
       },
       {
         name: "Maven Server",
         serverUrl: "http://localhost:3004", // Direct Maven server
-        groupsEndpoint: "/javaregistries",
-        groupId: "maven-central",
-        packageName: "junit:junit",
+        groupsEndpoint: "/javanamespaces",
+        groupId: "junit",
+        packageName: "junit",
         version: "4.13.2",
       },
       {
@@ -733,7 +734,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
           }
 
           try {
-            // Step 2: Groups Collection (e.g., /noderegistries, /dotnetregistries)
+            // Step 2: Groups Collection (e.g., /nodescopes, /dotnetregistries)
             console.log(
               `\n📍 Step 2: Groups Collection (${config.serverUrl}${config.groupsEndpoint})`
             );
@@ -753,7 +754,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
               }`
             );
 
-            // Step 3: Specific Group (e.g., /noderegistries/npmjs.org)
+            // Step 3: Specific Group (e.g., /nodescopes/_)
             console.log(
               `\n📍 Step 3: Specific Group (${config.serverUrl}${config.groupsEndpoint}/${config.groupId})`
             );
@@ -773,7 +774,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
               "Group should have packagesurl property"
             );
 
-            // Step 4: Packages Collection (e.g., /noderegistries/npmjs.org/packages)
+            // Step 4: Packages Collection (e.g., /nodescopes/_/packages)
             console.log(
               `\n📍 Step 4: Packages Collection (${config.serverUrl}${config.groupsEndpoint}/${config.groupId}/packages)`
             );
@@ -817,7 +818,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
               "Package name should match collection key"
             );
 
-            // Step 5: Specific Package (e.g., /noderegistries/npmjs.org/packages/express)
+            // Step 5: Specific Package (e.g., /nodescopes/_/packages/express)
             console.log(
               `\n📍 Step 5: Specific Package (${config.serverUrl}${config.groupsEndpoint}/${config.groupId}/packages/${config.packageName})`
             );
@@ -840,7 +841,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
                 "Package should have versionsurl property"
               );
 
-              // Step 6: Versions Collection (e.g., /noderegistries/npmjs.org/packages/express/versions)
+              // Step 6: Versions Collection (e.g., /nodescopes/_/packages/express/versions)
               console.log(
                 `\n📍 Step 6: Versions Collection (${config.serverUrl}${config.groupsEndpoint}/${config.groupId}/packages/${config.packageName}/versions)`
               );
@@ -874,7 +875,7 @@ describe("Bridge Docker Compose Integration Tests", function () {
                 `${config.groupsEndpoint}/${config.groupId}/packages/${config.packageName}/versions/${firstVersionKey}`
               );
 
-              // Step 7: Specific Version (e.g., /noderegistries/npmjs.org/packages/express/versions/4.18.2)
+              // Step 7: Specific Version (e.g., /nodescopes/_/packages/express/versions/4.18.2)
               console.log(
                 `\n📍 Step 7: Specific Version (${config.serverUrl}${config.groupsEndpoint}/${config.groupId}/packages/${config.packageName}/versions/${config.version})`
               );
@@ -973,9 +974,9 @@ describe("Bridge Docker Compose Integration Tests", function () {
 
     it("should handle individual service calls", async () => {
       const services = [
-        { name: "NPM", url: `${bridgeUrl}/noderegistries` },
+        { name: "NPM", url: `${bridgeUrl}/nodescopes?limit=5` },
         { name: "PyPI", url: `${bridgeUrl}/pythonregistries` },
-        { name: "Maven", url: `${bridgeUrl}/javaregistries` },
+        { name: "Maven", url: `${bridgeUrl}/javanamespaces` },
         { name: "NuGet", url: `${bridgeUrl}/dotnetregistries` },
         { name: "OCI", url: `${bridgeUrl}/containerregistries` },
       ];

@@ -214,7 +214,7 @@ describe("Maven Docker Integration Tests", function () {
       // model.json files carried an outer envelope; those have since been
       // unwrapped to match the spec.
       expect(response.data).to.have.property("groups");
-      expect(response.data.groups).to.have.property("javaregistries");
+      expect(response.data.groups).to.have.property("javanamespaces");
     });
 
     it("should respond to /capabilities endpoint", async () => {
@@ -226,35 +226,35 @@ describe("Maven Docker Integration Tests", function () {
   });
 
   describe("Registry Endpoints", () => {
-    it("should respond to /javaregistries endpoint", async () => {
-      const response = await loggedAxiosGet(`${baseUrl}/javaregistries`);
+    it("should respond to /javanamespaces endpoint", async () => {
+      const response = await loggedAxiosGet(`${baseUrl}/javanamespaces`);
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
     });
 
-    it("should respond to a specific Maven registry (maven-central)", async () => {
+    it("should respond to a Maven namespace", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/javaregistries/maven-central`
+        `${baseUrl}/javanamespaces/junit`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "Maven Central");
+      expect(response.data).to.have.property("javanamespaceid", "junit");
     });
   });
 
   describe("Package Endpoints", () => {
-    it("should respond to packages endpoint for maven-central", async () => {
+    it("should respond to packages endpoint for the junit namespace", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/javaregistries/maven-central/packages`
+        `${baseUrl}/javanamespaces/junit/packages`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
     });
 
-    it("should respond to a specific package (junit:junit)", async () => {
+    it("should respond to the junit package", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${baseUrl}/javaregistries/maven-central/packages/junit:junit`
+          `${baseUrl}/javanamespaces/junit/packages/junit`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -288,7 +288,7 @@ describe("Maven Docker Integration Tests", function () {
   describe("Error Handling", () => {
     it("should return 404 for non-existent registry", async () => {
       try {
-        await loggedAxiosGet(`${baseUrl}/javaregistries/non-existent-registry`);
+        await loggedAxiosGet(`${baseUrl}/javanamespaces/non-existent-namespace`);
         expect.fail("Should have thrown an error");
       } catch (error) {
         expect(error.response.status).to.equal(404);
@@ -298,7 +298,7 @@ describe("Maven Docker Integration Tests", function () {
     it("should return 404 for non-existent package", async () => {
       try {
         await loggedAxiosGet(
-          `${baseUrl}/javaregistries/maven-central/packages/non-existent:package`
+          `${baseUrl}/javanamespaces/junit/packages/non-existent-package`
         );
         expect.fail("Should have thrown an error");
       } catch (error) {

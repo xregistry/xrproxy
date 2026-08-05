@@ -202,6 +202,15 @@ export class MavenService {
 
             const facetField = response?.facet_counts?.facet_fields?.g;
             if (!Array.isArray(facetField) || facetField.length === 0) {
+                if (offset === 0) {
+                    const fallback = await this.searchArtifacts('*:*', 0, MAX_SOLR_ROWS);
+                    for (const document of fallback.response.docs) {
+                        if (!ids.includes(document.g)) {
+                            ids.push(document.g);
+                        }
+                        counts.set(document.g, (counts.get(document.g) ?? 0) + 1);
+                    }
+                }
                 break;
             }
 

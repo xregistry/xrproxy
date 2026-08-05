@@ -209,7 +209,7 @@ describe("NPM Docker Integration Tests", function () {
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
       expect(response.data).to.have.property("groups");
-      expect(response.data.groups).to.have.property("noderegistries");
+      expect(response.data.groups).to.have.property("nodescopes");
     });
 
     it("should respond to /capabilities endpoint", async () => {
@@ -221,26 +221,26 @@ describe("NPM Docker Integration Tests", function () {
   });
 
   describe("Registry Endpoints", () => {
-    it("should respond to /noderegistries endpoint", async () => {
-      const response = await loggedAxiosGet(`${baseUrl}/noderegistries`);
+    it("should respond to /nodescopes endpoint", async () => {
+      const response = await loggedAxiosGet(`${baseUrl}/nodescopes?limit=5`);
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
     });
 
-    it("should respond to a specific NPM registry (npmjs.org)", async () => {
+    it("should respond to the unscoped npm namespace", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/noderegistries/npmjs.org`
+        `${baseUrl}/nodescopes/_`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "npmjs.org");
+      expect(response.data).to.have.property("nodescopeid", "_");
     });
   });
 
   describe("Package Endpoints", () => {
-    it("should respond to packages endpoint for npmjs.org", async () => {
+    it("should respond to the unscoped packages endpoint", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/noderegistries/npmjs.org/packages`
+        `${baseUrl}/nodescopes/_/packages?limit=5`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
@@ -249,7 +249,7 @@ describe("NPM Docker Integration Tests", function () {
 
     it("should respond to a specific package (lodash)", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/noderegistries/npmjs.org/packages/lodash`
+        `${baseUrl}/nodescopes/_/packages/lodash`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
@@ -260,7 +260,7 @@ describe("NPM Docker Integration Tests", function () {
   describe("Error Handling", () => {
     it("should return 404 for non-existent registry", async () => {
       try {
-        await loggedAxiosGet(`${baseUrl}/noderegistries/non-existent-registry`);
+        await loggedAxiosGet(`${baseUrl}/nodescopes/non-existent-scope`);
         expect.fail("Should have thrown an error");
       } catch (error) {
         expect(error.response.status).to.equal(404);
@@ -270,7 +270,7 @@ describe("NPM Docker Integration Tests", function () {
     it("should return 404 for non-existent package", async () => {
       try {
         await loggedAxiosGet(
-          `${baseUrl}/noderegistries/npmjs.org/packages/non-existent-package-12345`
+          `${baseUrl}/nodescopes/_/packages/non-existent-package-12345`
         );
         expect.fail("Should have thrown an error");
       } catch (error) {

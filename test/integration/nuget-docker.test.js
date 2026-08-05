@@ -227,20 +227,20 @@ describe("NuGet Docker Integration Tests", function () {
       expect(response.data).to.be.an("object");
     });
 
-    it("should respond to a specific NuGet registry (nuget.org)", async () => {
+    it("should respond to the NuGet registry", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/dotnetregistries/nuget.org`
+        `${baseUrl}/dotnetregistries/nuget`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "nuget.org");
+      expect(response.data).to.have.property("dotnetregistryid", "nuget");
     });
   });
 
   describe("Package Endpoints", () => {
-    it("should respond to packages endpoint for nuget.org", async () => {
+    it("should respond to packages endpoint for NuGet", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/dotnetregistries/nuget.org/packages`
+        `${baseUrl}/dotnetregistries/nuget/packages`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
@@ -249,7 +249,7 @@ describe("NuGet Docker Integration Tests", function () {
     it("should respond to a specific package (Newtonsoft.Json)", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${baseUrl}/dotnetregistries/nuget.org/packages/Newtonsoft.Json`
+          `${baseUrl}/dotnetregistries/nuget/packages/Newtonsoft.Json`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -286,7 +286,7 @@ describe("NuGet Docker Integration Tests", function () {
     it("should return 404 for non-existent package", async () => {
       try {
         await loggedAxiosGet(
-          `${baseUrl}/dotnetregistries/nuget.org/packages/NonExistentPackage123456789`
+          `${baseUrl}/dotnetregistries/nuget/packages/NonExistentPackage123456789`
         );
         expect.fail("Should have thrown an error");
       } catch (error) {
