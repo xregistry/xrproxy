@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
+import { ChildProcess, spawn } from 'child_process';
 import { promisify } from 'util';
 import { ParserOptions, parseString } from 'xml2js';
 import { CACHE_CONFIG, MAX_SOLR_ROWS, MAVEN_REGISTRY } from '../config/constants';
@@ -37,6 +38,13 @@ import {
 
 const parseXml: (xml: string, options: ParserOptions) => Promise<any> = promisify(parseString);
 const FACET_BATCH_SIZE = 500;
+
+type NamespaceSnapshot = {
+    generatedAt: string;
+    sourceTimestamp: string;
+    provisional?: boolean;
+    namespaces: Array<{ id: string; count: number }>;
+};
 
 type PublishedFile = {
     filename: string;
@@ -95,6 +103,8 @@ export class MavenService {
     private readonly metadataCache: Map<string, CachedPackageMetadata>;
     private readonly groupArtifactsCache: Map<string, CachedPackageMetadata>;
     private namespaceCache: { ids: string[]; counts: Map<string, number>; timestamp: number } | null = null;
+    private namespaceIndexProcess: ChildProcess | null = null;
+    private namespaceIndexTimer: NodeJS.Timeout | null = null;
 
     constructor(config: MavenServiceConfig = {}) {
         this.apiBaseUrl = config.apiBaseUrl || MAVEN_REGISTRY.API_BASE_URL;
@@ -183,6 +193,12 @@ export class MavenService {
             return { ids: this.namespaceCache.ids, counts: this.namespaceCache.counts };
         }
 
+        const persisted = await this.readNamespaceSnapshot();
+        if (persisted) {
+            this.namespaceCache = { ...persisted, timestamp: now };
+            return persisted;
+        }
+
         const ids: string[] = [];
         const counts = new Map<string, number>();
         let offset = 0;
@@ -233,6 +249,110 @@ export class MavenService {
         const uniqueIds = Array.from(new Set(ids)).sort((left, right) => left.localeCompare(right));
         this.namespaceCache = { ids: uniqueIds, counts, timestamp: now };
         return { ids: uniqueIds, counts };
+    }
+
+    startNamespaceIndexRefresh(): void {
+        if (process.env['MAVEN_INDEX_REFRESH_ENABLED'] !== 'true' || this.namespaceIndexTimer) {
+            return;
+        }
+        this.runNamespaceIndexRefresh();
+        const configuredInterval = Number(process.env['MAVEN_INDEX_REFRESH_INTERVAL_MS']);
+        const interval = Number.isFinite(configuredInterval) && configuredInterval > 0
+            ? configuredInterval
+            : CACHE_CONFIG.INDEX_REFRESH_INTERVAL_MS;
+        this.namespaceIndexTimer = setInterval(() => this.runNamespaceIndexRefresh(), interval);
+        this.namespaceIndexTimer.unref();
+    }
+
+    stopNamespaceIndexRefresh(): void {
+        if (this.namespaceIndexTimer) {
+            clearInterval(this.namespaceIndexTimer);
+            this.namespaceIndexTimer = null;
+        }
+        if (this.namespaceIndexProcess && !this.namespaceIndexProcess.killed) {
+            this.namespaceIndexProcess.kill('SIGTERM');
+        }
+        this.namespaceIndexProcess = null;
+    }
+
+    getNamespaceIndexStatus(): {
+        refreshEnabled: boolean;
+        refreshing: boolean;
+        snapshotReady: boolean;
+        databaseBytes: number;
+    } {
+        const snapshotPath = path.join(this.cacheDir, 'maven-namespace-index.json');
+        const databasePath = path.join(this.cacheDir, 'maven-index.sqlite');
+        let databaseBytes = 0;
+        try {
+            databaseBytes = fs.statSync(databasePath).size;
+        } catch {
+            // The initial full index is still being built.
+        }
+        return {
+            refreshEnabled: process.env['MAVEN_INDEX_REFRESH_ENABLED'] === 'true',
+            refreshing: this.namespaceIndexProcess !== null,
+            snapshotReady: fs.existsSync(snapshotPath),
+            databaseBytes
+        };
+    }
+
+    private runNamespaceIndexRefresh(): void {
+        if (this.namespaceIndexProcess) {
+            return;
+        }
+        const jar = process.env['MAVEN_INDEX_SYNC_JAR'] || '/app/maven-indexer/maven-index-sync.jar';
+        if (!fs.existsSync(jar)) {
+            console.warn(`Maven index sync helper not found: ${jar}`);
+            return;
+        }
+
+        const child = spawn('java', [
+            '-Xms64m',
+            '-Xmx384m',
+            '-jar',
+            jar,
+            this.cacheDir,
+            process.env['MAVEN_INDEX_BASE_URL'] || MAVEN_REGISTRY.INDEX_BASE_URL
+        ], { stdio: ['ignore', 'inherit', 'inherit'] });
+        this.namespaceIndexProcess = child;
+        child.once('error', (error) => {
+            console.error('Failed to start Maven index refresh', error);
+        });
+        child.once('close', (code, signal) => {
+            this.namespaceIndexProcess = null;
+            if (code === 0) {
+                this.namespaceCache = null;
+                console.info('Maven namespace index refresh completed');
+            } else {
+                console.error(`Maven namespace index refresh exited with code ${code} and signal ${signal}`);
+            }
+        });
+    }
+
+    private async readNamespaceSnapshot(): Promise<{ ids: string[]; counts: Map<string, number> } | null> {
+        const snapshotPath = path.join(this.cacheDir, 'maven-namespace-index.json');
+        try {
+            const snapshot = JSON.parse(await fs.promises.readFile(snapshotPath, 'utf8')) as NamespaceSnapshot;
+            if (snapshot.provisional === true || !Array.isArray(snapshot.namespaces)) {
+                return null;
+            }
+            const ids: string[] = [];
+            const counts = new Map<string, number>();
+            for (const namespace of snapshot.namespaces) {
+                if (typeof namespace?.id !== 'string' || typeof namespace.count !== 'number') {
+                    continue;
+                }
+                ids.push(namespace.id);
+                counts.set(namespace.id, namespace.count);
+            }
+            return ids.length > 0 ? { ids, counts } : null;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                console.warn('Failed to read Maven namespace snapshot', error);
+            }
+            return null;
+        }
     }
 
     async resolveNamespaceId(groupId: string): Promise<string | null> {

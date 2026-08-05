@@ -102,7 +102,8 @@ export class MavenXRegistryServer {
             res.json({
                 status: 'healthy',
                 service: 'maven-xregistry',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                namespaceIndex: this.mavenService.getNamespaceIndexStatus()
             });
         });
     }
@@ -143,6 +144,7 @@ export class MavenXRegistryServer {
 
     async start(): Promise<void> {
         try {
+            this.mavenService.startNamespaceIndexRefresh();
             return new Promise((resolve, reject) => {
                 this.server = this.app.listen(this.options.port, this.options.host, () => {
                     this.logger.info('Maven xRegistry server started', {
@@ -166,6 +168,7 @@ export class MavenXRegistryServer {
     }
 
     async stop(): Promise<void> {
+        this.mavenService.stopNamespaceIndexRefresh();
         if (!this.server) {
             return;
         }

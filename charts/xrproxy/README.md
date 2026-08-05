@@ -45,6 +45,11 @@ services:
         enabled: true
 ```
 
+The Maven proxy can ingest Maven Central's published Nexus index and then apply
+its incremental chunks. Enable `MAVEN_INDEX_REFRESH_ENABLED=true` only with a
+persistent Maven cache and sufficient storage; the production profile uses a
+16 GiB claim and keeps serving the previous snapshot while a full rebuild runs.
+
 Each enabled service receives a separate claim because cache files are not safe
 for concurrent cross-service access. Set
 `services.<id>.cache.persistence.existingClaim` to mount a pre-provisioned

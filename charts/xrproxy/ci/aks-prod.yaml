@@ -21,6 +21,20 @@ services:
     cache:
       persistence:
         enabled: true
+  maven:
+    environment:
+      MAVEN_INDEX_REFRESH_ENABLED: "true"
+    cache:
+      persistence:
+        enabled: true
+        size: 16Gi
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 1Gi
   rubygems:
     cache:
       persistence:

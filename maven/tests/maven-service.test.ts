@@ -1,6 +1,33 @@
 import { MavenService } from '../src/services/maven-service';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 describe('MavenService namespace discovery', () => {
+    it('loads the complete persisted namespace snapshot before consulting Solr', async () => {
+        const cacheDir = await mkdtemp(join(tmpdir(), 'maven-index-'));
+        try {
+            await writeFile(join(cacheDir, 'maven-namespace-index.json'), JSON.stringify({
+                generatedAt: '2026-08-05T00:00:00.000Z',
+                sourceTimestamp: '2026-07-23T05:59:21.833Z',
+                namespaces: [
+                    { id: 'com.example', count: 12 },
+                    { id: 'org.example', count: 4 }
+                ]
+            }));
+            const service = new MavenService({ cacheDir });
+            const solr = jest.spyOn(service, 'solrQuery');
+
+            const index = await service.fetchNamespaceIndex();
+
+            expect(index.ids).toEqual(['com.example', 'org.example']);
+            expect(index.counts.get('com.example')).toBe(12);
+            expect(solr).not.toHaveBeenCalled();
+        } finally {
+            await rm(cacheDir, { recursive: true, force: true });
+        }
+    });
+
     it('falls back to bounded artifact discovery when Maven Central omits facets', async () => {
         const service = new MavenService({ cacheDir: 'cache' });
         jest.spyOn(service, 'solrQuery')

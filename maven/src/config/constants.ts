@@ -50,6 +50,7 @@ export const RESOURCE_CONFIG = {
 export const MAVEN_REGISTRY = {
     API_BASE_URL: 'https://search.maven.org/solrsearch/select',
     REPO_URL: 'https://repo.maven.apache.org/maven2',
+    INDEX_BASE_URL: 'https://repo1.maven.org/maven2/.index/',
     TIMEOUT_MS: 30000,
     USER_AGENT: 'xRegistry-Maven-Wrapper/1.0'
 } as const;
@@ -62,7 +63,8 @@ export const CACHE_CONFIG = {
     MAX_CACHE_SIZE: 1000,
     SEARCH_CACHE_SIZE: 800,
     SEARCH_CACHE_TTL: 600000,
-    MAX_METADATA_FETCHES: 30
+    MAX_METADATA_FETCHES: 30,
+    INDEX_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000
 } as const;
 
 export const PAGINATION = {

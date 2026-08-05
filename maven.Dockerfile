@@ -1,4 +1,10 @@
-# Use official Node.js 23 Alpine image
+FROM maven:3.9-eclipse-temurin-21-alpine AS index-sync-build
+
+WORKDIR /build
+COPY maven/index-sync/ ./
+RUN mvn --batch-mode --no-transfer-progress package
+
+# Use official Node.js Alpine image
 FROM node:25-alpine
 
 # Install diagnostic tools for troubleshooting and bash for restart script
@@ -9,7 +15,8 @@ RUN apk add --no-cache \
     jq \
     htop \
     procps \
-    bash
+    bash \
+    openjdk21-jre-headless
 
 # Create app directory
 WORKDIR /app
@@ -24,6 +31,9 @@ RUN npm ci && npm cache clean --force
 
 # Build TypeScript
 RUN npm run build
+
+RUN mkdir -p /app/maven-indexer
+COPY --from=index-sync-build /build/target/maven-index-sync.jar /app/maven-indexer/maven-index-sync.jar
 
 # Install shared logging dependencies
 WORKDIR /app/shared/logging
