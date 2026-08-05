@@ -321,14 +321,14 @@ describe('pub.dev Docker Integration Tests (deterministic fixtures)', function (
     const data = await getJson(`${baseUrl}/dartregistries/pub/packages/http/versions`);
     const keys = Object.keys(data);
     assert.equal(keys.length, 4);
-    const plusId = `xv~${Buffer.from('1.1.0+build.1').toString('base64url')}`;
+    const plusId = '1.1.0~build.1';
     assert.ok(keys.includes(plusId), 'build metadata uses an xRegistry-safe ID');
     assert.ok(keys.every(k => /^[A-Za-z0-9_][A-Za-z0-9._~:@-]*$/.test(k)));
     assert.ok(keys.indexOf('1.0.0-beta.1') < keys.indexOf('1.2.0'), 'prerelease before stable');
   });
 
   it('encoded + version detail retains the raw pub.dev version', async () => {
-    const plusId = `xv~${Buffer.from('1.1.0+build.1').toString('base64url')}`;
+    const plusId = '1.1.0~build.1';
     const data = await getJson(`${baseUrl}/dartregistries/pub/packages/http/versions/${plusId}`);
     assert.equal(data.versionid, plusId);
     assert.equal(data.version, '1.1.0+build.1');
@@ -343,7 +343,7 @@ describe('pub.dev Docker Integration Tests (deterministic fixtures)', function (
     assert.equal(data.archive_sha256, 'deadbeef01234567');
     assert.equal(data.published, '2024-01-01T00:00:00.000Z');
     assert.equal(data.isdefault, true);
-    assert.equal(data.retracted, false);
+    assert.equal(Object.hasOwn(data, 'retracted'), false);
   });
 
   it('prerelease version (1.0.0-beta.1) has isdefault=false', async () => {
