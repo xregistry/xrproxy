@@ -31,6 +31,12 @@ spec:
         - path:
             type: PathPrefix
             value: /
+          {{- with .Values.gateway.frontDoor.profileId }}
+          headers:
+            - name: X-Azure-FDID
+              type: Exact
+              value: {{ . | quote }}
+          {{- end }}
       backendRefs:
         - name: {{ include "xrproxy.serviceName" (dict "root" . "id" "bridge") }}
           port: {{ $bridge.port }}

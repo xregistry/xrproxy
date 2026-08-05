@@ -98,15 +98,31 @@
     },
     "gateway": {
       "type": "object",
-      "required": ["enabled", "create", "className", "listener", "parentRef", "httpRoute"],
+      "required": ["enabled", "create", "className", "infrastructure", "listener", "parentRef", "httpRoute", "frontDoor"],
       "properties": {
         "enabled": { "type": "boolean" },
         "create": { "type": "boolean" },
         "className": { "type": "string" },
         "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "infrastructure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["annotations"],
+          "properties": {
+            "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
         "listener": { "type": "object" },
         "parentRef": { "type": "object" },
-        "httpRoute": { "type": "object" }
+        "httpRoute": { "type": "object" },
+        "frontDoor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profileId"],
+          "properties": {
+            "profileId": { "type": "string" }
+          }
+        }
       }
     },
     "certificate": {

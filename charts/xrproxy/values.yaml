@@ -72,6 +72,8 @@ gateway:
   create: false
   className: ""
   annotations: {}
+  infrastructure:
+    annotations: {}
   listener:
     name: http
     protocol: HTTP
@@ -87,6 +89,8 @@ gateway:
   httpRoute:
     annotations: {}
     hostnames: []
+  frontDoor:
+    profileId: ""
 
 certificate:
   enabled: false
