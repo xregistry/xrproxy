@@ -10,7 +10,21 @@ probes:
   liveness:
     timeoutSeconds: 15
 
+cache:
+  persistence:
+    storageClassName: managed-csi
+    accessMode: ReadWriteOnce
+    size: 4Gi
+
 services:
+  npm:
+    cache:
+      persistence:
+        enabled: true
+  rubygems:
+    cache:
+      persistence:
+        enabled: true
   bridge:
     resources:
       requests:

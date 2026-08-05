@@ -91,7 +91,6 @@ export class RegistryService {
             throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}`, GROUP_CONFIG.TYPE_SINGULAR, namespaceId);
         }
 
-        const packagesCount = await this.searchService.countPackagesInNamespace(namespace.groupId);
         const groupPath = `/${GROUP_CONFIG.TYPE}/${namespace.namespaceId}`;
 
         res.json({
@@ -104,7 +103,7 @@ export class RegistryService {
             group_id: namespace.groupId,
             sourceurl: MAVEN_REGISTRY.REPO_URL,
             [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-            [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
+            [`${RESOURCE_CONFIG.TYPE}count`]: namespace.packageCount
         });
     }
 
@@ -129,10 +128,9 @@ export class RegistryService {
         return this.buildGroupsMap(result.results, baseUrl);
     }
 
-    private async buildGroupsMap(namespaces: Array<{ groupId: string; namespaceId: string }>, baseUrl: string): Promise<Record<string, unknown>> {
-        const entries = await Promise.all(namespaces.map(async (namespace) => {
+    private async buildGroupsMap(namespaces: Array<{ groupId: string; namespaceId: string; packageCount: number }>, baseUrl: string): Promise<Record<string, unknown>> {
+        const entries = namespaces.map((namespace) => {
             const groupPath = `/${GROUP_CONFIG.TYPE}/${namespace.namespaceId}`;
-            const packagesCount = await this.searchService.countPackagesInNamespace(namespace.groupId);
             return [
                 namespace.namespaceId,
                 {
@@ -145,10 +143,10 @@ export class RegistryService {
                     group_id: namespace.groupId,
                     sourceurl: MAVEN_REGISTRY.REPO_URL,
                     packagesurl: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                    packagescount: packagesCount
+                    packagescount: namespace.packageCount
                 }
             ] as const;
-        }));
+        });
 
         const groups: Record<string, unknown> = {};
         for (const [namespaceId, group] of entries) {

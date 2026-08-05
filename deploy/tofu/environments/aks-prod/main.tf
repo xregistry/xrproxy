@@ -239,11 +239,52 @@ resource "azurerm_cdn_frontdoor_origin" "aks_gateway" {
   weight                         = 1000
 }
 
+resource "azurerm_cdn_frontdoor_rule_set" "registry_cache" {
+  name                     = "registrycache"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.xrproxy.id
+}
+
+resource "azurerm_cdn_frontdoor_rule" "registry_get_cache" {
+  name                      = "CacheRegistryGets"
+  cdn_frontdoor_rule_set_id = azurerm_cdn_frontdoor_rule_set.registry_cache.id
+  order                     = 1
+  behavior_on_match         = "Continue"
+
+  depends_on = [
+    azurerm_cdn_frontdoor_origin_group.aks,
+    azurerm_cdn_frontdoor_origin.aks_gateway,
+  ]
+
+  conditions {
+    request_method_condition {
+      operator     = "Equal"
+      match_values = ["GET"]
+    }
+
+    url_path_condition {
+      operator     = "BeginsWith"
+      match_values = ["/registry"]
+      transforms   = ["Lowercase"]
+    }
+  }
+
+  actions {
+    route_configuration_override_action {
+      cache_behavior                = "OverrideAlways"
+      cache_duration                = "00:01:00"
+      compression_enabled           = true
+      forwarding_protocol           = "HttpOnly"
+      query_string_caching_behavior = "UseQueryString"
+    }
+  }
+}
+
 resource "azurerm_cdn_frontdoor_route" "default" {
   name                          = "default"
   cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.xrproxy.id
   cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.aks.id
   cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.aks_gateway.id]
+  cdn_frontdoor_rule_set_ids    = [azurerm_cdn_frontdoor_rule_set.registry_cache.id]
 
   enabled                = true
   forwarding_protocol    = "HttpOnly"

@@ -1,7 +1,7 @@
 import { createRegistryApp, listenWithGracefulShutdown, parseConfig, ConfigSchema } from '@xregistry/registry-core';
 import { join } from 'node:path';
 import modelData from '../model.json';
-import { CAPABILITIES, GROUP_CONFIG } from "./config/constants";
+import { CAPABILITIES, GROUP_CONFIG, NAMES_INDEX } from "./config/constants";
 import { createCorsMiddleware } from './middleware/cors';
 import { createLoggingMiddleware } from './middleware/logging';
 import { xregistryErrorHandler } from './middleware/xregistry-error-handler';
@@ -21,6 +21,17 @@ async function main(): Promise<void> {
     const cacheDir = join(process.cwd(), 'cache');
     const rubygemsService = new RubyGemsService({ cacheDir });
     const registryService = new RegistryService(rubygemsService);
+    const refreshNamesIndex = async (): Promise<void> => {
+        try {
+            const names = await rubygemsService.getAllNames();
+            console.log(`[INFO] RubyGems names index ready (${names.length} packages)`);
+        } catch (error) {
+            console.warn('[WARN] RubyGems names index refresh failed', error);
+        }
+    };
+    void refreshNamesIndex();
+    const namesRefreshTimer = setInterval(refreshNamesIndex, NAMES_INDEX.REFRESH_TTL_MS);
+    namesRefreshTimer.unref();
 
     const capabilities = CAPABILITIES;
 

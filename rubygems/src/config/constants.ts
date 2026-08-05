@@ -35,9 +35,8 @@ export const RESOURCE_CONFIG = {
 } as const;
 
 export const PAGINATION = {
-    DEFAULT_LIMIT: 10,
-    MAX_LIMIT: 10,
-    MAX_SEARCH_OFFSET: 499,
+    DEFAULT_LIMIT: 50,
+    MAX_LIMIT: 1000,
 } as const;
 
 export const CACHE_CONFIG = {
@@ -46,7 +45,6 @@ export const CACHE_CONFIG = {
     HTTP_TIMEOUT_MS: 10000,
     MAX_RETRIES: 1,
     CACHE_DIR: './cache',
-    MAX_SEARCH_PAGES: 20,
     SEARCH_PER_PAGE: 30,
 } as const;
 
@@ -54,6 +52,23 @@ export const RUBYGEMS_API = {
     BASE_URL: 'https://rubygems.org/api/v1',
     PUBLIC_URL: 'https://rubygems.org',
     USER_AGENT: 'xRegistry-RubyGems-Wrapper/1.0',
+} as const;
+
+/**
+ * The RubyGems "compact index" names snapshot: a plain-text, one-name-per-line
+ * catalogue of every gem name ever published (see
+ * https://guides.rubygems.org/rubygems-org-compact-index-api/). It is the
+ * full-catalogue source of truth for package collection listings so that
+ * paging/filtering no longer depends on crawling the upstream search API.
+ */
+export const NAMES_INDEX = {
+    URL: 'https://index.rubygems.org/names',
+    /** How often we re-check upstream for a fresher snapshot (conditional GET keeps this cheap). */
+    REFRESH_TTL_MS: 5 * 60 * 1000,
+    /** How long a previously-fetched snapshot may keep being served if upstream is unreachable. */
+    STALE_IF_ERROR_MS: 7 * 24 * 60 * 60 * 1000,
+    /** In-process memo so concurrent/rapid requests don't repeatedly re-read and re-clone the cached snapshot. */
+    MEMO_TTL_MS: 5 * 60 * 1000,
 } as const;
 
 export const SERVER_CONFIG = {

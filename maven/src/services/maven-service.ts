@@ -94,7 +94,7 @@ export class MavenService {
     private readonly repoUrl: string;
     private readonly metadataCache: Map<string, CachedPackageMetadata>;
     private readonly groupArtifactsCache: Map<string, CachedPackageMetadata>;
-    private namespaceCache: { ids: string[]; timestamp: number } | null = null;
+    private namespaceCache: { ids: string[]; counts: Map<string, number>; timestamp: number } | null = null;
 
     constructor(config: MavenServiceConfig = {}) {
         this.apiBaseUrl = config.apiBaseUrl || MAVEN_REGISTRY.API_BASE_URL;
@@ -174,12 +174,17 @@ export class MavenService {
     }
 
     async fetchAllNamespaceIds(): Promise<string[]> {
+        return (await this.fetchNamespaceIndex()).ids;
+    }
+
+    async fetchNamespaceIndex(): Promise<{ ids: string[]; counts: Map<string, number> }> {
         const now = Date.now();
         if (this.namespaceCache && now - this.namespaceCache.timestamp < CACHE_CONFIG.CACHE_TTL_MS) {
-            return this.namespaceCache.ids;
+            return { ids: this.namespaceCache.ids, counts: this.namespaceCache.counts };
         }
 
         const ids: string[] = [];
+        const counts = new Map<string, number>();
         let offset = 0;
 
         while (true) {
@@ -204,6 +209,8 @@ export class MavenService {
                 const groupId = facetField[index];
                 if (typeof groupId === 'string') {
                     ids.push(groupId);
+                    const count = facetField[index + 1];
+                    counts.set(groupId, typeof count === 'number' ? count : 0);
                 }
             }
 
@@ -215,8 +222,8 @@ export class MavenService {
         }
 
         const uniqueIds = Array.from(new Set(ids)).sort((left, right) => left.localeCompare(right));
-        this.namespaceCache = { ids: uniqueIds, timestamp: now };
-        return uniqueIds;
+        this.namespaceCache = { ids: uniqueIds, counts, timestamp: now };
+        return { ids: uniqueIds, counts };
     }
 
     async resolveNamespaceId(groupId: string): Promise<string | null> {

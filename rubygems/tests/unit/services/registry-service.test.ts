@@ -1,4 +1,3 @@
-import { UpstreamError } from '@xregistry/registry-core';
 import { Request, Response } from 'express';
 import * as path from 'node:path';
 import modelData from '../../../model.json';
@@ -60,6 +59,7 @@ describe('RegistryService', () => {
             getOwners: jest.fn().mockResolvedValue([]),
             getReverseDependencies: jest.fn().mockResolvedValue([]),
             searchGems: jest.fn().mockResolvedValue([]),
+            getAllNames: jest.fn().mockResolvedValue([]),
         } as unknown as jest.Mocked<RubyGemsService>;
         registryService = new RegistryService(rubygemsService);
     });
@@ -94,108 +94,90 @@ describe('RegistryService', () => {
         }));
     });
 
-    test('paginates package search results', async () => {
-        rubygemsService.searchGems
-            .mockResolvedValueOnce([RACK_GEM_FIXTURE, { ...RACK_GEM_FIXTURE, name: 'rack-test' }])
-            .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([]);
+    test('lists the full catalogue as bounded, exact-total pages from the local names index', async () => {
+        const names = ['bootsnap', 'devise', 'faraday', 'nokogiri', 'pg', 'puma', 'rack', 'rails', 'rspec', 'sass', 'sidekiq', 'thor'];
+        rubygemsService.getAllNames.mockResolvedValue(names);
 
-        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { search: 'rack', offset: '1', limit: '1' });
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { offset: '2', limit: '3' });
         const res = createResponse();
 
         await registryService.getResources(req, res);
 
+        expect(res.set).toHaveBeenCalledWith('X-Total-Count', String(names.length));
         expect(res.set).toHaveBeenCalledWith('Link', expect.stringContaining('rel="prev"'));
-        expect(res.json).toHaveBeenCalledWith({
-            'rack-test': expect.objectContaining({
-                packageid: 'rack-test',
-            }),
-        });
-    });
-
-    test('maps a name prefix filter to RubyGems search', async () => {
-        rubygemsService.searchGems.mockResolvedValueOnce([
-            { ...RACK_GEM_FIXTURE, name: 'rails' },
-            { ...RACK_GEM_FIXTURE, name: 'rails-dom-testing' },
-            { ...RACK_GEM_FIXTURE, name: 'trailblazer' },
-        ]);
-
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
-            { groupId: GROUP_CONFIG.ID },
-            { filter: 'name=rails*', offset: '0', limit: '10' },
-        );
-        const res = createResponse();
-
-        await registryService.getResources(req, res);
-
-        expect(rubygemsService.searchGems).toHaveBeenCalledWith('rails', 1);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-            rails: expect.objectContaining({ packageid: 'rails' }),
-            'rails-dom-testing': expect.objectContaining({ packageid: 'rails-dom-testing' }),
-        }));
-        const payload = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
-        expect(payload['trailblazer']).toBeUndefined();
-    });
-
-    test('emits a next link when a full upstream search page may have more results', async () => {
-        rubygemsService.searchGems.mockResolvedValueOnce(
-            Array.from({ length: 30 }, (_, index) => ({ ...RACK_GEM_FIXTURE, name: `rack-${index}` })),
-        );
-
-        const req = createRequest(
-            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
-            { groupId: GROUP_CONFIG.ID },
-            { search: 'rack', offset: '0', limit: '10' },
-        );
-        const res = createResponse();
-
-        await registryService.getResources(req, res);
-
         expect(res.set).toHaveBeenCalledWith('Link', expect.stringContaining('rel="next"'));
+        expect(res.json).toHaveBeenCalledWith({
+            faraday: expect.objectContaining({ packageid: 'faraday', name: 'faraday' }),
+            nokogiri: expect.objectContaining({ packageid: 'nokogiri', name: 'nokogiri' }),
+            pg: expect.objectContaining({ packageid: 'pg', name: 'pg' }),
+        });
+        // Collection entries are identity/addressing skeletons only: no eager upstream fetch per listed name.
+        expect(rubygemsService.getGem).not.toHaveBeenCalled();
+        expect(rubygemsService.getVersions).not.toHaveBeenCalled();
+        const page = (res.json as jest.Mock).mock.calls[0][0] as Record<string, Record<string, unknown>>;
+        for (const entry of Object.values(page)) {
+            expect(entry).not.toHaveProperty('versionid');
+            expect(entry).not.toHaveProperty('versionscount');
+            expect(entry).toEqual(expect.objectContaining({
+                xid: expect.stringMatching(/^\/rubyregistries\/rubygems\/packages\//),
+                self: expect.stringContaining('https://registry.example.com/rubyregistries/rubygems/packages/'),
+                epoch: 1,
+                createdat: expect.any(String),
+                modifiedat: expect.any(String),
+                metaurl: expect.stringMatching(/\/meta$/),
+                versionsurl: expect.stringMatching(/\/versions$/),
+            }));
+        }
     });
 
-    test('rejects unsupported deep search offsets with HTTP 400 problem details', async () => {
+    test('does not emit a next Link on the final page of the catalogue', async () => {
+        rubygemsService.getAllNames.mockResolvedValue(['bootsnap', 'devise', 'faraday']);
+
+        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { offset: '0', limit: '10' });
+        const res = createResponse();
+
+        await registryService.getResources(req, res);
+
+        expect(res.set).toHaveBeenCalledWith('X-Total-Count', '3');
+        expect(res.set).not.toHaveBeenCalledWith('Link', expect.stringContaining('rel='));
+    });
+
+    test('filter=name=<exact> resolves from the local index without fetching gem metadata', async () => {
+        rubygemsService.getAllNames.mockResolvedValue(['rack', 'rails']);
+
         const req = createRequest(
             `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
             { groupId: GROUP_CONFIG.ID },
-            { search: 'rack', offset: '500', limit: '10' },
+            { filter: 'name=rack' },
         );
         const res = createResponse();
 
-        await expect(registryService.getResources(req, res)).rejects.toMatchObject({
-            status: 400,
-            detail: expect.stringContaining('offsets greater than 499'),
-        });
+        await registryService.getResources(req, res);
+
+        expect(res.json).toHaveBeenCalledWith({ rack: expect.objectContaining({ packageid: 'rack' }) });
+        expect(res.set).toHaveBeenCalledWith('X-Total-Count', '1');
+        expect(rubygemsService.getGem).not.toHaveBeenCalled();
         expect(rubygemsService.searchGems).not.toHaveBeenCalled();
     });
 
-    test('stops when RubyGems repeats a full search page without progress', async () => {
-        const repeatedPage = Array.from({ length: 30 }, (_, index) => ({ ...RACK_GEM_FIXTURE, name: `rack-${index}` }));
-        rubygemsService.searchGems
-            .mockResolvedValueOnce(repeatedPage)
-            .mockResolvedValueOnce(repeatedPage);
+    test('filter=name=<exact> returns an empty collection when the name is absent from the index', async () => {
+        rubygemsService.getAllNames.mockResolvedValue(['rack', 'rails']);
 
         const req = createRequest(
             `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
             { groupId: GROUP_CONFIG.ID },
-            { search: 'rack', offset: '20', limit: '10' },
+            { filter: 'name=does-not-exist' },
         );
         const res = createResponse();
 
         await registryService.getResources(req, res);
 
-        expect(rubygemsService.searchGems).toHaveBeenCalledTimes(2);
-        expect(res.set).not.toHaveBeenCalledWith('Link', expect.stringContaining('rel="next"'));
-        expect(Object.keys((res.json as jest.Mock).mock.calls[0][0])).toHaveLength(10);
+        expect(res.json).toHaveBeenCalledWith({});
+        expect(res.set).toHaveBeenCalledWith('X-Total-Count', '0');
     });
 
-    test('rejects searches that exceed the safe upstream page limit', async () => {
-        rubygemsService.searchGems.mockImplementation(async (_query, page) =>
-            Array.from({ length: 30 }, (_, index) => ({ ...RACK_GEM_FIXTURE, name: `unrelated-${page}-${index}` })),
-        );
+    test('filter=name=<prefix>* matches case-insensitively against the local index without upstream crawling', async () => {
+        rubygemsService.getAllNames.mockResolvedValue(['rails', 'rails-dom-testing', 'Rails-Extra', 'trailblazer']);
 
         const req = createRequest(
             `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
@@ -204,39 +186,54 @@ describe('RegistryService', () => {
         );
         const res = createResponse();
 
+        await registryService.getResources(req, res);
+
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+            rails: expect.objectContaining({ packageid: 'rails' }),
+            'rails-dom-testing': expect.objectContaining({ packageid: 'rails-dom-testing' }),
+            'Rails-Extra': expect.objectContaining({ packageid: 'Rails-Extra' }),
+        }));
+        const payload = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
+        expect(payload['trailblazer']).toBeUndefined();
+        expect(rubygemsService.searchGems).not.toHaveBeenCalled();
+        expect(rubygemsService.getGem).not.toHaveBeenCalled();
+    });
+
+    test('rejects unsupported filter expressions with HTTP 400 problem details', async () => {
+        rubygemsService.getAllNames.mockResolvedValue(['rack']);
+
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { filter: 'description=web' },
+        );
+        const res = createResponse();
+
         await expect(registryService.getResources(req, res)).rejects.toMatchObject({
             status: 400,
-            detail: expect.stringContaining('safe limit of 20 upstream pages'),
+            detail: expect.stringContaining('filter=name='),
         });
-        expect(rubygemsService.searchGems).toHaveBeenCalledTimes(20);
     });
 
-    test('caps collection history hydration at the ten-Resource request budget', async () => {
-        rubygemsService.getGem.mockImplementation(async (name: string) => ({ ...RACK_GEM_FIXTURE, name }));
-        rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
-        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { limit: '100', offset: '0' });
-        const res = createResponse();
-        await registryService.getResources(req, res);
-        expect(rubygemsService.getVersions).toHaveBeenCalledTimes(10);
-        expect(Object.keys((res.json as jest.Mock).mock.calls[0][0])).toHaveLength(10);
-    });
+    test('free-text search scans the local index and is not limited by the former 499 offset cap', async () => {
+        const names = Array.from({ length: 600 }, (_, index) => `rack-plugin-${String(index).padStart(3, '0')}`);
+        rubygemsService.getAllNames.mockResolvedValue(names);
 
-    test('one history 429 falls back to a summary Resource without collapsing the page', async () => {
-        const gems = ['one', 'two', 'three'].map(name => ({ ...RACK_GEM_FIXTURE, name }));
-        rubygemsService.searchGems.mockResolvedValue(gems);
-        rubygemsService.getVersions.mockImplementation(async (name: string) => {
-            if (name === 'two') {
-                throw new UpstreamError({ code: 'rate_limited', status: 429, message: 'limited' });
-            }
-            return RACK_VERSIONS_FIXTURE;
-        });
-        const req = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { search: 'anything', limit: '3', offset: '0' });
+        const req = createRequest(
+            `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`,
+            { groupId: GROUP_CONFIG.ID },
+            { search: 'rack-plugin', offset: '550', limit: '10' },
+        );
         const res = createResponse();
+
         await registryService.getResources(req, res);
-        const body = (res.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
-        expect(Object.keys(body).sort()).toEqual(['one', 'three', 'two']);
-        expect((body['two'] as Record<string, unknown>)['versionscount']).toBe(1);
-        expect(rubygemsService.getVersions).toHaveBeenCalledTimes(3);
+
+        expect(res.set).toHaveBeenCalledWith('X-Total-Count', String(names.length));
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+            'rack-plugin-550': expect.objectContaining({ packageid: 'rack-plugin-550' }),
+            'rack-plugin-559': expect.objectContaining({ packageid: 'rack-plugin-559' }),
+        }));
+        expect(rubygemsService.searchGems).not.toHaveBeenCalled();
     });
 
     test('returns a specific package', async () => {
@@ -261,24 +258,6 @@ describe('RegistryService', () => {
         expect(call['versionscount']).toBe(RACK_VERSIONS_FIXTURE.length);
         expect(call['metaurl']).toBe('https://registry.example.com/rubyregistries/rubygems/packages/rack/meta');
         expect(call).not.toHaveProperty('defaultversionurl');
-    });
-
-    test('collection and exact resources use the same canonical version snapshot', async () => {
-        rubygemsService.searchGems.mockResolvedValue([RACK_GEM_FIXTURE]);
-        rubygemsService.getGem.mockResolvedValue(RACK_GEM_FIXTURE);
-        rubygemsService.getVersions.mockResolvedValue(RACK_VERSIONS_FIXTURE);
-
-        const collectionReq = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages`, { groupId: GROUP_CONFIG.ID }, { search: 'rack', limit: '1', offset: '0' });
-        const collectionRes = createResponse();
-        await registryService.getResources(collectionReq, collectionRes);
-        const collection = (collectionRes.json as jest.Mock).mock.calls[0][0]['rack'] as Record<string, unknown>;
-
-        const exactReq = createRequest(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/packages/rack`, { groupId: GROUP_CONFIG.ID, name: 'rack' });
-        const exactRes = createResponse();
-        await registryService.getResource(exactReq, exactRes);
-        const exact = (exactRes.json as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
-
-        expect(collection).toEqual(exact);
     });
 
     test('returns spec-conformant resource meta from the canonical snapshot', async () => {

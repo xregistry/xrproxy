@@ -8,7 +8,7 @@ import {
     createCacheKey,
     isUpstreamError,
 } from '@xregistry/registry-core';
-import { CACHE_CONFIG, RUBYGEMS_API } from '../config/constants';
+import { CACHE_CONFIG, NAMES_INDEX, RUBYGEMS_API } from '../config/constants';
 import { RubyGemMetadata, RubyGemOwner, RubyGemUpstreamOwner, RubyGemVersion } from '../types/xregistry';
 
 const COMMON_HEADERS: Readonly<Record<string, string>> = {
@@ -22,6 +22,14 @@ export interface RubyGemsServiceOptions {
     readonly fetch?: typeof globalThis.fetch;
     readonly rateLimitPerSecond?: number;
     readonly maxConcurrency?: number;
+    /** Override for the names-index source URL (tests only; defaults to NAMES_INDEX.URL). */
+    readonly namesIndexUrl?: string;
+    /** Override for the names-index upstream refresh interval (tests only; defaults to NAMES_INDEX.REFRESH_TTL_MS). */
+    readonly namesIndexTtlMs?: number;
+    /** Override for how long a stale names-index snapshot may be served on upstream failure (tests only). */
+    readonly namesIndexStaleIfErrorMs?: number;
+    /** Override for the in-process names-index memo window (tests only; defaults to NAMES_INDEX.MEMO_TTL_MS). */
+    readonly namesIndexMemoTtlMs?: number;
 }
 
 class RequestGate {
@@ -79,6 +87,44 @@ function toLoadResult<T>(res: ConditionalHttpResponse<T>): CacheLoadResult<T> {
     };
 }
 
+/**
+ * Parses the RubyGems compact-index `/names` payload into a sorted, deduplicated
+ * list of gem names. The upstream file begins with a `---` marker line followed
+ * by one gem name per line; it is served in an internal, not fully-ordinal sort
+ * order, so this proxy re-sorts deterministically (case-insensitive, with an
+ * ordinal tie-breaker) to guarantee stable limit/offset pagination.
+ */
+export function parseNamesIndex(payload: string): string[] {
+    const names = new Set<string>();
+    for (const rawLine of payload.split('\n')) {
+        const name = rawLine.trim();
+        if (!name || name === '---') {
+            continue;
+        }
+        names.add(name);
+    }
+    return Array.from(names).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: 'base' }) || a.localeCompare(b));
+}
+
+/** Small in-process memo so a burst of requests does not repeatedly re-read/parse/clone the cached names snapshot. */
+class NamesIndexMemo {
+    private snapshot?: { readonly names: readonly string[]; readonly expiresAt: number };
+
+    constructor(private readonly ttlMs: number, private readonly now: () => number = Date.now) {}
+
+    get(): readonly string[] | undefined {
+        if (this.snapshot && this.snapshot.expiresAt > this.now()) {
+            return this.snapshot.names;
+        }
+        return undefined;
+    }
+
+    set(names: readonly string[]): void {
+        this.snapshot = { names, expiresAt: this.now() + this.ttlMs };
+    }
+}
+
 export class RubyGemsService {
     private readonly client: HttpUpstreamClient;
     private readonly baseUrl: string;
@@ -87,7 +133,10 @@ export class RubyGemsService {
     private readonly ownersCache: TtlCache;
     private readonly reverseDependenciesCache: TtlCache;
     private readonly searchCache: TtlCache;
+    private readonly namesIndexCache: TtlCache;
+    private readonly namesIndexMemo: NamesIndexMemo;
     private readonly requestGate: RequestGate;
+    private readonly namesIndexUrl: string;
 
     constructor(options: RubyGemsServiceOptions = {}) {
         this.baseUrl = (options.baseUrl ?? RUBYGEMS_API.BASE_URL).replace(/\/$/, '');
@@ -121,6 +170,13 @@ export class RubyGemsService {
             ttlMs: CACHE_CONFIG.SEARCH_TTL_MS,
             negativeTtlMs: 60 * 1000,
         });
+
+        this.namesIndexUrl = options.namesIndexUrl ?? NAMES_INDEX.URL;
+        this.namesIndexCache = new TtlCache(persistentStore, {
+            ttlMs: options.namesIndexTtlMs ?? NAMES_INDEX.REFRESH_TTL_MS,
+            staleIfErrorMs: options.namesIndexStaleIfErrorMs ?? NAMES_INDEX.STALE_IF_ERROR_MS,
+        });
+        this.namesIndexMemo = new NamesIndexMemo(options.namesIndexMemoTtlMs ?? NAMES_INDEX.MEMO_TTL_MS);
     }
 
     async getGem(name: string): Promise<RubyGemMetadata | null> {
@@ -220,5 +276,48 @@ export class RubyGemsService {
             return toLoadResult(res);
         });
         return result.kind === 'value' ? (result.value ?? []) : [];
+    }
+
+    /**
+     * Returns the full, sorted, deduplicated catalogue of gem names from the
+     * RubyGems compact index (https://index.rubygems.org/names), persisted
+     * under the configured cache directory. Refreshes are conditional
+     * (ETag / Last-Modified) so a steady-state deployment mostly exchanges a
+     * cheap 304 with upstream; if upstream is unreachable, the last-known
+     * snapshot keeps being served (subject to the configured staleness
+     * budget) rather than failing catalogue browsing outright.
+     */
+    async getAllNames(): Promise<readonly string[]> {
+        const memoized = this.namesIndexMemo.get();
+        if (memoized) {
+            return memoized;
+        }
+
+        const key = createCacheKey('names-index', this.namesIndexUrl);
+        const result = await this.namesIndexCache.get<string[]>(key, async (ctx) => {
+            const res = await this.requestGate.run(() => this.client.request<string>({
+                url: this.namesIndexUrl,
+                headers: { ...COMMON_HEADERS, Accept: 'text/plain' },
+                conditional: ctx,
+                parse: (response) => response.text(),
+            }));
+            if ('notModified' in res) {
+                return {
+                    kind: 'not-modified',
+                    ...(res.etag !== undefined ? { etag: res.etag } : {}),
+                    ...(res.lastModified !== undefined ? { lastModified: res.lastModified } : {}),
+                };
+            }
+            return {
+                kind: 'value',
+                value: parseNamesIndex(res.value),
+                ...(res.etag !== undefined ? { etag: res.etag } : {}),
+                ...(res.lastModified !== undefined ? { lastModified: res.lastModified } : {}),
+            };
+        });
+
+        const names = result.kind === 'value' ? (result.value ?? []) : [];
+        this.namesIndexMemo.set(names);
+        return names;
     }
 }

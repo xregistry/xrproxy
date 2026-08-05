@@ -59,6 +59,12 @@ probes:
 cache:
   enabled: true
   sizeLimit: 2Gi
+  persistence:
+    enabled: false
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+    size: 2Gi
+    annotations: {}
 
 pdb:
   enabled: false

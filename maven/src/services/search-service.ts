@@ -25,6 +25,7 @@ export interface SearchResult {
 export interface NamespaceSearchResult {
     groupId: string;
     namespaceId: string;
+    packageCount: number;
 }
 
 export interface SearchOptions {
@@ -117,7 +118,8 @@ export class SearchService {
     async listNamespaces(options: SearchOptions = {}): Promise<SearchNamespacesResult> {
         const limit = Math.max(1, options.limit ?? 50);
         const offset = Math.max(0, options.offset ?? 0);
-        const allGroupIds = this.useTestFixture ? this.getStubGroupIds() : await this.mavenService.fetchAllNamespaceIds();
+        const namespaceIndex = this.useTestFixture ? null : await this.mavenService.fetchNamespaceIndex();
+        const allGroupIds = namespaceIndex?.ids ?? this.getStubGroupIds();
         const idMap = buildNamespaceIdMap(allGroupIds);
         const query = options.query?.trim().toLowerCase();
 
@@ -131,7 +133,12 @@ export class SearchService {
                 return !wildcard || groupId.toLowerCase().includes(wildcard);
             })
             .sort((left, right) => left.localeCompare(right))
-            .map((groupId) => ({ groupId, namespaceId: idMap.get(groupId) || groupId }));
+            .map((groupId) => ({
+                groupId,
+                namespaceId: idMap.get(groupId) || groupId,
+                packageCount: namespaceIndex?.counts.get(groupId)
+                    ?? STUB_CATALOG.filter((entry) => entry.groupId === groupId).length,
+            }));
 
         return {
             results: filtered.slice(offset, offset + limit),
@@ -142,13 +149,19 @@ export class SearchService {
     async getNamespaceById(namespaceId: string): Promise<NamespaceSearchResult | null> {
         if (!this.useTestFixture && isVerbatimEntityId(namespaceId)) {
             const count = await this.countPackagesInNamespace(namespaceId);
-            return count > 0 ? { groupId: namespaceId, namespaceId } : null;
+            return count > 0 ? { groupId: namespaceId, namespaceId, packageCount: count } : null;
         }
         const allGroupIds = this.useTestFixture ? this.getStubGroupIds() : await this.mavenService.fetchAllNamespaceIds();
         const idMap = buildNamespaceIdMap(allGroupIds);
         for (const groupId of allGroupIds) {
             if (idMap.get(groupId) === namespaceId) {
-                return { groupId, namespaceId };
+                return {
+                    groupId,
+                    namespaceId,
+                    packageCount: this.useTestFixture
+                        ? STUB_CATALOG.filter((entry) => entry.groupId === groupId).length
+                        : (await this.mavenService.fetchNamespaceIndex()).counts.get(groupId) ?? 0,
+                };
             }
         }
         return null;
@@ -158,7 +171,14 @@ export class SearchService {
         const allGroupIds = this.useTestFixture ? this.getStubGroupIds() : await this.mavenService.fetchAllNamespaceIds();
         const idMap = buildNamespaceIdMap(allGroupIds);
         const namespaceId = idMap.get(groupId);
-        return namespaceId ? { groupId, namespaceId } : null;
+        if (!namespaceId) return null;
+        return {
+            groupId,
+            namespaceId,
+            packageCount: this.useTestFixture
+                ? STUB_CATALOG.filter((entry) => entry.groupId === groupId).length
+                : (await this.mavenService.fetchNamespaceIndex()).counts.get(groupId) ?? 0,
+        };
     }
 
     async countPackagesInNamespace(groupId: string): Promise<number> {

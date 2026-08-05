@@ -26,6 +26,7 @@ export class CheckpointService {
     private identityByPath = new Map<string, ModuleIdentity>();
     private pathByIdentity = new Map<string, string>();
     private groupIds: string[] = [];
+    private groupModuleCounts = new Map<string, number>();
 
     constructor(cacheDir: string) {
         this.catalogPath = path.join(cacheDir, CATALOG_FILENAME);
@@ -47,6 +48,7 @@ export class CheckpointService {
     private rebuildIdentityMaps(): void {
         this.identityByPath.clear();
         this.pathByIdentity.clear();
+        this.groupModuleCounts.clear();
 
         const modulePaths = Object.keys(this.catalog.modules).sort();
         const groups = new Set<string>();
@@ -56,6 +58,7 @@ export class CheckpointService {
             this.identityByPath.set(modulePath, identity);
             this.pathByIdentity.set(`${identity.groupId}\u0000${identity.moduleId}`, modulePath);
             groups.add(identity.groupId);
+            this.groupModuleCounts.set(identity.groupId, (this.groupModuleCounts.get(identity.groupId) ?? 0) + 1);
         }
 
         this.groupIds = [...groups].sort();
@@ -163,7 +166,7 @@ export class CheckpointService {
     }
 
     getGroupModuleCount(groupId: string): number {
-        return [...this.identityByPath.values()].filter((identity) => identity.groupId === groupId).length;
+        return this.groupModuleCounts.get(groupId) ?? 0;
     }
 
     getEntryCount(): number {

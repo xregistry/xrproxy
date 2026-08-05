@@ -108,6 +108,28 @@ export interface XRegistryPackage extends XRegistryVersion {
     versions?: Record<string, XRegistryVersion>;
 }
 
+/**
+ * A lightweight package collection entry built directly from a catalogue name,
+ * with no upstream gem/version metadata fetched. Package collections are
+ * populated from the RubyGems compact index (see NAMES_INDEX) and only carry
+ * xRegistry identity/addressing attributes; full detail (version history,
+ * gemspec metadata, owners, etc.) is fetched lazily when a caller GETs the
+ * individual Resource (`/packages/{name}`), its `/meta`, or its `/versions`.
+ * Only `name` is required by the xRegistry model for this Resource type, so
+ * this shape is a valid, spec-conformant partial projection.
+ */
+export interface XRegistryPackageSummary {
+    packageid: string;
+    name: string;
+    xid: string;
+    self: string;
+    epoch: number;
+    createdat: string;
+    modifiedat: string;
+    metaurl: string;
+    versionsurl: string;
+}
+
 export interface XRegistryError {
     type: string;
     title: string;

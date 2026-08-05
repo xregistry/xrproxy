@@ -171,6 +171,18 @@ if (VIEWER_ENABLED && VIEWER_PROXY_ENABLED) {
 
 // Add root-level /health endpoint that always responds (for Azure health checks)
 // This must be registered BEFORE API prefix routing
+//
+// Liveness/readiness contract: both endpoints below are constant-time and
+// read only the in-memory downstream state maintained by the background
+// initialization/retry loop (HealthService.getHealth) - they never perform
+// a live network fan-out to downstreams on the request path. That keeps
+// probe latency bounded and independent of downstream availability, which
+// matters because Kubernetes (and Azure Container Apps) health probes that
+// stall or time out can cause the pod/revision to be killed or never
+// promoted. For an on-demand active probe of every downstream, see
+// GET /health/detailed (bounded by SERVER_HEALTH_TIMEOUT per downstream and
+// cached for HEALTH_PROBE_CACHE_TTL ms) - never wire that one into a
+// liveness/readiness check.
 app.get('/health', async (_req: Request, res: Response) => {
     const health = await healthService.getHealth();
     res.status(200).json(health);
@@ -180,6 +192,13 @@ app.get('/health', async (_req: Request, res: Response) => {
 // one downstream has initialized and contributed routes to the bridge.
 app.get('/ready', async (_req: Request, res: Response) => {
     const health = await healthService.getHealth();
+    res.status(health.status === 'healthy' ? 200 : 503).json(health);
+});
+
+// Diagnostic-only: active, cached, bounded probe of every downstream.
+// Do NOT use for liveness/readiness - see comment above.
+app.get('/health/detailed', async (_req: Request, res: Response) => {
+    const health = await healthService.getDetailedHealth();
     res.status(health.status === 'healthy' ? 200 : 503).json(health);
 });
 

@@ -3,6 +3,8 @@
  */
 
 import express from 'express';
+import { mkdir, readFile, rename, writeFile } from 'fs/promises';
+import path from 'path';
 import { EntityStateManager } from '../../shared/entity-state-manager';
 import * as modelData from '../model.json';
 import { CacheManager } from './cache/cache-manager';
@@ -48,6 +50,19 @@ export interface ServerOptions {
     cacheEnabled?: boolean;
     cacheTtl?: number;
     logLevel?: string;
+    indexCacheDir?: string;
+}
+
+interface ScopeIndexEntry {
+    id: string;
+    ranges: Array<{ start: number; end: number }>;
+}
+
+interface ScopeIndexSnapshot {
+    packageCount: number;
+    firstPackageName: string;
+    lastPackageName: string;
+    scopes: ScopeIndexEntry[];
 }
 
 export class XRegistryServer {
@@ -62,8 +77,9 @@ export class XRegistryServer {
     private options: Required<ServerOptions>;
     private packageNamesCache: string[] = [];
     private scopeCounts = new Map<string, number>([[GROUP_CONFIG.UNSCOPED_ID, 0]]);
+    private scopeIds: string[] = [GROUP_CONFIG.UNSCOPED_ID];
+    private scopeRanges = new Map<string, Array<{ start: number; end: number }>>();
     private packageNameByIdentity = new Map<string, string>();
-    private packageNamesByScope = new Map<string, string[]>();
     private cacheLoadingPromise: Promise<void> | null = null;
     private model: any;
 
@@ -75,6 +91,7 @@ export class XRegistryServer {
             cacheEnabled: options.cacheEnabled !== false,
             cacheTtl: options.cacheTtl || CACHE_CONFIG.CACHE_TTL_MS,
             logLevel: options.logLevel || 'info',
+            indexCacheDir: options.indexCacheDir || CACHE_CONFIG.CACHE_DIR,
         };
 
         this.logger = new SimpleLogger();
@@ -180,7 +197,9 @@ export class XRegistryServer {
                 registryInfo.capabilities = this.getCapabilities();
             }
             if (inline.includes('*') || inline.includes(GROUP_CONFIG.TYPE)) {
-                registryInfo[GROUP_CONFIG.TYPE] = this.buildNodescopeCollection(baseUrl, scopeCounts);
+                const { limit, offset } = this.getPagination(req);
+                registryInfo[GROUP_CONFIG.TYPE] = this.buildNodescopeCollection(baseUrl, this.scopeIds.slice(offset, offset + limit), scopeCounts);
+                this.setCollectionHeaders(req, res, `/${GROUP_CONFIG.TYPE}`, offset, scopeCounts.size, limit);
             }
 
             res.set('Content-Type', 'application/json');
@@ -210,7 +229,20 @@ export class XRegistryServer {
 
         this.app.get('/nodescopes', async (req, res) => {
             await this.cacheLoadingPromise;
-            res.json(this.buildNodescopeCollection(getBaseUrl(req), this.buildScopeCounts()));
+            const baseUrl = getBaseUrl(req);
+            const counts = this.buildScopeCounts();
+            const { limit, offset } = this.getPagination(req);
+            const filter = req.query['filter'] as string | undefined;
+            const sort = req.query['sort'] as string | undefined;
+            let scopeIds = filter
+                ? this.scopeIds.filter((scopeId) => this.matchesNodescopeFilter(scopeId, filter))
+                : this.scopeIds;
+            if (sort?.toLowerCase().endsWith('=desc')) {
+                scopeIds = [...scopeIds].reverse();
+            }
+            const totalCount = scopeIds.length;
+            this.setCollectionHeaders(req, res, `/${GROUP_CONFIG.TYPE}`, offset, totalCount, limit);
+            res.json(this.buildNodescopeCollection(baseUrl, scopeIds.slice(offset, offset + limit), counts));
         });
 
         this.app.get('/nodescopes/:nodescopeId', async (req, res) => {
@@ -241,16 +273,23 @@ export class XRegistryServer {
             const filter = req.query['filter'] as string | undefined;
             const sort = req.query['sort'] as string | undefined;
 
-            let packageNames = this.packageNamesByScope.get(nodescopeId) || [];
-            if (filter) {
-                packageNames = packageNames.filter((packageName) => this.matchesPackageFilter(packageName, nodescopeId, filter));
+            const ranges = this.scopeRanges.get(nodescopeId) ?? [];
+            let totalCount: number;
+            let page: string[];
+            if (!filter && !sort) {
+                totalCount = this.countScopeRangeEntries(ranges);
+                page = this.sliceScopeNames(ranges, offset, limit);
+            } else {
+                let packageNames = ranges.flatMap((range) => this.packageNamesCache.slice(range.start, range.end));
+                if (filter) {
+                    packageNames = packageNames.filter((packageName) => this.matchesPackageFilter(packageName, nodescopeId, filter));
+                }
+                if (sort) {
+                    packageNames = this.sortPackageNames(packageNames, sort);
+                }
+                totalCount = packageNames.length;
+                page = packageNames.slice(offset, offset + limit);
             }
-            if (sort) {
-                packageNames = this.sortPackageNames(packageNames, sort);
-            }
-
-            const totalCount = packageNames.length;
-            const page = packageNames.slice(offset, offset + limit);
             const packages: Record<string, any> = {};
 
             page.forEach((packageName) => {
@@ -267,12 +306,7 @@ export class XRegistryServer {
                 };
             });
 
-            if (offset + limit < totalCount) {
-                const nextOffset = offset + limit;
-                const nextUrl = `${baseUrl}/nodescopes/${nodescopeId}/packages?limit=${limit}&offset=${nextOffset}${filter ? `&filter=${encodeURIComponent(filter)}` : ''}${sort ? `&sort=${encodeURIComponent(sort)}` : ''}`;
-                res.set('Link', `<${nextUrl}>; rel="next"`);
-            }
-
+            this.setCollectionHeaders(req, res, `/nodescopes/${nodescopeId}/packages`, offset, totalCount, limit);
             res.json(packages);
         });
 
@@ -450,13 +484,98 @@ export class XRegistryServer {
         return this.scopeCounts;
     }
 
-    private buildNodescopeCollection(baseUrl: string, counts: Map<string, number>) {
+    private buildNodescopeCollection(baseUrl: string, scopeIds: string[], counts: Map<string, number>) {
         const collection: Record<string, any> = {};
-        Array.from(counts.keys()).sort().forEach((nodescopeId) => {
+        scopeIds.forEach((nodescopeId) => {
             const groupPath = `/nodescopes/${nodescopeId}`;
             collection[nodescopeId] = this.buildGroupEntity(baseUrl, groupPath, nodescopeId, counts.get(nodescopeId) || 0);
         });
         return collection;
+    }
+
+    private countScopeRangeEntries(ranges: Array<{ start: number; end: number }>): number {
+        return ranges.reduce((total, range) => total + range.end - range.start, 0);
+    }
+
+    private sliceScopeNames(ranges: Array<{ start: number; end: number }>, offset: number, limit: number): string[] {
+        const names: string[] = [];
+        let remainingOffset = offset;
+        for (const range of ranges) {
+            const rangeLength = range.end - range.start;
+            if (remainingOffset >= rangeLength) {
+                remainingOffset -= rangeLength;
+                continue;
+            }
+            const start = range.start + remainingOffset;
+            const take = Math.min(limit - names.length, range.end - start);
+            names.push(...this.packageNamesCache.slice(start, start + take));
+            remainingOffset = 0;
+            if (names.length === limit) break;
+        }
+        return names;
+    }
+
+    private getPagination(req: express.Request): { limit: number; offset: number } {
+        const parsedLimit = Number.parseInt(String(req.query['limit'] ?? PAGINATION.DEFAULT_PAGE_LIMIT), 10);
+        const parsedOffset = Number.parseInt(String(req.query['offset'] ?? 0), 10);
+        return {
+            limit: Number.isFinite(parsedLimit)
+                ? Math.min(Math.max(parsedLimit, 1), PAGINATION.MAX_PAGE_LIMIT)
+                : PAGINATION.DEFAULT_PAGE_LIMIT,
+            offset: Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : 0,
+        };
+    }
+
+    private setCollectionHeaders(
+        req: express.Request,
+        res: express.Response,
+        collectionPath: string,
+        offset: number,
+        totalCount: number,
+        limit: number,
+    ): void {
+        res.set('X-Total-Count', String(totalCount));
+        const links = this.buildPaginationLinks(req, collectionPath, offset, totalCount, limit);
+        if (links.length > 0) {
+            res.set('Link', links.join(', '));
+        }
+    }
+
+    private buildPaginationLinks(
+        req: express.Request,
+        collectionPath: string,
+        offset: number,
+        totalCount: number,
+        limit: number,
+    ): string[] {
+        if (totalCount === 0) return [];
+        const baseUrl = getBaseUrl(req);
+        const makeUrl = (targetOffset: number): string => {
+            const params = new URLSearchParams();
+            for (const [key, value] of Object.entries(req.query)) {
+                if (key === 'offset' || key === 'limit') continue;
+                if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (typeof item === 'string') params.append(key, item);
+                    }
+                } else if (typeof value === 'string') {
+                    params.set(key, value);
+                }
+            }
+            params.set('limit', String(limit));
+            params.set('offset', String(targetOffset));
+            return `${baseUrl}${collectionPath}?${params.toString()}`;
+        };
+        const links: string[] = [];
+        if (offset > 0) {
+            links.push(`<${makeUrl(0)}>; rel="first"`);
+            links.push(`<${makeUrl(Math.max(0, offset - limit))}>; rel="prev"`);
+        }
+        if (offset + limit < totalCount) {
+            links.push(`<${makeUrl(offset + limit)}>; rel="next"`);
+            links.push(`<${makeUrl(Math.floor((totalCount - 1) / limit) * limit)}>; rel="last"`);
+        }
+        return links;
     }
 
     private buildGroupEntity(baseUrl: string, groupPath: string, nodescopeId: string, packageCount: number) {
@@ -503,6 +622,26 @@ export class XRegistryServer {
         });
     }
 
+    private matchesNodescopeFilter(nodescopeId: string, filter: string): boolean {
+        const expressions = filter.split(',').map((entry) => entry.trim()).filter(Boolean);
+        const name = nodescopeId === GROUP_CONFIG.UNSCOPED_ID ? 'unscoped packages' : `@${nodescopeId}`;
+        return expressions.length === 0 || expressions.every((expression) => {
+            const operator = expression.includes('!=') ? '!=' : '=';
+            const [attribute, rawValue] = expression.split(operator);
+            const value = (rawValue || '').replace(/^['"]|['"]$/g, '');
+            const actual = attribute === 'name'
+                ? name
+                : attribute === 'nodescopeid' || attribute === 'scope'
+                    ? nodescopeId
+                    : '';
+            const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*');
+            const matches = value.includes('*')
+                ? new RegExp(`^${escaped}$`, 'i').test(actual)
+                : actual.toLowerCase() === value.toLowerCase();
+            return operator === '=' ? matches : !matches;
+        });
+    }
+
     private sortPackageNames(packageNames: string[], sort?: string): string[] {
         if (!sort) {
             return [...packageNames].sort((left, right) => left.localeCompare(right));
@@ -521,8 +660,14 @@ export class XRegistryServer {
     private async loadPackageNamesCache(): Promise<void> {
         try {
             const names = require('all-the-package-names') as string[];
-            this.packageNamesCache = Array.isArray(names) ? [...names].sort((left, right) => left.localeCompare(right)) : [];
-            this.rebuildPackageIdentityIndex();
+            this.packageNamesCache = Array.isArray(names) ? names.sort((left, right) => left.localeCompare(right)) : [];
+            const restored = await this.restoreScopeIndexSnapshot();
+            if (!restored) {
+                this.rebuildPackageIdentityIndex();
+                await this.persistScopeIndexSnapshot();
+            } else {
+                this.rebuildHashedPackageIdentityIndex();
+            }
             this.logger.info('Package names cache loaded', { count: this.packageNamesCache.length });
         } catch (error: any) {
             this.logger.warn('Failed to load all-the-package-names', { error: error.message });
@@ -542,23 +687,96 @@ export class XRegistryServer {
     private rebuildPackageIdentityIndex(): void {
         const counts = new Map<string, number>([[GROUP_CONFIG.UNSCOPED_ID, 0]]);
         const namesByIdentity = new Map<string, string>();
-        const namesByScope = new Map<string, string[]>();
+        const ranges = new Map<string, Array<{ start: number; end: number }>>();
 
-        for (const packageName of this.packageNamesCache) {
+        for (let index = 0; index < this.packageNamesCache.length; index += 1) {
+            const packageName = this.packageNamesCache[index]!;
             const nodescopeId = getNodescopeId(packageName);
             const packageId = normalizePackageId(packageName);
             counts.set(nodescopeId, (counts.get(nodescopeId) || 0) + 1);
             if (packageId.startsWith('xh~')) {
                 namesByIdentity.set(`${nodescopeId}\u0000${packageId}`, packageName);
             }
-            const scopedNames = namesByScope.get(nodescopeId) || [];
-            scopedNames.push(packageName);
-            namesByScope.set(nodescopeId, scopedNames);
+            const scopeRanges = ranges.get(nodescopeId);
+            const lastRange = scopeRanges?.[scopeRanges.length - 1];
+            if (lastRange?.end === index) {
+                lastRange.end = index + 1;
+            } else {
+                const nextRanges = scopeRanges ?? [];
+                nextRanges.push({ start: index, end: index + 1 });
+                ranges.set(nodescopeId, nextRanges);
+            }
         }
 
         this.scopeCounts = counts;
+        this.scopeIds = Array.from(counts.keys()).sort((left, right) => left.localeCompare(right));
+        this.scopeRanges = ranges;
         this.packageNameByIdentity = namesByIdentity;
-        this.packageNamesByScope = namesByScope;
+    }
+
+    private rebuildHashedPackageIdentityIndex(): void {
+        const namesByIdentity = new Map<string, string>();
+        for (const packageName of this.packageNamesCache) {
+            const packageId = normalizePackageId(packageName);
+            if (packageId.startsWith('xh~')) {
+                namesByIdentity.set(`${getNodescopeId(packageName)}\u0000${packageId}`, packageName);
+            }
+        }
+        this.packageNameByIdentity = namesByIdentity;
+    }
+
+    private async restoreScopeIndexSnapshot(): Promise<boolean> {
+        try {
+            const snapshotPath = path.join(this.options.indexCacheDir, 'npm-scope-index.json');
+            const snapshot = JSON.parse(await readFile(snapshotPath, 'utf8')) as ScopeIndexSnapshot;
+            if (
+                snapshot.packageCount !== this.packageNamesCache.length
+                || snapshot.firstPackageName !== (this.packageNamesCache[0] ?? '')
+                || snapshot.lastPackageName !== (this.packageNamesCache[this.packageNamesCache.length - 1] ?? '')
+                || !Array.isArray(snapshot.scopes)
+            ) {
+                return false;
+            }
+            const counts = new Map<string, number>();
+            const ranges = new Map<string, Array<{ start: number; end: number }>>();
+            for (const scope of snapshot.scopes) {
+                if (!scope || typeof scope.id !== 'string' || !Array.isArray(scope.ranges)) return false;
+                for (const range of scope.ranges) {
+                    if (range.start < 0 || range.end < range.start || range.end > this.packageNamesCache.length) return false;
+                }
+                counts.set(scope.id, this.countScopeRangeEntries(scope.ranges));
+                ranges.set(scope.id, scope.ranges.map((range) => ({ ...range })));
+            }
+            this.scopeCounts = counts;
+            this.scopeIds = snapshot.scopes.map((scope) => scope.id);
+            this.scopeRanges = ranges;
+            this.logger.info('Restored npm scope index snapshot', { scopes: this.scopeIds.length });
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async persistScopeIndexSnapshot(): Promise<void> {
+        try {
+            const cacheDir = this.options.indexCacheDir;
+            const snapshotPath = path.join(cacheDir, 'npm-scope-index.json');
+            const temporaryPath = `${snapshotPath}.${process.pid}.tmp`;
+            const snapshot: ScopeIndexSnapshot = {
+                packageCount: this.packageNamesCache.length,
+                firstPackageName: this.packageNamesCache[0] ?? '',
+                lastPackageName: this.packageNamesCache[this.packageNamesCache.length - 1] ?? '',
+                scopes: this.scopeIds.map((id) => {
+                    const ranges = this.scopeRanges.get(id)!;
+                    return { id, ranges };
+                }),
+            };
+            await mkdir(cacheDir, { recursive: true });
+            await writeFile(temporaryPath, JSON.stringify(snapshot), 'utf8');
+            await rename(temporaryPath, snapshotPath);
+        } catch (error: any) {
+            this.logger.warn('Failed to persist npm scope index snapshot', { error: error.message });
+        }
     }
 
     private setupErrorHandling(): void {
@@ -595,6 +813,7 @@ export class XRegistryServer {
     }
 
     async stop(): Promise<void> {
+        this.cacheManager.destroy();
         return new Promise((resolve) => {
             if (this.server) {
                 this.server.close(() => {

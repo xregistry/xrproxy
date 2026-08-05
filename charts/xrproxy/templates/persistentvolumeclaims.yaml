@@ -1,0 +1,29 @@
+{{- range $id, $service := .Values.services }}
+{{- $servicePersistenceEnabled := dig "persistence" "enabled" false $service.cache }}
+{{- $existingClaim := dig "persistence" "existingClaim" "" $service.cache }}
+{{- $persistenceEnabled := and $.Values.cache.enabled $service.enabled $service.cache.enabled (or $.Values.cache.persistence.enabled $servicePersistenceEnabled) }}
+{{- if and $persistenceEnabled (not $existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "xrproxy.serviceName" (dict "root" $ "id" $id) }}
+  labels:
+    {{- include "xrproxy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $id }}
+  {{- with $.Values.cache.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    - {{ dig "persistence" "accessMode" $.Values.cache.persistence.accessMode $service.cache }}
+  resources:
+    requests:
+      storage: {{ dig "persistence" "size" $.Values.cache.persistence.size $service.cache }}
+  {{- $storageClassName := dig "persistence" "storageClassName" $.Values.cache.persistence.storageClassName $service.cache }}
+  {{- if $storageClassName }}
+  storageClassName: {{ $storageClassName | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
