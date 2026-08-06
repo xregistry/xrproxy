@@ -1,85 +1,60 @@
-﻿/**
- * TypeScript definitions for xRegistry protocol
- * Based on xRegistry specification 1.0-rc2
- * 
- * Ensures compliance with xRegistry core specification:
- * - All entities MUST have xid, self, epoch, createdat, modifiedat
- * - xid MUST be a path starting with /
- * - self MUST be an absolute URL
- * - epoch MUST be an unsigned integer (increments on every update)
- * - Timestamps MUST be RFC3339 format, normalized to UTC
- */
-
 export interface XRegistryEntity {
-    xid: string;           // REQUIRED: Path identifier starting with /
-    self: string;          // REQUIRED: Absolute URL to this entity
-    epoch: number;         // REQUIRED: Unsigned integer for concurrency control
-    createdat: string;     // REQUIRED: RFC3339 timestamp (UTC with Z suffix)
-    modifiedat: string;    // REQUIRED: RFC3339 timestamp (UTC with Z suffix)
-    name?: string;         // OPTIONAL: Human readable name
-    description?: string;  // OPTIONAL: Description
-    documentation?: string; // OPTIONAL: Documentation URL
-    labels?: Record<string, string>;  // OPTIONAL: Key-value labels
-    shortself?: string;    // OPTIONAL: Short self-reference
-    icon?: string;         // OPTIONAL: Icon URL
-    [key: string]: any;    // Allow additional properties for dynamic content
+    xid: string;
+    self: string;
+    epoch: number;
+    createdat: string;
+    modifiedat: string;
+    name?: string;
+    description?: string;
+    documentation?: string;
+    labels?: Record<string, string>;
+    shortself?: string;
+    icon?: string;
+    [key: string]: unknown;
 }
 
 export interface Registry extends XRegistryEntity {
     specversion: string;
     registryid: string;
-    capabilities: string;
-    capabilitiesurl: string;
-    model: string;
-    modelurl: string;
-    groups: string;
     containerregistriesurl: string;
     containerregistriescount: number;
-    containerregistries: string;
+    containerregistries?: Record<string, ContainerRegistryGroup>;
+    capabilitiesurl?: string;
+    capabilities?: Record<string, unknown>;
+    modelurl?: string;
+    model?: Record<string, unknown>;
 }
 
 export interface Group extends XRegistryEntity {
-    [key: string]: any; // For dynamic URL properties like imagesurl
+    [key: string]: unknown;
 }
 
 export interface Resource extends XRegistryEntity {
-    imageid: string;       // REQUIRED: Unique image identifier (same as <RESOURCE>id)
-    versionid: string;     // REQUIRED: ID of the default Version
-    isdefault: true;       // REQUIRED: Always true for Resource (includes default Version attrs)
-    description?: string;  // OPTIONAL: Image description
-    homepage?: string;     // OPTIONAL: Homepage URL
-    repository?: string;   // OPTIONAL: Repository URL
-    ancestor?: string;     // OPTIONAL: ID of the Version this was derived from
-    contenttype?: string;  // OPTIONAL: MIME type of the Resource document
-    versionsurl?: string;  // OPTIONAL: URL to versions collection
-    versionscount?: number; // OPTIONAL: Count of versions
-    metaurl?: string;      // OPTIONAL: URL to metadata
-    docsurl?: string;      // OPTIONAL: URL to documentation
+    imageid: string;
+    versionid: string;
+    isdefault: true;
+    versionsurl?: string;
+    versionscount?: number;
+    versions?: Record<string, VersionMetadata>;
+    metaurl?: string;
+    meta?: ImageMeta;
 }
 
 export interface Version extends XRegistryEntity {
-    versionid: string;     // REQUIRED: Unique version identifier
-    isdefault: boolean;    // REQUIRED: Whether this is the default Version
-    ancestor?: string;     // OPTIONAL: ID of the Version this was derived from
-    contenttype?: string;  // OPTIONAL: MIME type of the Version document
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
+    versionid: string;
+    isdefault: boolean;
 }
 
 export interface Meta extends XRegistryEntity {
-    // Note: Meta entity has <RESOURCE>id, not separate metaid
-    readonly?: boolean;     // OPTIONAL: Whether the resource is read-only
-    compatibility?: string; // OPTIONAL: Compatibility mode
-    compatibilityauthority?: string; // OPTIONAL: Authority for compatibility
-    defaultversionid?: string;     // OPTIONAL: Default version identifier
-    defaultversionurl?: string;    // OPTIONAL: URL to default version
-    defaultversionsticky?: boolean; // OPTIONAL: Whether default version is sticky
-    xref?: string;         // OPTIONAL: Cross-reference to another Resource
-    deprecated?: {         // OPTIONAL: Deprecation information
+    readonly?: boolean;
+    defaultversionid?: string;
+    defaultversionurl?: string;
+    defaultversionsticky?: boolean;
+    deprecated?: {
         effective?: string;
         removal?: string;
         alternative?: string;
-        docs?: string;
+        documentation?: string;
     };
 }
 
@@ -89,166 +64,138 @@ export interface ErrorResponse {
     status: number;
     instance: string;
     detail?: string;
-    data?: any;
+    data?: unknown;
 }
 
-export interface FilterExpression {
-    attribute: string;
-    operator: string;
-    value: string;
+export interface LayerInfo {
+    digest: string;
+    size?: number;
+    mediatype?: string;
 }
 
-export interface PaginationInfo {
-    page: number;
-    limit: number;
-    total: number;
-    pages: number;
+export interface DescriptorInfo {
+    digest: string;
+    mediatype?: string;
+    size?: number;
 }
 
-export interface XRegistryGroupResponse {
-    [key: string]: XRegistryEntity[];
+export interface ReferrerInfo extends DescriptorInfo {
+    artifact_type?: string;
+    annotations?: Record<string, string>;
 }
 
-export interface XRegistryResourceResponse {
-    [key: string]: XRegistryEntity[];
+export interface PlatformInfo {
+    architecture: string;
+    os: string;
+    variant?: string;
+    digest: string;
+    size?: number;
+    mediatype?: string;
 }
 
-export interface CacheStats {
-    hitCount: number;
-    missCount: number;
-    hitRate: number;
-    size: number;
-    maxSize: number;
-}
-
-export type SortDirection = 'asc' | 'desc';
-
-export interface SortParams {
-    attribute: string;
-    direction: SortDirection;
-}
-
-export interface InlineParams {
-    depth: number;
-    attributes: string[];
-}
-
-/**
- * OCI Image metadata extending xRegistry Resource
- * Represents a container image as an xRegistry Resource entity
- */
-export interface ImageMetadata extends Omit<Resource, 'author'> {
-    imageid: string;       // REQUIRED: Unique image identifier
-    versionid: string;     // REQUIRED: ID of the default Version
-    isdefault: true;       // REQUIRED: Always true (Resource includes default Version)
-    name: string;
+export interface OciLabelProjection {
+    title?: string;
     description?: string;
-    versions: Record<string, VersionMetadata>;
-    versionsurl?: string;
-    versionscount?: number;
-    metaurl?: string;
-    distTags?: Record<string, string>;
-    registry?: string;
-    namespace?: string;
-    repository?: string;
-    metadata?: {
-        digest?: string;
-        manifest_mediatype?: string;
-        schema_version?: number;
-        layers_count?: number;
-        architecture?: string;
-        os?: string;
-        size_bytes?: number;
-        is_multi_platform?: boolean;
-        available_platforms?: Array<{
-            architecture: string;
-            os: string;
-            variant?: string;
-            digest: string;
-            size: number;
-            mediaType: string;
-        }>;
-        oci_labels?: {
-            version?: string;
-            revision?: string;
-            source?: string;
-            documentation?: string;
-            licenses?: string;
-            vendor?: string;
-            authors?: string;
-            url?: string;
-            title?: string;
-            created?: string;
-        };
-        environment?: string[];
-        working_dir?: string;
-        entrypoint?: string[];
-        cmd?: string[];
-        user?: string;
-        exposed_ports?: string[];
-        volumes?: string[];
-    };
-    layers?: Array<{
-        digest: string;
-        size: number;
-        mediaType: string;
-    }>;
-    build_history?: Array<{
-        step?: number;
-        created?: string;
-        created_by?: string;
-        empty_layer?: boolean;
-        comment?: string;
-    }>;
+    version?: string;
+    created?: string;
+    revision?: string;
+    source?: string;
+    url?: string;
+    documentation?: string;
+    licenses?: string;
+    vendor?: string;
+    authors?: string;
+    ref_name?: string;
+    base_digest?: string;
+    base_name?: string;
+}
+
+export interface BuildHistoryEntry {
+    step: number;
+    created?: string;
+    created_by?: string;
+    empty_layer?: boolean;
+    author?: string;
+    comment?: string;
+}
+
+export interface OciVersionDetails {
+    digest?: string;
+    manifest_mediatype?: string;
+    artifact_type?: string;
+    subject?: DescriptorInfo;
+    config?: DescriptorInfo;
+    schema_version?: number;
+    layers_count?: number;
+    architecture?: string;
+    os?: string;
+    variant?: string;
+    os_version?: string;
+    os_features?: string[];
+    size_bytes?: number;
+    is_multi_platform?: boolean;
+    available_platforms?: PlatformInfo[];
+    oci_labels?: OciLabelProjection;
+    environment?: string[];
+    working_dir?: string;
+    entrypoint?: string[];
+    cmd?: string[];
+    user?: string;
+    stop_signal?: string;
+    author?: string;
+    rootfs_diff_ids?: string[];
+    exposed_ports?: string[];
+    volumes?: string[];
+}
+
+export interface ImageVersionProjection extends Version {
+    annotations?: Record<string, string>;
+    config_labels?: Record<string, string>;
+    layers?: LayerInfo[];
+    build_history?: BuildHistoryEntry[];
     urls?: {
         pull?: string;
         manifest?: string;
         config?: string;
     };
-    annotations?: Record<string, string>;
-    vulnerabilities?: any;
+    referrers?: ReferrerInfo[];
+    vulnerabilities?: unknown;
     pushed?: string;
-    pulled?: number;
-    starred?: number;
-    deprecated?: string;
-    homepage?: string;
-    license?: string;
-    maintainers?: string[];
-    created?: string | undefined;
-    updated?: string;
-    pullCount?: number;
+    metadata?: OciVersionDetails;
 }
 
-/**
- * OCI Version/Tag metadata extending xRegistry Version
- * Represents a container image tag/version as an xRegistry Version entity
- */
-export interface VersionMetadata extends Version {
-    versionid: string;     // REQUIRED: Unique version identifier
-    isdefault: boolean;    // REQUIRED: Whether this is the default Version
-    version: string;       // Alias for versionid
-    name?: string;
-    description?: string;
-    ancestor?: string;     // OPTIONAL: Parent version this was derived from
-    created?: string | undefined;
-    size?: number | undefined;
-    digest?: string | undefined;
-    architecture?: string | undefined;
-    os?: string | undefined;
-    layers?: Array<{
-        digest: string;
-        size: number;
-        mediaType: string;
-    }>;
-    config?: {
-        digest: string;
-        size: number;
-        mediaType: string;
-    } | undefined;
-    annotations?: Record<string, string> | undefined;
-    platform?: {
-        architecture: string;
-        os: string;
-        variant?: string;
-    } | undefined;
-} 
+export interface ImageMeta extends Meta {
+    sourceurl?: string;
+    namespace?: string;
+    repository?: string;
+    pulled?: number;
+    starred?: number;
+    deprecated_message?: string;
+}
+
+export interface ImageMetadata extends Resource {
+    annotations?: Record<string, string>;
+    config_labels?: Record<string, string>;
+    layers?: LayerInfo[];
+    build_history?: BuildHistoryEntry[];
+    urls?: {
+        pull?: string;
+        manifest?: string;
+        config?: string;
+    };
+    referrers?: ReferrerInfo[];
+    vulnerabilities?: unknown;
+    pushed?: string;
+    metadata?: OciVersionDetails;
+}
+
+export interface VersionMetadata extends ImageVersionProjection {
+}
+
+export interface ContainerRegistryGroup extends Group {
+    containerregistryid: string;
+    sourceurl?: string;
+    imagesurl: string;
+    imagescount: number;
+    images?: Record<string, ImageMetadata>;
+}

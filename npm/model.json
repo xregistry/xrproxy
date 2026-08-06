@@ -1,9 +1,19 @@
 {
   "groups": {
-    "noderegistries": {
-      "description": "Node.js package registry provider (e.g., npmjs.org).",
-      "plural": "noderegistries",
-      "singular": "noderegistry",
+    "nodescopes": {
+      "description": "An npm scope. A scope is the namespace granted to an npm user account or organization, and it is what allows two publishers to use the same package name without conflict. The reserved scope '_' holds the unscoped, flat global namespace, in which a bare package name is unique across all publishers.",
+      "plural": "nodescopes",
+      "singular": "nodescope",
+      "attributes": {
+        "scope": {
+          "type": "string",
+          "description": "The npm scope this Group represents, without the leading '@', e.g. 'babel'. For the reserved unscoped Group this attribute MUST be absent, since unscoped packages belong to no scope."
+        },
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the npm registry from which this scope was projected, e.g. 'https://registry.npmjs.org'. This records provenance only; npm metadata documents are registry-agnostic and a package name denotes the same package whichever registry serves it."
+        }
+      },
       "resources": {
         "packages": {
           "description": "A Node.js package in the registry, including its metadata and available versions.",
@@ -13,18 +23,65 @@
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The canonical name of the Node.js package."
+              "required": true,
+              "description": "The canonical npm package name, verbatim and unaltered, including the leading '@scope/' for scoped packages. This is the authoritative name of the package; the packageid is only an addressing key and omits the scope, which is promoted to the Group."
             },
             "license": {
               "type": "string",
               "description": "The license under which the package is distributed."
             },
             "author": {
-              "type": "string",
-              "description": "The author or maintainer of the package."
+              "type": "object",
+              "description": "The author of the package. npm normalizes the upstream 'author' field, whether written as a string or as an object, into a person object.",
+              "attributes": {
+                "name": {
+                  "type": "string",
+                  "description": "The person's name."
+                },
+                "email": {
+                  "type": "string",
+                  "description": "The person's email address."
+                },
+                "url": {
+                  "type": "url",
+                  "description": "A URL identifying the person, such as a home page or profile."
+                }
+              }
+            },
+            "dist": {
+              "type": "object",
+              "required": true,
+              "description": "The distribution record for this version: where the published tarball can be fetched and how its integrity can be verified. npm guarantees this object is present on every published version.",
+              "attributes": {
+                "tarball": {
+                  "type": "url",
+                  "required": true,
+                  "description": "URL of the published tarball for this version."
+                },
+                "shasum": {
+                  "type": "string",
+                  "description": "Lowercase hex SHA-1 digest of the tarball, as published by the registry."
+                },
+                "integrity": {
+                  "type": "string",
+                  "description": "Subresource Integrity string for the tarball, e.g. 'sha512-...'. Present for versions published by npm 5 and later."
+                },
+                "file_count": {
+                  "type": "uinteger",
+                  "description": "Number of files contained in the tarball. Projects npm 'fileCount'."
+                },
+                "unpacked_size": {
+                  "type": "uinteger",
+                  "description": "Total size in bytes of the tarball contents once unpacked. Projects npm 'unpackedSize'."
+                },
+                "npm-signature": {
+                  "type": "string",
+                  "description": "Detached PGP signature over the package name, version and integrity value, as issued by the registry."
+                }
+              }
             },
             "homepage": {
-              "type": "string",
+              "type": "url",
               "description": "The main homepage URL for the package."
             },
             "repository": {
@@ -48,7 +105,7 @@
                   "package": {
                     "type": "xid",
                     "description": "Cross-reference to the dependency package in the registry.",
-                    "target": "/noderegistries/package"
+                    "target": "/nodescopes/packages"
                   }
                 }
               }
@@ -63,7 +120,21 @@
             "maintainers": {
               "type": "array",
               "item": {
-                "type": "object"
+                "type": "object",
+                "attributes": {
+                  "name": {
+                    "type": "string",
+                    "description": "The person's name, which for a maintainer is their npm account name."
+                  },
+                  "email": {
+                    "type": "string",
+                    "description": "The person's email address."
+                  },
+                  "url": {
+                    "type": "url",
+                    "description": "A URL identifying the person, such as a home page or profile."
+                  }
+                }
               },
               "description": "A list of maintainers for the package."
             },
@@ -82,7 +153,21 @@
             "contributors": {
               "type": "array",
               "item": {
-                "type": "object"
+                "type": "object",
+                "attributes": {
+                  "name": {
+                    "type": "string",
+                    "description": "The person's name."
+                  },
+                  "email": {
+                    "type": "string",
+                    "description": "The person's email address."
+                  },
+                  "url": {
+                    "type": "url",
+                    "description": "A URL identifying the person, such as a home page or profile."
+                  }
+                }
               },
               "description": "List of contributors to the package."
             },
@@ -90,13 +175,27 @@
               "type": "object",
               "description": "Node.js engine requirements."
             },
-            "deprecated": {
-              "type": "string",
-              "description": "Deprecation notice if the package is deprecated."
-            },
-            "devDependencies": {
+            "os": {
               "type": "array",
-              "description": "Development dependencies for the package.",
+              "item": {
+                "type": "string"
+              },
+              "description": "Operating systems on which this version is installable, using npm's process.platform values, e.g. 'linux' or 'darwin'. An entry prefixed with '!' excludes that platform."
+            },
+            "cpu": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "CPU architectures on which this version is installable, using npm's process.arch values, e.g. 'x64' or 'arm64'. An entry prefixed with '!' excludes that architecture."
+            },
+            "deprecated_message": {
+              "type": "string",
+              "description": "The npm 'deprecated' notice. Its presence indicates the package or version is deprecated; the core 'deprecated' object attribute MUST also be set when this attribute is present."
+            },
+            "dev_dependencies": {
+              "type": "array",
+              "description": "Development dependencies for the package. Projects npm 'devDependencies'.",
               "item": {
                 "type": "object",
                 "attributes": {
@@ -111,14 +210,14 @@
                   "package": {
                     "type": "xid",
                     "description": "Cross-reference to the development dependency package in the registry.",
-                    "target": "/noderegistries/package"
+                    "target": "/nodescopes/packages"
                   }
                 }
               }
             },
-            "peerDependencies": {
+            "peer_dependencies": {
               "type": "array",
-              "description": "Peer dependencies for the package.",
+              "description": "Peer dependencies for the package. Projects npm 'peerDependencies'.",
               "item": {
                 "type": "object",
                 "attributes": {
@@ -133,19 +232,55 @@
                   "package": {
                     "type": "xid",
                     "description": "Cross-reference to the peer dependency package in the registry.",
-                    "target": "/noderegistries/package"
+                    "target": "/nodescopes/packages"
                   }
                 }
               }
             },
-            "optionalDependencies": {
-              "type": "object",
-              "description": "Optional dependencies for the package."
+            "optional_dependencies": {
+              "type": "array",
+              "description": "Optional dependencies for the package: dependencies whose installation failure does not fail the install. Projects npm 'optionalDependencies'.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the optional dependency package."
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "The version specifier for the optional dependency (e.g., ^1.0.0, ~2.1.0)."
+                  },
+                  "package": {
+                    "type": "xid",
+                    "description": "Cross-reference to the optional dependency package in the registry.",
+                    "target": "/nodescopes/packages"
+                  }
+                }
+              }
             },
-            "package": {
+            "bundle_dependencies": {
+              "type": "array",
+              "description": "Dependencies that are bundled inside this version's published tarball. Projects npm 'bundleDependencies'. The upstream field is a list of names only, so no version range is carried.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the bundled dependency package."
+                  },
+                  "package": {
+                    "type": "xid",
+                    "description": "Cross-reference to the bundled dependency package in the registry.",
+                    "target": "/nodescopes/packages"
+                  }
+                }
+              }
+            },
+            "replacedby": {
               "type": "xid",
-              "description": "Cross-reference to another package resource when applicable.",
-              "target": "/noderegistries/package"
+              "description": "Cross-reference to the package that supersedes this one, when the registry or publisher has identified a replacement.",
+              "target": "/nodescopes/packages"
             }
           }
         }

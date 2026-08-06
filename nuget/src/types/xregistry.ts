@@ -1,71 +1,139 @@
 /**
- * TypeScript definitions for xRegistry protocol
- * Based on xRegistry specification 1.0-rc2
- * 
- * Ensures compliance with xRegistry core specification:
- * - All entities MUST have xid, self, epoch, createdat, modifiedat
- * - xid MUST be a path starting with /
- * - self MUST be an absolute URL
- * - epoch MUST be a positive integer
- * - Timestamps MUST be RFC3339 format
+ * xRegistry type definitions for the NuGet projection.
  */
 
 export interface XRegistryEntity {
-    xid: string;           // REQUIRED: Path identifier starting with /
-    name?: string;         // OPTIONAL: Human readable name
-    description?: string;  // OPTIONAL: Description
-    epoch: number;         // REQUIRED: Positive integer for versioning
-    createdat: string;     // REQUIRED: RFC3339 timestamp
-    modifiedat: string;    // REQUIRED: RFC3339 timestamp  
-    labels?: Record<string, string>;  // OPTIONAL: Key-value labels
-    documentation?: string; // OPTIONAL: Documentation URL
-    shortself?: string;    // OPTIONAL: Short self-reference
-    self: string;          // REQUIRED: Absolute URL to this entity
-    [key: string]: any;    // Allow additional properties for dynamic content
+    xid: string;
+    self: string;
+    epoch: number;
+    createdat: string;
+    modifiedat: string;
+    name?: string;
+    description?: string;
+    documentation?: string;
+    labels?: Record<string, string>;
+    shortself?: string;
+    [key: string]: unknown;
 }
 
 export interface Registry extends XRegistryEntity {
     specversion: string;
     registryid: string;
-    capabilities: string;
-    capabilitiesurl: string;
-    model: string;
     modelurl: string;
-    groups: string;
+    capabilitiesurl: string;
     dotnetregistriesurl: string;
     dotnetregistriescount: number;
-    dotnetregistries: string;
+    dotnetregistries?: Record<string, Group>;
+    capabilities?: Record<string, unknown>;
+    model?: Record<string, unknown>;
+    modelsource?: Record<string, unknown>;
 }
 
 export interface Group extends XRegistryEntity {
-    [key: string]: any; // For dynamic URL properties like packagesurl
+    dotnetregistryid: string;
+    sourceurl?: string;
+    all_repository_signed?: boolean;
+    repository_signing_certificates?: RepositorySigningCertificate[];
+    packagesurl: string;
+    packagescount: number;
+    packages?: Record<string, Resource>;
 }
 
-export interface Resource extends XRegistryEntity {
-    packageid: string;     // REQUIRED: Unique package identifier
-    author?: string;       // OPTIONAL: Package author
-    license?: string;      // OPTIONAL: License information
-    homepage?: string;     // OPTIONAL: Homepage URL
-    repository?: string;   // OPTIONAL: Repository URL
-    keywords?: string[];   // OPTIONAL: Package keywords
-    versionid?: string;    // OPTIONAL: Current/latest version ID
-    versionsurl?: string;  // OPTIONAL: URL to versions collection
-    metaurl?: string;      // OPTIONAL: URL to metadata
-    docsurl?: string;      // OPTIONAL: URL to documentation
+export interface RepositorySigningCertificate {
+    subject?: string;
+    issuer?: string;
+    fingerprint_sha256?: string;
+    not_before?: string;
+    not_after?: string;
+    content_url?: string;
 }
 
-export interface Version extends XRegistryEntity {
+export interface PackageType {
+    name: string;
+    version?: string;
+}
+
+export interface PackageRepository {
+    type?: string;
+    url?: string;
+    branch?: string;
+    commit?: string;
+}
+
+export interface PackageAlternate {
+    id?: string;
+    range?: string;
+    package?: string;
+}
+
+export interface PackageDeprecation {
+    reasons?: string[];
+    message?: string;
+    alternate_package?: PackageAlternate;
+}
+
+export interface PackageVulnerability {
+    advisory_url?: string;
+    severity?: number;
+}
+
+export interface PackageDependency {
+    name: string;
+    range?: string;
+    target_framework?: string;
+    package?: string;
+    resolved_version?: string;
+}
+
+export interface ResourceAttributes {
+    version?: string;
+    title?: string;
+    authors?: string[];
+    summary?: string;
+    language?: string;
+    icon_url?: string;
+    readme_url?: string;
+    license_url?: string;
+    license_expression?: string;
+    require_license_acceptance?: boolean;
+    project_url?: string;
+    package_content?: string;
+    min_client_version?: string;
+    listed?: boolean;
+    published?: string;
+    tags?: string[];
+    package_types?: PackageType[];
+    repository?: PackageRepository;
+    deprecation?: PackageDeprecation;
+    vulnerabilities?: PackageVulnerability[];
+    dependencies?: PackageDependency[];
+}
+
+export interface Resource extends XRegistryEntity, ResourceAttributes {
+    packageid: string;
     versionid: string;
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
+    ancestor: string;
+    metaurl: string;
+    versionsurl: string;
+    versionscount: number;
+    meta?: Meta;
+    versions?: Record<string, Version>;
+}
+
+export interface Version extends XRegistryEntity, ResourceAttributes {
+    versionid: string;
+    ancestor: string;
+    packageid?: string;
 }
 
 export interface Meta extends XRegistryEntity {
-    readonly: boolean;     // REQUIRED: Whether the resource is read-only
-    compatibility: string; // REQUIRED: Compatibility mode
-    defaultversionid?: string;     // OPTIONAL: Default version identifier
-    defaultversionurl?: string;    // OPTIONAL: URL to default version
-    defaultversionsticky?: boolean; // OPTIONAL: Whether default version is sticky
+    packageid: string;
+    defaultversionid?: string;
+    defaultversionurl?: string;
+    defaultversionsticky?: boolean;
+    owners?: string[];
+    total_downloads?: number;
+    verified?: boolean;
 }
 
 export interface ErrorResponse {
@@ -74,7 +142,6 @@ export interface ErrorResponse {
     status: number;
     instance: string;
     detail?: string;
-    data?: any;
 }
 
 export interface FilterExpression {
@@ -118,76 +185,5 @@ export interface InlineParams {
     attributes: string[];
 }
 
-/**
- * NuGet Package metadata extending xRegistry Resource
- */
-export interface PackageMetadata extends Omit<Resource, 'author' | 'repository'> {
-    distTags: Record<string, string>;
-    versions: Record<string, VersionMetadata>;
-    time: Record<string, string>;
-    maintainers?: Array<{ name: string; email: string }>;
-    author?: { name: string; email?: string };
-    repository?: {
-        type: string;
-        url: string;
-    };
-    homepage?: string;
-    bugs?: {
-        url?: string;
-        email?: string;
-    };
-    license?: string;
-    keywords?: string[];
-    readme?: string;
-    readmeFilename?: string;
-    main?: string;
-    scripts?: Record<string, string>;
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    bundledDependencies?: string[];
-    engines?: Record<string, string>;
-    os?: string[];
-    cpu?: string[];
-}
-
-/**
- * NuGet Version metadata extending xRegistry Version
- */
-export interface VersionMetadata extends Version {
-    version: string;
-    main?: string;
-    scripts?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    bundledDependencies?: string[];
-    engines?: Record<string, string>;
-    os?: string[];
-    cpu?: string[];
-    keywords?: string[];
-    author?: { name: string; email?: string };
-    license?: string;
-    repository?: {
-        type: string;
-        url: string;
-    };
-    bugs?: {
-        url?: string;
-        email?: string;
-    };
-    homepage?: string;
-    dist: {
-        integrity?: string;
-        shasum: string;
-        tarball: string;
-        fileCount?: number;
-        unpackedSize?: number;
-    };
-    _id: string;
-    _nodeVersion?: string;
-    _NuGetVersion?: string;
-    _nugetUser?: { name: string; email: string };
-    _hasShrinkwrap?: boolean;
-} 
+export type PackageMetadata = Resource;
+export type VersionMetadata = Version;

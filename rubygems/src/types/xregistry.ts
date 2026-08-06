@@ -4,22 +4,30 @@ export interface RubyGemDependency {
 }
 
 export interface RubyGemDependencies {
-    development: RubyGemDependency[];
-    runtime: RubyGemDependency[];
+    development?: RubyGemDependency[];
+    runtime?: RubyGemDependency[];
+}
+
+export interface RubyGemAttestation {
+    media_type: string;
+    bundle: Record<string, unknown>;
 }
 
 export interface RubyGemMetadata {
     name: string;
-    downloads: number;
+    downloads?: number;
     version: string;
     version_created_at?: string;
-    version_downloads: number;
-    platform: string;
-    authors: string;
-    info: string;
+    version_downloads?: number;
+    platform?: string;
+    authors?: string;
+    info?: string;
+    description?: string;
+    full_name?: string | null;
     licenses?: string[] | null;
-    metadata?: Record<string, string | null>;
+    metadata?: Record<string, string | null> | null;
     yanked?: boolean;
+    prerelease?: boolean;
     sha?: string | null;
     spec_sha?: string | null;
     project_uri?: string | null;
@@ -32,26 +40,48 @@ export interface RubyGemMetadata {
     bug_tracker_uri?: string | null;
     changelog_uri?: string | null;
     funding_uri?: string | null;
+    ruby_version?: string | null;
+    rubygems_version?: string | null;
+    requirements?: string[] | null;
+    built_at?: string | null;
     dependencies?: RubyGemDependencies;
+    attestations?: RubyGemAttestation[] | null;
 }
 
 export interface RubyGemVersion {
-    authors: string;
+    authors?: string;
     built_at?: string;
     created_at: string;
     description?: string;
-    downloads_count: number;
-    metadata?: Record<string, string | null>;
+    downloads_count?: number;
+    metadata?: Record<string, string | null> | null;
     number: string;
     summary?: string;
     platform: string;
-    rubygems_version?: string;
-    ruby_version?: string;
-    prerelease: boolean;
+    rubygems_version?: string | null;
+    ruby_version?: string | null;
+    prerelease?: boolean;
     licenses?: string[] | null;
-    requirements?: string[];
+    requirements?: string[] | null;
     sha?: string | null;
     spec_sha?: string | null;
+    full_name?: string | null;
+    yanked?: boolean;
+    dependencies?: RubyGemDependencies;
+    attestations?: RubyGemAttestation[] | null;
+}
+
+export interface RubyGemOwner {
+    handle: string;
+    role?: string;
+}
+
+export interface RubyGemUpstreamOwner {
+    handle?: string;
+    owner?: string;
+    name?: string;
+    email?: string;
+    role?: string;
 }
 
 export interface XRegistryEntity {
@@ -69,15 +99,6 @@ export interface XRegistryVersion extends XRegistryEntity {
     packageid: string;
     isdefault: boolean;
     ancestor: string;
-    number: string;
-    platform: string;
-    prerelease: boolean;
-    created_at: string;
-    downloads_count: number;
-    gem_uri: string;
-    sha: string;
-    dependencies: RubyGemDependencies;
-    yanked: boolean;
 }
 
 export interface XRegistryPackage extends XRegistryVersion {
@@ -85,6 +106,28 @@ export interface XRegistryPackage extends XRegistryVersion {
     versionsurl: string;
     versionscount: number;
     versions?: Record<string, XRegistryVersion>;
+}
+
+/**
+ * A lightweight package collection entry built directly from a catalogue name,
+ * with no upstream gem/version metadata fetched. Package collections are
+ * populated from the RubyGems compact index (see NAMES_INDEX) and only carry
+ * xRegistry identity/addressing attributes; full detail (version history,
+ * gemspec metadata, owners, etc.) is fetched lazily when a caller GETs the
+ * individual Resource (`/packages/{name}`), its `/meta`, or its `/versions`.
+ * Only `name` is required by the xRegistry model for this Resource type, so
+ * this shape is a valid, spec-conformant partial projection.
+ */
+export interface XRegistryPackageSummary {
+    packageid: string;
+    name: string;
+    xid: string;
+    self: string;
+    epoch: number;
+    createdat: string;
+    modifiedat: string;
+    metaurl: string;
+    versionsurl: string;
 }
 
 export interface XRegistryError {

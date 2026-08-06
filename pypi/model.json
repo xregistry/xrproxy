@@ -5,6 +5,12 @@
       "description": "A group representing a Python package registry provider (e.g., pypi.org). Contains all available Python package registries.",
       "plural": "pythonregistries",
       "singular": "pythonregistry",
+      "attributes": {
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the Python package index from which these projects were projected, e.g. 'https://pypi.org/simple/'. This records provenance only; a project name denotes the same project whichever index serves it."
+        }
+      },
       "resources": {
         "packages": {
           "description": "A resource representing a Python package in the registry, including its metadata and available versions.",
@@ -14,7 +20,13 @@
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The canonical name of the Python package."
+              "required": true,
+              "description": "The project name exactly as published, in the non-normalized form declared by the distribution's 'Name' metadata field. This is the authoritative name of the project; the packageid is normally the normalized form and MUST NOT be substituted for this value."
+            },
+            "version": {
+              "type": "string",
+              "required": true,
+              "description": "The PEP 440 version string exactly as published, including any local version segment introduced by '+'. This is the authoritative version; the versionid is a transliteration of it and MUST NOT be reversed."
             },
             "summary": {
               "type": "string",
@@ -22,15 +34,26 @@
             },
             "license": {
               "type": "string",
-              "description": "The license under which the package is distributed."
+              "description": "The legacy 'License' Core Metadata field. Deprecated by Core Metadata 2.4 in favour of 'license_expression'; the two are mutually exclusive."
+            },
+            "license_expression": {
+              "type": "string",
+              "description": "The 'License-Expression' Core Metadata 2.4 field: a valid SPDX license expression. Mutually exclusive with 'license'."
+            },
+            "license_files": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The 'License-File' Core Metadata 2.4 fields: paths to license files included in the distribution."
             },
             "author": {
               "type": "string",
-              "description": "The author or maintainer of the package."
+              "description": "The 'Author' Core Metadata field. Frequently absent in modern projects, which carry the author's name inside 'author_email' instead."
             },
             "author_email": {
               "type": "string",
-              "description": "The email of the package author."
+              "description": "The 'Author-email' Core Metadata field. May be a bare address or one or more RFC 5322 name-address pairs such as '\"A. Author\" <a@example.com>', in which case the name is carried here rather than in 'author'."
             },
             "maintainer": {
               "type": "string",
@@ -41,16 +64,23 @@
               "description": "The email of the package maintainer."
             },
             "home_page": {
-              "type": "string",
+              "type": "url",
               "description": "The main homepage URL for the package."
             },
             "project_url": {
-              "type": "string",
+              "type": "url",
               "description": "The main project URL or repository for the package."
             },
             "project_urls": {
-              "type": "object",
-              "description": "Dictionary of additional project URLs."
+              "type": "map",
+              "item": {
+                "type": "string"
+              },
+              "description": "Map of additional project URLs, keyed by label."
+            },
+            "keywords": {
+              "type": "string",
+              "description": "The 'Keywords' Core Metadata field, as served by the API: a single comma-separated string."
             },
             "description_content_type": {
               "type": "string",
@@ -60,7 +90,7 @@
               "type": "array",
               "item": {
                 "type": "object",
-                "properties": {
+                "attributes": {
                   "specifier": {
                     "type": "string",
                     "description": "Original dependency specifier string following PEP 508 format."
@@ -68,7 +98,7 @@
                   "package": {
                     "type": "xid",
                     "description": "XID reference to the package in this registry.",
-                    "target": "/pythonregistries/package"
+                    "target": "/pythonregistries/packages"
                   }
                 }
               },
@@ -94,7 +124,7 @@
             },
             "platform": {
               "type": "string",
-              "description": "Platform compatibility information."
+              "description": "The 'platform' field as served by the PyPI JSON API, which flattens the multi-use 'Platform' Core Metadata field into a single string. It projects the API field, not the metadata field, and is therefore typed 'string' rather than an array."
             },
             "dynamic": {
               "type": "array",
@@ -103,43 +133,66 @@
               },
               "description": "List of fields that were dynamically computed at build time."
             },
-            "yanked": {
-              "type": "boolean",
-              "description": "Whether this version has been yanked."
-            },
-            "yanked_reason": {
-              "type": "string",
-              "description": "Reason for yanking this version, if applicable."
-            },
             "urls": {
               "type": "array",
               "item": {
                 "type": "object",
-                "properties": {
+                "attributes": {
                   "filename": {
                     "type": "string"
                   },
                   "packagetype": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "The distribution format of this file, as reported by the index.",
+                    "enum": [
+                      "sdist",
+                      "bdist_wheel",
+                      "bdist_egg",
+                      "bdist_wininst",
+                      "bdist_msi",
+                      "bdist_dumb",
+                      "bdist_rpm"
+                    ],
+                    "strict": false
                   },
                   "python_version": {
                     "type": "string"
                   },
+                  "requires_python": {
+                    "type": "string",
+                    "description": "The Requires-Python constraint for this individual distribution file, which MAY differ between files of the same version."
+                  },
                   "size": {
-                    "type": "number"
+                    "type": "uinteger"
                   },
                   "upload_time": {
                     "type": "string"
                   },
                   "upload_time_iso_8601": {
-                    "type": "string"
+                    "type": "timestamp"
                   },
                   "url": {
-                    "type": "string"
+                    "type": "url"
+                  },
+                  "yanked": {
+                    "type": "boolean",
+                    "description": "Whether this individual distribution file has been yanked (PEP 592)."
+                  },
+                  "yanked_reason": {
+                    "type": "string",
+                    "description": "Reason reported for yanking this individual distribution file."
+                  },
+                  "core_metadata": {
+                    "type": "any",
+                    "description": "Projects the 'core-metadata' key served by the PyPI JSON API for this file, declaring PEP 658/714 availability of the distribution's metadata as a separate fetch: either the boolean true or a map of hash name to hash value. Allows a client to obtain the metadata without downloading the artifact."
+                  },
+                  "provenance": {
+                    "type": "url",
+                    "description": "Projects the 'provenance' key served by the JSON Simple API (api-version 1.3 or later) for this file: the URL of the PEP 740 provenance object holding the digital attestations published with the artifact. Absent when the index served no value or served null, which means the file has no attestations. The provenance object itself is deliberately not embedded."
                   },
                   "digests": {
                     "type": "object",
-                    "properties": {
+                    "attributes": {
                       "blake2b_256": {
                         "type": "string"
                       },
@@ -159,7 +212,7 @@
               "type": "array",
               "item": {
                 "type": "object",
-                "properties": {
+                "attributes": {
                   "aliases": {
                     "type": "array",
                     "item": {
@@ -182,22 +235,28 @@
                     "type": "string"
                   },
                   "link": {
-                    "type": "string"
+                    "type": "url"
                   },
                   "source": {
                     "type": "string"
                   },
                   "withdrawn": {
-                    "type": "string"
+                    "type": "timestamp"
                   }
                 }
               },
               "description": "List of known security vulnerabilities for this package."
             },
-            "package": {
+            "replacedby": {
               "type": "xid",
-              "description": "Cross-reference to another package resource when applicable.",
-              "target": "/pythonregistries/package"
+              "description": "Cross-reference to the package that supersedes this one, when the index or publisher has identified a replacement.",
+              "target": "/pythonregistries/packages"
+            }
+          },
+          "metaattributes": {
+            "organization": {
+              "type": "string",
+              "description": "The PyPI Organization account that owns the project, when the project belongs to one. Organization accounts are opt-in (subscription-based for corporate organizations, free for community projects), so most projects have no organization. Project names are flat and globally unique on PyPI after PEP 503 normalisation regardless of organization, so this attribute is provenance metadata and is not part of the project's identity."
             }
           }
         }

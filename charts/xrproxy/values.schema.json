@@ -75,10 +75,11 @@
     "cache": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "sizeLimit"],
+      "required": ["enabled", "sizeLimit", "persistence"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "sizeLimit": { "type": "string" }
+        "sizeLimit": { "type": "string" },
+        "persistence": { "$ref": "#/definitions/cachePersistence" }
       }
     },
     "pdb": {
@@ -98,15 +99,31 @@
     },
     "gateway": {
       "type": "object",
-      "required": ["enabled", "create", "className", "listener", "parentRef", "httpRoute"],
+      "required": ["enabled", "create", "className", "infrastructure", "listener", "parentRef", "httpRoute", "frontDoor"],
       "properties": {
         "enabled": { "type": "boolean" },
         "create": { "type": "boolean" },
         "className": { "type": "string" },
         "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "infrastructure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["annotations"],
+          "properties": {
+            "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
         "listener": { "type": "object" },
         "parentRef": { "type": "object" },
-        "httpRoute": { "type": "object" }
+        "httpRoute": { "type": "object" },
+        "frontDoor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profileId"],
+          "properties": {
+            "profileId": { "type": "string" }
+          }
+        }
       }
     },
     "certificate": {
@@ -138,6 +155,29 @@
         "failureThreshold": { "type": "integer", "minimum": 1 }
       }
     },
+    "cachePersistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "storageClassName", "accessMode", "size", "annotations"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "storageClassName": { "type": "string" },
+        "accessMode": { "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"] },
+        "size": { "type": "string", "minLength": 1 },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "serviceCachePersistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "existingClaim": { "type": "string" },
+        "storageClassName": { "type": "string" },
+        "accessMode": { "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"] },
+        "size": { "type": "string", "minLength": 1 }
+      }
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,
@@ -164,11 +204,13 @@
         "resources": { "type": "object" },
         "cache": {
           "type": "object",
+          "additionalProperties": false,
           "required": ["enabled", "mountPath", "sizeLimit"],
           "properties": {
             "enabled": { "type": "boolean" },
             "mountPath": { "type": "string", "pattern": "^/" },
-            "sizeLimit": { "type": "string" }
+            "sizeLimit": { "type": "string" },
+            "persistence": { "$ref": "#/definitions/serviceCachePersistence" }
           }
         },
         "autoscaling": {

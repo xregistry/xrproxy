@@ -1,43 +1,23 @@
 /**
- * xRegistry NPM Wrapper Server
- * @fileoverview Main Express server implementing xRegistry 1.0-rc2 specification for NPM packages
+ * xRegistry npm wrapper server.
  */
 
 import express from 'express';
+import { mkdir, readFile, rename, writeFile } from 'fs/promises';
+import path from 'path';
 import { EntityStateManager } from '../../shared/entity-state-manager';
 import * as modelData from '../model.json';
 import { CacheManager } from './cache/cache-manager';
 import { CacheService } from './cache/cache-service';
-import { CACHE_CONFIG, getBaseUrl } from './config/constants';
+import { CACHE_CONFIG, getBaseUrl, GROUP_CONFIG, NPM_REGISTRY, PAGINATION } from './config/constants';
 import { corsMiddleware } from './middleware/cors';
 import { errorHandler } from './middleware/error-handler';
 import { createLoggingMiddleware } from './middleware/logging';
-import { xregistryErrorHandler } from './middleware/xregistry-error-handler';
 import { parseXRegistryFlags } from './middleware/xregistry-flags';
+import { xregistryErrorHandler } from './middleware/xregistry-error-handler';
 import { NpmService } from './services/npm-service';
-import { normalizePackageId } from './utils/package-utils';
+import { findVersionById, getNodescopeId, matchesPackageIdentity, normalizePackageId, normalizeVersionId } from './utils/package-utils';
 
-// Import shared filter utilities for two-step filtering
-// @ts-ignore - JavaScript module without TypeScript declarations
-import { FilterOptimizer } from '../../shared/filter/index.js';
-
-/**
- * Strip a matched pair of surrounding single or double quotes from an
- * xRegistry filter value. Per core spec §"Filter Flag" the value
- * following `=` MAY be quoted; the route layer was leaking the quote
- * characters into the search term, so e.g. `filter=name='react'`
- * searched for the literal string `'react'` and returned zero hits.
- */
-function stripFilterQuotes(value: string): string {
-    if (value.length >= 2 &&
-        ((value.startsWith("'") && value.endsWith("'")) ||
-         (value.startsWith('"') && value.endsWith('"')))) {
-        return value.slice(1, -1);
-    }
-    return value;
-}
-
-// Simple console logger
 class SimpleLogger {
     info(message: string, data?: any) {
         console.log(`[INFO] ${message}`, data ? JSON.stringify(data, null, 2) : '');
@@ -53,17 +33,13 @@ class SimpleLogger {
     }
 }
 
-/**
- * Create RFC 9457 Problem Details response
- * @see https://www.rfc-editor.org/rfc/rfc9457.html
- */
 function createProblemDetails(status: number, title: string, detail?: string, instance?: string) {
     return {
-        type: `about:blank`,
+        type: 'about:blank',
         title,
         status,
         ...(detail && { detail }),
-        ...(instance && { instance })
+        ...(instance && { instance }),
     };
 }
 
@@ -74,118 +50,96 @@ export interface ServerOptions {
     cacheEnabled?: boolean;
     cacheTtl?: number;
     logLevel?: string;
+    indexCacheDir?: string;
+}
+
+interface ScopeIndexEntry {
+    id: string;
+    ranges: Array<{ start: number; end: number }>;
+}
+
+interface ScopeIndexSnapshot {
+    packageCount: number;
+    firstPackageName: string;
+    lastPackageName: string;
+    scopes: ScopeIndexEntry[];
 }
 
 export class XRegistryServer {
     private app: express.Application;
     private server: any;
     private npmService!: NpmService;
-    // @ts-ignore - Reserved for future use
+    // @ts-ignore - reserved for future use
     private cacheService!: CacheService;
     private cacheManager!: CacheManager;
     private logger!: SimpleLogger;
     private entityState: EntityStateManager;
     private options: Required<ServerOptions>;
-    private filterOptimizer: any; // FilterOptimizer instance
-    private packageNamesCache: Array<{ name: string;[key: string]: any }> = [];
+    private packageNamesCache: string[] = [];
+    private scopeCounts = new Map<string, number>([[GROUP_CONFIG.UNSCOPED_ID, 0]]);
+    private scopeIds: string[] = [GROUP_CONFIG.UNSCOPED_ID];
+    private scopeRanges = new Map<string, Array<{ start: number; end: number }>>();
+    private packageNameByIdentity = new Map<string, string>();
     private cacheLoadingPromise: Promise<void> | null = null;
-    private model: any; // Loaded from model.json
+    private model: any;
 
     constructor(options: ServerOptions = {}) {
         this.options = {
             port: options.port || 3100,
             host: options.host || '0.0.0.0',
-            npmRegistryUrl: options.npmRegistryUrl || 'https://registry.npmjs.org',
+            npmRegistryUrl: options.npmRegistryUrl || NPM_REGISTRY.BASE_URL,
             cacheEnabled: options.cacheEnabled !== false,
             cacheTtl: options.cacheTtl || CACHE_CONFIG.CACHE_TTL_MS,
-            logLevel: options.logLevel || 'info'
+            logLevel: options.logLevel || 'info',
+            indexCacheDir: options.indexCacheDir || CACHE_CONFIG.CACHE_DIR,
         };
 
         this.logger = new SimpleLogger();
         this.entityState = new EntityStateManager();
         this.app = express();
-        this.loadModel();
+        this.model = modelData;
         this.initializeServices();
         this.setupMiddleware();
         this.setupRoutes();
         this.setupErrorHandling();
     }
 
-    /**
-     * Load model.json
-     */
-    private loadModel(): void {
-        // Import model.json directly as a module
-        this.model = modelData;
-    }
-
-    /**
-     * Initialize services
-     */
     private initializeServices(): void {
-        // Initialize cache service
         this.cacheService = new CacheService({
             maxSize: CACHE_CONFIG.MAX_CACHE_SIZE,
             ttlMs: this.options.cacheTtl,
             enablePersistence: true,
-            cacheDir: CACHE_CONFIG.CACHE_DIR
+            cacheDir: CACHE_CONFIG.CACHE_DIR,
         });
 
-        // Initialize cache manager
         this.cacheManager = new CacheManager({
             baseDir: CACHE_CONFIG.CACHE_DIR,
-            defaultTtl: this.options.cacheTtl
+            defaultTtl: this.options.cacheTtl,
         });
 
-        // Initialize NPM service
         if (this.options.cacheEnabled) {
             this.npmService = new NpmService({
                 registryUrl: this.options.npmRegistryUrl,
                 cacheManager: this.cacheManager,
-                cacheTtl: this.options.cacheTtl
+                cacheTtl: this.options.cacheTtl,
             });
         } else {
             this.npmService = new NpmService({
                 registryUrl: this.options.npmRegistryUrl,
-                cacheTtl: this.options.cacheTtl
+                cacheTtl: this.options.cacheTtl,
             });
         }
 
-        // Initialize FilterOptimizer for two-step filtering.
-        // liteMode skips building per-entity Map indices over the ~3.76M
-        // npm package names; that index alone costs ~600 MB of heap and
-        // OOMs a 1 GiB container. See shared/filter/index.js for details.
-        this.filterOptimizer = new FilterOptimizer({
-            cacheSize: 2000,
-            maxCacheAge: 600000, // 10 minutes
-            enableTwoStepFiltering: true,
-            maxMetadataFetches: 100, // Increased to improve chance of finding metadata matches
-            liteMode: true
-        });
-
-        // Set metadata fetcher function
-        this.filterOptimizer.setMetadataFetcher(this.fetchPackageMetadata.bind(this));
-
-        // Load package names cache
-        this.cacheLoadingPromise = this.loadPackageNamesCache().then(() => {
-            this.logger.info('Cache loading complete');
-        }).catch(err => {
-            this.logger.error('Failed to load package names cache', { error: err.message });
-        });
+        this.cacheLoadingPromise = this.loadPackageNamesCache();
     }
 
-    /**
-     * Setup middleware
-     */
     private setupMiddleware(): void {
         this.app.set('trust proxy', true);
         this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
         this.app.use(corsMiddleware);
         this.app.use(createLoggingMiddleware({ logger: this.logger }));
-        // xRegistry request flags parsing (must be after body parser)
         this.app.use(parseXRegistryFlags);
-        // Intercept res.writeHead to add schema parameter to Content-Type after Express sets it
         this.app.use((_req, res, next) => {
             const originalWriteHead = res.writeHead;
             res.writeHead = function (this: typeof res, statusCode: number, ...rest: any[]) {
@@ -199,11 +153,7 @@ export class XRegistryServer {
         });
     }
 
-    /**
-     * Setup routes
-     */
     private setupRoutes(): void {
-        // Health check
         this.app.get('/health', (_req, res) => {
             res.json({
                 status: 'healthy',
@@ -212,918 +162,638 @@ export class XRegistryServer {
                 uptime: process.uptime(),
                 cache: {
                     enabled: this.options.cacheEnabled,
-                    stats: this.cacheManager.getStats()
-                }
+                    stats: this.cacheManager.getStats(),
+                    packageNames: this.packageNamesCache.length,
+                },
             });
         });
 
-        // xRegistry root endpoint
         this.app.get('/', async (req, res) => {
-            try {
-                const baseUrl = getBaseUrl(req);
-                const flags = (req as any).xregistryFlags;
-                const inline = flags?.inline || [];
-
-                const registryInfo: any = {
-                    specversion: '1.0-rc2',
-                    registryid: 'npm-wrapper',
-                    xid: '/',
-                    name: 'NPM Registry Service',
-                    self: baseUrl,
-                    description: 'xRegistry-compliant NPM package registry',
-                    documentation: 'https://docs.npmjs.com/',
-                    epoch: this.entityState.getEpoch('/'),
-                    createdat: this.entityState.getCreatedAt('/'),
-                    modifiedat: this.entityState.getModifiedAt('/'),
-                    modelurl: `${baseUrl}/model`,
-                    capabilitiesurl: `${baseUrl}/capabilities`,
-                    noderegistriesurl: `${baseUrl}/noderegistries`,
-                    noderegistriescount: 1
-                };
-
-                // Handle inline flags
-                if (inline.includes('*') || inline.includes('model')) {
-                    registryInfo.model = {
-                        groups: {
-                            noderegistries: {
-                                plural: 'noderegistries',
-                                singular: 'noderegistry',
-                                resources: {
-                                    packages: {
-                                        plural: 'packages',
-                                        singular: 'package',
-                                        versions: {
-                                            plural: 'versions',
-                                            singular: 'version'
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    };
-                }
-
-                // Default: show noderegistries collection (not inlined)
-                // Only inline if explicitly requested with inline=endpoints or inline=*
-                if (inline.includes('*') || inline.includes('endpoints')) {
-                    registryInfo.endpoints = {
-                        'npmjs.org': {
-                            name: 'npmjs.org',
-                            xid: '/noderegistries/npmjs.org',
-                            self: `${baseUrl}/noderegistries/npmjs.org`,
-                            packagesurl: `${baseUrl}/noderegistries/npmjs.org/packages`
-                        }
-                    };
-                } else {
-                    // Default: noderegistries as URL references
-                    registryInfo.noderegistries = {
-                        'npmjs.org': {
-                            name: 'npmjs.org',
-                            xid: '/noderegistries/npmjs.org',
-                            self: `${baseUrl}/noderegistries/npmjs.org`,
-                            packagesurl: `${baseUrl}/noderegistries/npmjs.org/packages`
-                        }
-                    };
-                }
-
-                res.set('Content-Type', 'application/json');
-                res.set('xRegistry-Version', '1.0-rc2');
-                res.json(registryInfo);
-            } catch (error) {
-                res.status(500).json({ error: 'Failed to retrieve registry information' });
-            }
-        });
-
-        // Capabilities endpoint
-        this.app.get('/capabilities', (_req, res) => {
-            // Per core spec §"Design: JSON Serialization", capabilities is an
-            // object with named arrays for `apis`/`flags`/`formats`/`mutable`
-            // and a `specversions` array. The top-level booleans `filter`,
-            // `sort`, `doc` that earlier revisions of this code emitted are
-            // not in the spec; their semantic role is to be entries in
-            // `flags`. `mutable` is an array of mutable areas, not a bool.
-            const capabilities = {
-                apis: ['/capabilities', '/model', '/export'],
-                flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
-                formats: ['xRegistry-json/1.0-rc2'],
-                mutable: [],
-                pagination: true,
-                specversions: ['1.0-rc2']
+            await this.cacheLoadingPromise;
+            const baseUrl = getBaseUrl(req);
+            const inline = (req as any).xregistryFlags?.inline || [];
+            const scopeCounts = this.buildScopeCounts();
+            const registryInfo: any = {
+                specversion: '1.0-rc2',
+                registryid: 'npm-wrapper',
+                xid: '/',
+                self: baseUrl,
+                name: 'NPM Registry Service',
+                description: 'xRegistry-compliant npm package registry',
+                documentation: 'https://docs.npmjs.com/',
+                epoch: this.entityState.getEpoch('/'),
+                createdat: this.entityState.getCreatedAt('/'),
+                modifiedat: this.entityState.getModifiedAt('/'),
+                modelurl: `${baseUrl}/model`,
+                capabilitiesurl: `${baseUrl}/capabilities`,
+                nodescopesurl: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
+                nodescopescount: scopeCounts.size,
             };
-            res.json(capabilities);
+
+            if (inline.includes('*') || inline.includes('model')) {
+                registryInfo.model = this.model;
+            }
+            if (inline.includes('*') || inline.includes('capabilities')) {
+                registryInfo.capabilities = this.getCapabilities();
+            }
+            if (inline.includes('*') || inline.includes(GROUP_CONFIG.TYPE)) {
+                const { limit, offset } = this.getPagination(req);
+                registryInfo[GROUP_CONFIG.TYPE] = this.buildNodescopeCollection(baseUrl, this.scopeIds.slice(offset, offset + limit), scopeCounts);
+                this.setCollectionHeaders(req, res, `/${GROUP_CONFIG.TYPE}`, offset, scopeCounts.size, limit);
+            }
+
+            res.set('Content-Type', 'application/json');
+            res.set('xRegistry-Version', '1.0-rc2');
+            res.json(registryInfo);
         });
 
-        // Export endpoint - shortcut for /?doc&inline=*,capabilities,modelsource
-        this.app.get('/export', async (_req, res) => {
-            // Redirect with export flags
-            res.redirect('/?doc&inline=*,capabilities,modelsource');
+        this.app.get('/capabilities', (_req, res) => {
+            res.json(this.getCapabilities());
         });
 
-        // Model endpoint
+        this.app.get('/export', (_req, res) => {
+            res.redirect('/?doc&inline=*,capabilities,model');
+        });
+
         this.app.get('/model', (_req, res) => {
-            // Return the full model.json content
             res.json(this.model);
         });
 
-        // Performance stats endpoint
         this.app.get('/performance/stats', (_req, res) => {
-            const optimizerStats = typeof this.filterOptimizer.getCacheStats === 'function'
-                ? this.filterOptimizer.getCacheStats()
-                : {};
-            const stats = {
-                filterOptimizer: {
-                    ...optimizerStats,
-                    indexedEntities: optimizerStats.indexedEntities ?? this.packageNamesCache.length
-                },
+            res.json({
                 packageCache: {
-                    size: this.packageNamesCache.length
-                }
-            };
-            res.json(stats);
+                    size: this.packageNamesCache.length,
+                },
+            });
         });
 
-        // Node registries collection
-        this.app.get('/noderegistries', (req, res) => {
+        this.app.get('/nodescopes', async (req, res) => {
+            await this.cacheLoadingPromise;
             const baseUrl = getBaseUrl(req);
-            const groupPath = '/noderegistries/npmjs.org';
-            const noderegistries = {
-                'npmjs.org': {
-                    noderegistryid: 'npmjs.org',
-                    name: 'npmjs.org',
-                    xid: groupPath,
-                    self: `${baseUrl}${groupPath}`,
-                    epoch: this.entityState.getEpoch(groupPath),
-                    createdat: this.entityState.getCreatedAt(groupPath),
-                    modifiedat: this.entityState.getModifiedAt(groupPath),
-                    packagesurl: `${baseUrl}${groupPath}/packages`,
-                    // Per core spec §"Registry Collections" `{plural}count`
-                    // is the actual size of the collection. Use the package-
-                    // names cache count once loaded; fall back to 0 while
-                    // it's still warming so we don't lie with a constant.
-                    packagescount: this.packageNamesCache.length
-                }
-            };
-            res.json(noderegistries);
+            const counts = this.buildScopeCounts();
+            const { limit, offset } = this.getPagination(req);
+            const filter = req.query['filter'] as string | undefined;
+            const sort = req.query['sort'] as string | undefined;
+            let scopeIds = filter
+                ? this.scopeIds.filter((scopeId) => this.matchesNodescopeFilter(scopeId, filter))
+                : this.scopeIds;
+            if (sort?.toLowerCase().endsWith('=desc')) {
+                scopeIds = [...scopeIds].reverse();
+            }
+            const totalCount = scopeIds.length;
+            this.setCollectionHeaders(req, res, `/${GROUP_CONFIG.TYPE}`, offset, totalCount, limit);
+            res.json(this.buildNodescopeCollection(baseUrl, scopeIds.slice(offset, offset + limit), counts));
         });
 
-        // Specific node registry
-        this.app.get('/noderegistries/:registryId', (req, res) => {
-            const registryId = req.params['registryId'];
-            if (registryId !== 'npmjs.org') {
-                res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry '${registryId}' does not exist`, req.originalUrl));
+        this.app.get('/nodescopes/:nodescopeId', async (req, res) => {
+            await this.cacheLoadingPromise;
+            const nodescopeId = req.params['nodescopeId'] || '';
+            const scopeCounts = this.buildScopeCounts();
+            if (!scopeCounts.has(nodescopeId)) {
+                res.status(404).json(createProblemDetails(404, 'Group not found', `Scope '${nodescopeId}' does not exist`, req.originalUrl));
+                return;
+            }
+
+            const groupPath = `/nodescopes/${nodescopeId}`;
+            res.json(this.buildGroupEntity(getBaseUrl(req), groupPath, nodescopeId, scopeCounts.get(nodescopeId) || 0));
+        });
+
+        this.app.get('/nodescopes/:nodescopeId/packages', async (req, res) => {
+            await this.cacheLoadingPromise;
+            const nodescopeId = req.params['nodescopeId'] || '';
+            const scopeCounts = this.buildScopeCounts();
+            if (!scopeCounts.has(nodescopeId)) {
+                res.status(404).json(createProblemDetails(404, 'Group not found', `Scope '${nodescopeId}' does not exist`, req.originalUrl));
                 return;
             }
 
             const baseUrl = getBaseUrl(req);
-            const groupPath = `/noderegistries/${registryId}`;
-            const registry = {
-                noderegistryid: registryId,
-                name: registryId,
-                xid: groupPath,
-                self: `${baseUrl}${groupPath}`,
-                epoch: this.entityState.getEpoch(groupPath),
-                createdat: this.entityState.getCreatedAt(groupPath),
-                modifiedat: this.entityState.getModifiedAt(groupPath),
-                packagesurl: `${baseUrl}${groupPath}/packages`,
-                packagescount: this.packageNamesCache.length
-            };
-            res.json(registry);
-        });
+            const limit = Math.min(Math.max(parseInt(req.query['limit'] as string || `${PAGINATION.DEFAULT_PAGE_LIMIT}`, 10), 1), PAGINATION.MAX_PAGE_LIMIT);
+            const offset = Math.max(parseInt(req.query['offset'] as string || '0', 10), 0);
+            const filter = req.query['filter'] as string | undefined;
+            const sort = req.query['sort'] as string | undefined;
 
-        // Packages collection with filtering and pagination
-        this.app.get('/noderegistries/:registryId/packages', async (req, res) => {
-            try {
-                const registryId = req.params['registryId'];
-                if (registryId !== 'npmjs.org') {
-                    res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry '${registryId}' does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const limit = parseInt(req.query['limit'] as string || '20', 10);
-                const offset = parseInt(req.query['offset'] as string || '0', 10);
-                const filter = req.query['filter'] as string;
-                const sort = req.query['sort'] as string;
-
-                // Validate limit parameter
-                if (limit <= 0) {
-                    res.status(400).json(createProblemDetails(400, 'Invalid Request', 'The limit parameter must be greater than 0', req.originalUrl));
-                    return;
-                }
-
-                let packages: any = {};
-
+            const ranges = this.scopeRanges.get(nodescopeId) ?? [];
+            let totalCount: number;
+            let page: string[];
+            if (!filter && !sort) {
+                totalCount = this.countScopeRangeEntries(ranges);
+                page = this.sliceScopeNames(ranges, offset, limit);
+            } else {
+                let packageNames = ranges.flatMap((range) => this.packageNamesCache.slice(range.start, range.end));
                 if (filter) {
-                    // Handle filtering
-                    const searchResults = await this.handlePackageFilter(filter, limit, offset);
-                    if (searchResults) {
-                        searchResults.forEach((pkg: any) => {
-                            const packageName = pkg.name || pkg.package?.name;
-                            if (packageName) {
-                                const normalizedPackageName = normalizePackageId(packageName);
-                                packages[packageName] = {
-                                    name: packageName,
-                                    xid: `/noderegistries/npmjs.org/packages/${packageName}`,
-                                    self: `${baseUrl}/noderegistries/npmjs.org/packages/${encodeURIComponent(packageName)}`,
-                                    packageid: normalizedPackageName,
-                                    epoch: 1,
-                                    createdat: pkg.date || new Date().toISOString(),
-                                    modifiedat: pkg.date || new Date().toISOString()
-                                };
-                                // Only add metadata if it's defined AND not empty (two-step filtering enrichment)
-                                if (pkg.description && pkg.description !== '') packages[packageName].description = pkg.description;
-                                if (pkg.version && pkg.version !== '') packages[packageName].version = pkg.version;
-                                if (pkg.author && pkg.author !== '') packages[packageName].author = pkg.author;
-                                if (pkg.license && pkg.license !== '') packages[packageName].license = pkg.license;
-                                if (pkg.homepage && pkg.homepage !== '') packages[packageName].homepage = pkg.homepage;
-                                if (pkg.keywords && pkg.keywords.length > 0) packages[packageName].keywords = pkg.keywords;
-                                if (pkg.repository && pkg.repository !== '') packages[packageName].repository = pkg.repository;
-                            }
-                        });
-                    }
-                } else {
-                    // Get packages when no filter
-                    // If sorting is requested, wait for cache to load
-                    if (sort && this.cacheLoadingPromise) {
-                        this.logger.info('Waiting for cache to load for sort request');
-                        await this.cacheLoadingPromise;
-                        this.logger.info('Cache loaded, size:', { size: this.packageNamesCache.length });
-                    }
-
-                    if (sort && this.packageNamesCache.length > 0) {
-                        // For sorting, use packageNamesCache to get a slice of packages
-                        this.logger.info('Using cache for sort', { offset, limit });
-
-                        // Parse sort parameter (format: "field=asc" or "field=desc")
-                        const sortParts = sort.split('=');
-                        let sortedCache = [...this.packageNamesCache];
-
-                        if (sortParts.length === 2 && sortParts[0] && sortParts[1]) {
-                            const sortField = sortParts[0];
-                            const sortOrder = sortParts[1].toLowerCase();
-
-                            // Sort the entire cache first
-                            sortedCache.sort((a, b) => {
-                                let aValue: string;
-                                let bValue: string;
-
-                                if (sortField === 'name' || sortField === 'packageid') {
-                                    aValue = a.name;
-                                    bValue = b.name;
-                                } else {
-                                    aValue = a[sortField] ? String(a[sortField]) : a.name;
-                                    bValue = b[sortField] ? String(b[sortField]) : b.name;
-                                }
-
-                                const comparison = aValue.localeCompare(bValue, undefined, { sensitivity: 'base' });
-                                return sortOrder === 'desc' ? -comparison : comparison;
-                            });
-                        }
-
-                        // Now slice the sorted cache
-                        const startIdx = offset;
-                        const endIdx = Math.min(offset + limit, sortedCache.length);
-                        const packageSlice = sortedCache.slice(startIdx, endIdx);
-                        this.logger.info('Package slice', { sliceLength: packageSlice.length });
-
-                        packageSlice.forEach((pkg: { name: string;[key: string]: any }) => {
-                            const packageName = pkg.name;
-                            const normalizedPackageName = normalizePackageId(packageName);
-                            packages[packageName] = {
-                                name: packageName,
-                                xid: `/noderegistries/npmjs.org/packages/${packageName}`,
-                                self: `${baseUrl}/noderegistries/npmjs.org/packages/${encodeURIComponent(packageName)}`,
-                                packageid: normalizedPackageName,
-                                epoch: 1,
-                                createdat: new Date().toISOString(),
-                                modifiedat: new Date().toISOString()
-                            };
-                        });
-                        this.logger.info('Packages created from cache', { count: Object.keys(packages).length });
-                    } else {
-                        this.logger.info('Falling back to search', { sort, cacheLength: this.packageNamesCache.length });
-                        // For non-sort queries, use NPM search with a popular term
-                        const searchResults = await this.npmService.searchPackages('react', { size: limit, from: offset, popularity: 1.0 });
-                        if (searchResults?.objects && searchResults.objects.length > 0) {
-                            searchResults.objects.forEach((result: any) => {
-                                const packageName = result.package?.name;
-                                if (packageName) {
-                                    const normalizedPackageName = normalizePackageId(packageName);
-                                    packages[packageName] = {
-                                        name: packageName,
-                                        xid: `/noderegistries/npmjs.org/packages/${packageName}`,
-                                        self: `${baseUrl}/noderegistries/npmjs.org/packages/${encodeURIComponent(packageName)}`,
-                                        packageid: normalizedPackageName,
-                                        epoch: 1,
-                                        createdat: result.package?.date || new Date().toISOString(),
-                                        modifiedat: result.package?.date || new Date().toISOString()
-                                    };
-                                    // Only add metadata if it's defined (two-step filtering enrichment)
-                                    if (result.package?.description) packages[packageName].description = result.package.description;
-                                    if (result.package?.version) packages[packageName].version = result.package.version;
-                                }
-                            });
-                        }
-                    }
+                    packageNames = packageNames.filter((packageName) => this.matchesPackageFilter(packageName, nodescopeId, filter));
                 }
-
-                // Add pagination headers
-                const returnedCount = Object.keys(packages).length;
-                // For filtered queries, always set Link header if we have any results
-                // For unfiltered queries, only set if we got a full page
-                const shouldSetLink = filter ? returnedCount > 0 : returnedCount >= limit;
-                if (shouldSetLink) {
-                    const nextOffset = offset + limit;
-                    const nextUrl = `${baseUrl}/noderegistries/npmjs.org/packages?limit=${limit}&offset=${nextOffset}`;
-                    if (filter) {
-                        res.set('Link', `<${nextUrl}&filter=${encodeURIComponent(filter)}>; rel="next"`);
-                    } else {
-                        res.set('Link', `<${nextUrl}>; rel="next"`);
-                    }
+                if (sort) {
+                    packageNames = this.sortPackageNames(packageNames, sort);
                 }
-
-                res.json(packages);
-            } catch (error) {
-                this.logger.error('Failed to retrieve packages', { error });
-                res.status(500).json({ error: 'Failed to retrieve packages' });
+                totalCount = packageNames.length;
+                page = packageNames.slice(offset, offset + limit);
             }
-        });
+            const packages: Record<string, any> = {};
 
-        // Specific package
-        this.app.get('/noderegistries/:registryId/packages/:packageName', async (req, res) => {
-            try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-
-                if (registryId !== 'npmjs.org') {
-                    res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry '${registryId}' does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const metadata = await this.npmService.getPackageMetadata(packageName);
-                if (!metadata) {
-                    res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageName}' does not exist in registry`, req.originalUrl));
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const normalizedPackageName = normalizePackageId(packageName);
-                const packagePath = `/noderegistries/${registryId}/packages/${packageName}`;
-                const defaultVersion = metadata.distTags?.['latest'] || Object.keys(metadata.versions || {})[0] || '0.0.0';
-
-                // Count total versions
-                const versionsCount = Object.keys(metadata.versions || {}).length;
-
-                const packageInfo = {
+            page.forEach((packageName) => {
+                const packageId = normalizePackageId(packageName);
+                const packagePath = `/nodescopes/${nodescopeId}/packages/${packageId}`;
+                packages[packageId] = {
                     name: packageName,
+                    packageid: packageId,
                     xid: packagePath,
                     self: `${baseUrl}${packagePath}`,
-                    packageid: normalizedPackageName,
                     epoch: this.entityState.getEpoch(packagePath),
-                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(packagePath),
-                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(packagePath),
-
-                    // Required Resource attributes
-                    versionid: defaultVersion,
-                    isdefault: true,
-                    metaurl: `${baseUrl}${packagePath}/meta`,
-                    versionsurl: `${baseUrl}${packagePath}/versions`,
-                    versionscount: versionsCount,
-
-                    // NPM-specific metadata
-                    description: metadata['description'] || '',
-                    homepage: metadata.homepage || '',
-                    repository: metadata.repository || {},
-                    keywords: metadata.keywords || [],
-                    license: metadata.license || '',
-                    author: metadata.author || {},
-                    maintainers: metadata.maintainers || [],
-                    'dist-tags': metadata['dist-tags'] || {}
+                    createdat: this.entityState.getCreatedAt(packagePath),
+                    modifiedat: this.entityState.getModifiedAt(packagePath),
                 };
+            });
 
-                res.json(packageInfo);
-            } catch (error) {
-                this.logger.error('Failed to retrieve package', { error });
-                res.status(500).json({ error: 'Failed to retrieve package metadata' });
-            }
+            this.setCollectionHeaders(req, res, `/nodescopes/${nodescopeId}/packages`, offset, totalCount, limit);
+            res.json(packages);
         });
 
-        // Package /meta endpoint — Resource meta sub-entity per core spec
-        // §"Design: JSON Serialization" (the `meta` object). The earlier
-        // implementation returned a stripped copy of the Resource itself,
-        // which omitted the required `defaultversionid`/`defaultversionurl`
-        // and used the Resource's own xid/self rather than the /meta path.
-        this.app.get('/noderegistries/:registryId/packages/:packageName/meta', async (req, res) => {
-            try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
+        this.app.get('/nodescopes/:nodescopeId/packages/:packageId', async (req, res) => {
+            await this.cacheLoadingPromise;
+            const nodescopeId = req.params['nodescopeId'] || '';
+            const packageId = req.params['packageId'] || '';
+            const canonicalName = await this.resolvePackageName(nodescopeId, packageId);
+            if (!canonicalName) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageId}' does not exist in scope '${nodescopeId}'`, req.originalUrl));
+                return;
+            }
 
-                if (registryId !== 'npmjs.org') {
-                    res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry '${registryId}' does not exist`, req.originalUrl));
-                    return;
-                }
+            const metadata = await this.npmService.getPackageMetadata(canonicalName);
+            if (!metadata) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${canonicalName}' does not exist in registry`, req.originalUrl));
+                return;
+            }
 
-                const metadata = await this.npmService.getPackageMetadata(packageName);
-                if (!metadata) {
-                    res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageName}' does not exist in registry`, req.originalUrl));
-                    return;
-                }
+            const baseUrl = getBaseUrl(req);
+            const packagePath = `/nodescopes/${nodescopeId}/packages/${packageId}`;
+            res.json({
+                ...metadata,
+                xid: packagePath,
+                self: `${baseUrl}${packagePath}`,
+                packageid: packageId,
+                versionsurl: `${baseUrl}${packagePath}/versions`,
+                versionscount: Object.keys(metadata.versions || {}).length,
+                metaurl: `${baseUrl}${packagePath}/meta`,
+            });
+        });
 
-                const baseUrl = getBaseUrl(req);
-                const resourcePath = `/noderegistries/${registryId}/packages/${packageName}`;
-                const metaPath = `${resourcePath}/meta`;
-                const defaultVersion = metadata.distTags?.['latest'] || Object.keys(metadata.versions || {})[0] || '0.0.0';
+        this.app.get('/nodescopes/:nodescopeId/packages/:packageId/meta', async (req, res) => {
+            await this.cacheLoadingPromise;
+            const nodescopeId = req.params['nodescopeId'] || '';
+            const packageId = req.params['packageId'] || '';
+            const canonicalName = await this.resolvePackageName(nodescopeId, packageId);
+            if (!canonicalName) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageId}' does not exist in scope '${nodescopeId}'`, req.originalUrl));
+                return;
+            }
 
-                const metaInfo = {
-                    packageid: normalizePackageId(packageName),
-                    xid: metaPath,
-                    self: `${baseUrl}${metaPath}`,
-                    epoch: this.entityState.getEpoch(metaPath),
-                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(metaPath),
-                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(metaPath),
-                    readonly: true,
-                    defaultversionid: defaultVersion,
-                    defaultversionurl: `${baseUrl}${resourcePath}/versions/${defaultVersion}`,
-                    defaultversionsticky: false
+            const metadata = await this.npmService.getPackageMetadata(canonicalName);
+            if (!metadata) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${canonicalName}' does not exist in registry`, req.originalUrl));
+                return;
+            }
+
+            const baseUrl = getBaseUrl(req);
+            const packagePath = `/nodescopes/${nodescopeId}/packages/${packageId}`;
+            const defaultVersion = metadata.versionid;
+            res.json({
+                xid: `${packagePath}/meta`,
+                self: `${baseUrl}${packagePath}/meta`,
+                readonly: true,
+                compatibility: 'strict',
+                epoch: this.entityState.getEpoch(`${packagePath}/meta`),
+                createdat: metadata.createdat,
+                modifiedat: metadata.modifiedat,
+                ...(defaultVersion ? { defaultversionid: defaultVersion, defaultversionurl: `${baseUrl}${packagePath}/versions/${defaultVersion}` } : {}),
+                defaultversionsticky: false,
+            });
+        });
+
+        this.app.get('/nodescopes/:nodescopeId/packages/:packageId/versions/:versionId', async (req, res) => {
+            await this.cacheLoadingPromise;
+            const nodescopeId = req.params['nodescopeId'] || '';
+            const packageId = req.params['packageId'] || '';
+            const versionId = req.params['versionId'] || '';
+            const canonicalName = await this.resolvePackageName(nodescopeId, packageId);
+            if (!canonicalName) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageId}' does not exist in scope '${nodescopeId}'`, req.originalUrl));
+                return;
+            }
+
+            const packageMetadata = await this.npmService.getPackageMetadata(canonicalName);
+            const upstreamVersion = packageMetadata ? findVersionById(versionId, Object.keys(packageMetadata.versions || {})) : null;
+            if (!packageMetadata || !upstreamVersion) {
+                res.status(404).json(createProblemDetails(404, 'Version not found', `Version '${versionId}' does not exist for package '${canonicalName}'`, req.originalUrl));
+                return;
+            }
+
+            const versionData = await this.npmService.getVersionMetadata(canonicalName, upstreamVersion);
+            if (!versionData) {
+                res.status(404).json(createProblemDetails(404, 'Version not found', `Version '${versionId}' does not exist for package '${canonicalName}'`, req.originalUrl));
+                return;
+            }
+
+            const baseUrl = getBaseUrl(req);
+            const versionPath = `/nodescopes/${nodescopeId}/packages/${packageId}/versions/${versionId}`;
+            res.json({
+                ...versionData,
+                xid: versionPath,
+                self: `${baseUrl}${versionPath}`,
+                packageid: packageId,
+                isdefault: packageMetadata.versionid === versionId,
+            });
+        });
+
+        this.app.get('/nodescopes/:nodescopeId/packages/:packageId/versions', async (req, res) => {
+            await this.cacheLoadingPromise;
+            const nodescopeId = req.params['nodescopeId'] || '';
+            const packageId = req.params['packageId'] || '';
+            const canonicalName = await this.resolvePackageName(nodescopeId, packageId);
+            if (!canonicalName) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageId}' does not exist in scope '${nodescopeId}'`, req.originalUrl));
+                return;
+            }
+
+            const metadata = await this.npmService.getPackageMetadata(canonicalName);
+            if (!metadata) {
+                res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${canonicalName}' does not exist in registry`, req.originalUrl));
+                return;
+            }
+
+            const baseUrl = getBaseUrl(req);
+            const sort = (req.query['sort'] as string | undefined) || 'versionid=asc';
+            const sortDirection = sort.toLowerCase().endsWith('=desc') ? 'desc' : 'asc';
+            const versionKeys = Object.keys(metadata.versions || {}).sort((left, right) => {
+                const comparison = left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+                return sortDirection === 'desc' ? -comparison : comparison;
+            });
+
+            const versions: Record<string, any> = {};
+            versionKeys.forEach((version) => {
+                const normalizedVersion = normalizeVersionId(version);
+                versions[normalizedVersion] = {
+                    versionid: normalizedVersion,
+                    version,
+                    packageid: packageId,
+                    xid: `/nodescopes/${nodescopeId}/packages/${packageId}/versions/${normalizedVersion}`,
+                    self: `${baseUrl}/nodescopes/${nodescopeId}/packages/${packageId}/versions/${normalizedVersion}`,
+                    epoch: 1,
+                    createdat: metadata.time?.[version] || metadata.createdat,
+                    modifiedat: metadata.time?.[version] || metadata.createdat,
+                    ancestor: normalizedVersion,
+                    isdefault: metadata.versionid === normalizedVersion,
                 };
+            });
 
-                res.json(metaInfo);
-            } catch (error) {
-                this.logger.error('Failed to retrieve package meta', { error });
-                res.status(500).json({ error: 'Failed to retrieve package metadata' });
-            }
+            res.json(versions);
         });
 
-        // Version metadata endpoint (most specific route - must come first)
-        // Note: /versions/{versionId}/meta is intentionally not implemented.
-        // Per core spec §"`xid` Attribute", `xid` paths terminate with
-        // either `/meta` (resource meta sub-entity) or `/versions/<VID>`
-        // (a Version), not both. The Version endpoint at /versions/:v
-        // already returns its metadata view (this resource type sets
-        // hasdocument:false, so there is no separate $details suffix).
-
-        // Individual package version endpoint
-        this.app.get('/noderegistries/:registryId/packages/:packageName/versions/:version', async (req, res) => {
-            try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-                const version = req.params['version'];
-
-                if (registryId !== 'npmjs.org') {
-                    res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry ${registryId} does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const versionData = await this.npmService.getVersionMetadata(packageName, version);
-                if (!versionData) {
-                    res.status(404).json(createProblemDetails(404, 'Version not found', `Version ${version} of package ${packageName} does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const versionPath = `/noderegistries/${registryId}/packages/${packageName}/versions/${version}`;
-
-                // Get full package metadata to find default version
-                const packageMetadata = await this.npmService.getPackageMetadata(packageName);
-                const defaultVersion = packageMetadata?.distTags?.['latest'];
-                const isDefaultVersion = version === defaultVersion;
-
-                // Compute the version's ancestor: the chronologically
-                // previous published version. npm's registry response
-                // exposes per-version publish times under `time`; ordering
-                // there is authoritative (`Object.keys(versions)` order
-                // varies and is unreliable). For the root version the
-                // ancestor is itself per core spec §"`ancestor` Attribute".
-                const ancestor = this.computeAncestor(packageMetadata, version);
-
-                // Build xRegistry-compliant version response
-                const response = {
-                    versionid: versionData.versionid,
-                    xid: versionPath,
-                    self: `${baseUrl}${versionPath}`,
-                    name: versionData.name,
-                    packageid: normalizePackageId(packageName),
-                    epoch: this.entityState.getEpoch(versionPath),
-                    createdat: versionData.createdat || this.entityState.getCreatedAt(versionPath),
-                    modifiedat: versionData.modifiedat || this.entityState.getModifiedAt(versionPath),
-                    isdefault: isDefaultVersion,
-                    ancestor: ancestor,
-                    description: versionData.description || '',
-                    deprecated: versionData['deprecated'] || false,
-                    contenttype: 'application/vnd.npm.install-v1+json',
-                    // Additional npm-specific fields
-                    ...(versionData.license && { license: versionData.license }),
-                    ...(versionData.homepage && { homepage: versionData.homepage }),
-                    ...(versionData.repository && { repository: versionData.repository }),
-                    ...(versionData.bugs && { bugs: versionData.bugs }),
-                    ...(versionData.keywords && { keywords: versionData.keywords }),
-                    ...(versionData.dependencies && { dependencies: versionData.dependencies }),
-                    ...(versionData.devDependencies && { devDependencies: versionData.devDependencies }),
-                    ...(versionData.peerDependencies && { peerDependencies: versionData.peerDependencies }),
-                    ...(versionData.dist && { dist: versionData.dist })
-                };
-
-                res.json(response);
-            } catch (error) {
-                this.logger.error('Failed to retrieve package version', { error });
-                res.status(500).json({ error: 'Failed to retrieve package version' });
-            }
-        });
-
-        // Package versions collection endpoint (least specific - must come last)
-        this.app.get('/noderegistries/:registryId/packages/:packageName/versions', async (req, res) => {
-            try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-                const limit = parseInt(req.query['limit'] as string || '100', 10);
-                const sort = req.query['sort'] as string;
-
-                if (registryId !== 'npmjs.org') {
-                    res.status(404).json(createProblemDetails(404, 'Registry not found', `Registry '${registryId}' does not exist`, req.originalUrl));
-                    return;
-                }
-
-                const metadata = await this.npmService.getPackageMetadata(packageName);
-                if (!metadata || !metadata.versions) {
-                    res.status(404).json(createProblemDetails(404, 'Package not found', `Package '${packageName}' does not exist in registry`, req.originalUrl));
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const versionsObj: any = {};
-                const defaultVersion = metadata.distTags?.['latest'];
-
-                // Get version keys and limit them
-                let versionKeys = Object.keys(metadata.versions).slice(0, limit);
-
-                // Apply sorting if specified (default is ascending)
-                const sortParts = sort ? sort.split('=') : [];
-                const sortOrder = sortParts.length === 2 && sortParts[1] ? sortParts[1].toLowerCase() : 'asc';
-
-                // Sort versions
-                versionKeys.sort((a, b) => {
-                    const comparison = a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-                    return sortOrder === 'desc' ? -comparison : comparison;
-                });
-
-                // Build versions response
-                versionKeys.forEach(versionId => {
-                    const versionData = metadata.versions ? (metadata.versions as any)[versionId] : null;
-                    versionsObj[versionId] = {
-                        versionid: versionId,
-                        packageid: normalizePackageId(packageName),
-                        xid: `/noderegistries/npmjs.org/packages/${packageName}/versions/${versionId}`,
-                        self: `${baseUrl}/noderegistries/npmjs.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(versionId)}`,
-                        name: versionId,
-                        epoch: 1,
-                        isdefault: defaultVersion ? versionId === defaultVersion : false,
-                        ancestor: this.computeAncestor(metadata, versionId),
-                        createdat: (metadata.time && metadata.time[versionId]) ? metadata.time[versionId] : new Date().toISOString(),
-                        modifiedat: (metadata.time && metadata.time[versionId]) ? metadata.time[versionId] : new Date().toISOString(),
-                        description: (versionData && versionData['description']) ? versionData['description'] : (metadata['description'] || ''),
-                        deprecated: (versionData && versionData['deprecated']) ? versionData['deprecated'] : false
-                    };
-                });
-
-                res.json(versionsObj);
-            } catch (error) {
-                this.logger.error('Failed to retrieve package versions', { error });
-                res.status(500).json({ error: 'Failed to retrieve package versions' });
-            }
-        });
-
-        // Catch-all for unsupported write operations (PUT, PATCH, POST, DELETE)
         this.app.all(/.*/, (req, res, next) => {
             const method = req.method.toUpperCase();
-
-            // Only intercept write methods
             if (['PUT', 'PATCH', 'POST', 'DELETE'].includes(method)) {
                 res.status(405).json(createProblemDetails(
                     405,
                     'Method Not Allowed',
                     `This registry is read-only. ${method} operations are not supported.`,
-                    req.originalUrl
+                    req.originalUrl,
                 ));
                 return;
             }
-
-            // Pass through GET, HEAD, OPTIONS
             next();
         });
 
-        // 404 handler
         this.app.use(/.*/, (req, res) => {
-            res.status(404).json(createProblemDetails(
-                404,
-                'Not Found',
-                `Route ${req.method} ${req.originalUrl} not found`,
-                req.originalUrl
-            ));
+            res.status(404).json(createProblemDetails(404, 'Not Found', `Route ${req.method} ${req.originalUrl} not found`, req.originalUrl));
         });
     }
 
-    /**
-     * Load package names cache for two-step filtering
-     */
+    private getCapabilities() {
+        return {
+            apis: ['/capabilities', '/model', '/export'],
+            flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
+            formats: ['xRegistry-json/1.0-rc2'],
+            mutable: [],
+            pagination: true,
+            specversions: ['1.0-rc2'],
+        };
+    }
+
+    private buildScopeCounts(): Map<string, number> {
+        return this.scopeCounts;
+    }
+
+    private buildNodescopeCollection(baseUrl: string, scopeIds: string[], counts: Map<string, number>) {
+        const collection: Record<string, any> = {};
+        scopeIds.forEach((nodescopeId) => {
+            const groupPath = `/nodescopes/${nodescopeId}`;
+            collection[nodescopeId] = this.buildGroupEntity(baseUrl, groupPath, nodescopeId, counts.get(nodescopeId) || 0);
+        });
+        return collection;
+    }
+
+    private countScopeRangeEntries(ranges: Array<{ start: number; end: number }>): number {
+        return ranges.reduce((total, range) => total + range.end - range.start, 0);
+    }
+
+    private sliceScopeNames(ranges: Array<{ start: number; end: number }>, offset: number, limit: number): string[] {
+        const names: string[] = [];
+        let remainingOffset = offset;
+        for (const range of ranges) {
+            const rangeLength = range.end - range.start;
+            if (remainingOffset >= rangeLength) {
+                remainingOffset -= rangeLength;
+                continue;
+            }
+            const start = range.start + remainingOffset;
+            const take = Math.min(limit - names.length, range.end - start);
+            names.push(...this.packageNamesCache.slice(start, start + take));
+            remainingOffset = 0;
+            if (names.length === limit) break;
+        }
+        return names;
+    }
+
+    private getPagination(req: express.Request): { limit: number; offset: number } {
+        const parsedLimit = Number.parseInt(String(req.query['limit'] ?? PAGINATION.DEFAULT_PAGE_LIMIT), 10);
+        const parsedOffset = Number.parseInt(String(req.query['offset'] ?? 0), 10);
+        return {
+            limit: Number.isFinite(parsedLimit)
+                ? Math.min(Math.max(parsedLimit, 1), PAGINATION.MAX_PAGE_LIMIT)
+                : PAGINATION.DEFAULT_PAGE_LIMIT,
+            offset: Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : 0,
+        };
+    }
+
+    private setCollectionHeaders(
+        req: express.Request,
+        res: express.Response,
+        collectionPath: string,
+        offset: number,
+        totalCount: number,
+        limit: number,
+    ): void {
+        res.set('X-Total-Count', String(totalCount));
+        const links = this.buildPaginationLinks(req, collectionPath, offset, totalCount, limit);
+        if (links.length > 0) {
+            res.set('Link', links.join(', '));
+        }
+    }
+
+    private buildPaginationLinks(
+        req: express.Request,
+        collectionPath: string,
+        offset: number,
+        totalCount: number,
+        limit: number,
+    ): string[] {
+        if (totalCount === 0) return [];
+        const baseUrl = getBaseUrl(req);
+        const makeUrl = (targetOffset: number): string => {
+            const params = new URLSearchParams();
+            for (const [key, value] of Object.entries(req.query)) {
+                if (key === 'offset' || key === 'limit') continue;
+                if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (typeof item === 'string') params.append(key, item);
+                    }
+                } else if (typeof value === 'string') {
+                    params.set(key, value);
+                }
+            }
+            params.set('limit', String(limit));
+            params.set('offset', String(targetOffset));
+            return `${baseUrl}${collectionPath}?${params.toString()}`;
+        };
+        const links: string[] = [];
+        if (offset > 0) {
+            links.push(`<${makeUrl(0)}>; rel="first"`);
+            links.push(`<${makeUrl(Math.max(0, offset - limit))}>; rel="prev"`);
+        }
+        if (offset + limit < totalCount) {
+            links.push(`<${makeUrl(offset + limit)}>; rel="next"`);
+            links.push(`<${makeUrl(Math.floor((totalCount - 1) / limit) * limit)}>; rel="last"`);
+        }
+        return links;
+    }
+
+    private buildGroupEntity(baseUrl: string, groupPath: string, nodescopeId: string, packageCount: number) {
+        return {
+            nodescopeid: nodescopeId,
+            name: nodescopeId === GROUP_CONFIG.UNSCOPED_ID ? 'unscoped packages' : `@${nodescopeId}`,
+            xid: groupPath,
+            self: `${baseUrl}${groupPath}`,
+            epoch: this.entityState.getEpoch(groupPath),
+            createdat: this.entityState.getCreatedAt(groupPath),
+            modifiedat: this.entityState.getModifiedAt(groupPath),
+            ...(nodescopeId !== GROUP_CONFIG.UNSCOPED_ID ? { scope: nodescopeId } : {}),
+            sourceurl: NPM_REGISTRY.BASE_URL,
+            packagesurl: `${baseUrl}${groupPath}/packages`,
+            packagescount: packageCount,
+        };
+    }
+
+    private matchesPackageFilter(packageName: string, nodescopeId: string, filter: string): boolean {
+        const packageId = normalizePackageId(packageName);
+        const expressions = filter.split(',').map((entry) => entry.trim()).filter(Boolean);
+        if (expressions.length === 0) {
+            return true;
+        }
+
+        return expressions.every((expression) => {
+            const operator = expression.includes('!=') ? '!=' : '=';
+            const [attribute, rawValue] = expression.split(operator);
+            const value = (rawValue || '').replace(/^['"]|['"]$/g, '');
+            const actual = attribute === 'name'
+                ? packageName
+                : attribute === 'packageid'
+                    ? packageId
+                    : attribute === 'nodescopeid'
+                        ? nodescopeId
+                        : '';
+
+            if (value.includes('*')) {
+                const regex = new RegExp(`^${value.replace(/\*/g, '.*')}$`, 'i');
+                return operator === '=' ? regex.test(actual) : !regex.test(actual);
+            }
+
+            return operator === '=' ? actual === value : actual !== value;
+        });
+    }
+
+    private matchesNodescopeFilter(nodescopeId: string, filter: string): boolean {
+        const expressions = filter.split(',').map((entry) => entry.trim()).filter(Boolean);
+        const name = nodescopeId === GROUP_CONFIG.UNSCOPED_ID ? 'unscoped packages' : `@${nodescopeId}`;
+        return expressions.length === 0 || expressions.every((expression) => {
+            const operator = expression.includes('!=') ? '!=' : '=';
+            const [attribute, rawValue] = expression.split(operator);
+            const value = (rawValue || '').replace(/^['"]|['"]$/g, '');
+            const actual = attribute === 'name'
+                ? name
+                : attribute === 'nodescopeid' || attribute === 'scope'
+                    ? nodescopeId
+                    : '';
+            const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*');
+            const matches = value.includes('*')
+                ? new RegExp(`^${escaped}$`, 'i').test(actual)
+                : actual.toLowerCase() === value.toLowerCase();
+            return operator === '=' ? matches : !matches;
+        });
+    }
+
+    private sortPackageNames(packageNames: string[], sort?: string): string[] {
+        if (!sort) {
+            return [...packageNames].sort((left, right) => left.localeCompare(right));
+        }
+
+        const [attribute, directionValue] = sort.split('=');
+        const direction = (directionValue || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
+        return [...packageNames].sort((left, right) => {
+            const leftValue = attribute === 'packageid' ? normalizePackageId(left) : left;
+            const rightValue = attribute === 'packageid' ? normalizePackageId(right) : right;
+            const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: 'base' });
+            return direction === 'desc' ? -comparison : comparison;
+        });
+    }
+
     private async loadPackageNamesCache(): Promise<void> {
         try {
-            // Load from all-the-package-names module using require for simplicity
-            const fs = require('fs');
-            const path = require('path');
-
-            // Try to load package names from the installed module
-            try {
-                // Try multiple potential locations for the module
-                const potentialPaths = [
-                    // Relative to the server's directory (npm/dist -> npm/node_modules)
-                    path.join(__dirname, '..', 'node_modules', 'all-the-package-names', 'names.json'),
-                    // Relative to cwd
-                    path.join(process.cwd(), 'node_modules', 'all-the-package-names', 'names.json'),
-                    // Relative to cwd/npm
-                    path.join(process.cwd(), 'npm', 'node_modules', 'all-the-package-names', 'names.json')
-                ];
-
-                let packageNamesPath: string | null = null;
-                for (const testPath of potentialPaths) {
-                    if (fs.existsSync(testPath)) {
-                        packageNamesPath = testPath;
-                        break;
-                    }
-                }
-
-                if (packageNamesPath) {
-                    this.logger.info('Loading package names from all-the-package-names...');
-                    const namesContent = fs.readFileSync(packageNamesPath, 'utf8');
-                    const allPackageNames = JSON.parse(namesContent);
-
-                    if (Array.isArray(allPackageNames)) {
-                        // Store objects with a 'name' property and sort them
-                        this.packageNamesCache = allPackageNames
-                            .map((name: string) => ({ name }))
-                            .sort((a: any, b: any) => a.name.localeCompare(b.name));
-
-                        this.logger.info('Package names cache loaded from all-the-package-names', {
-                            count: this.packageNamesCache.length
-                        });
-                    }
-                } else {
-                    this.logger.warn('all-the-package-names module not found, two-step filtering will use fallback');
-                }
-            } catch (loadError: any) {
-                this.logger.warn('Failed to load all-the-package-names', {
-                    error: loadError.message
-                });
-            }
-
-            // Build indices for FilterOptimizer asynchronously in the background
-            // This allows the server to start immediately without waiting for index building
-            if (this.packageNamesCache.length > 0) {
-                this.logger.info('Starting background index building for FilterOptimizer', {
-                    packageCount: this.packageNamesCache.length
-                });
-
-                // Schedule index building to happen after a short delay
-                // This gives the server time to start and become healthy
-                setTimeout(() => {
-                    const startTime = Date.now();
-                    this.logger.info('Building FilterOptimizer indices...');
-
-                    try {
-                        this.filterOptimizer.buildIndices(
-                            this.packageNamesCache,
-                            (entity: any) => entity.name
-                        );
-
-                        const duration = Date.now() - startTime;
-                        this.logger.info('FilterOptimizer indices built successfully', {
-                            packageCount: this.packageNamesCache.length,
-                            durationMs: duration
-                        });
-                    } catch (indexError: any) {
-                        this.logger.error('Failed to build FilterOptimizer indices', {
-                            error: indexError.message
-                        });
-                    }
-                }, 2000); // 2 second delay to allow server to start
-            }
-        } catch (error: any) {
-            this.logger.error('Failed to load package names cache', {
-                error: error.message
-            });
-        }
-    }
-
-    /**
-     * Fetch package metadata for two-step filtering
-     */
-    private async fetchPackageMetadata(packageName: string): Promise<any> {
-        try {
-            const packageData: any = await this.npmService.getPackageMetadata(packageName);
-
-            if (!packageData) {
-                throw new Error('Package data is null');
-            }
-
-            // Extract metadata for filtering
-            const latestVersion = packageData.distTags?.['latest'] ||
-                Object.keys(packageData.versions || {})[0];
-            const versionData: any = packageData.versions?.[latestVersion] || {};
-
-            const result: any = {
-                name: packageName
-            };
-
-            // Only include metadata fields if they have actual values
-            const description = packageData.description || versionData.description;
-            // Always include description - use package name as fallback if missing
-            result.description = description || packageName;
-
-            const author = packageData.author?.name || versionData.author?.name ||
-                packageData.author || versionData.author;
-            if (author) result.author = author;
-
-            const license = packageData.license || versionData.license;
-            if (license) result.license = license;
-
-            const homepage = packageData.homepage || versionData.homepage;
-            if (homepage) result.homepage = homepage;
-
-            const keywords = packageData.keywords || versionData.keywords;
-            if (keywords && keywords.length > 0) result.keywords = keywords;
-
-            if (latestVersion) result.version = latestVersion;
-
-            const repository = packageData.repository?.url || versionData.repository?.url;
-            if (repository) result.repository = repository;
-
-            return result;
-        } catch (error: any) {
-            // Return minimal metadata if fetch fails (just name)
-            return {
-                name: packageName
-            };
-        }
-    }
-
-    /**
-     * Compute the chronologically previous published version for a given
-     * package version. Per xRegistry core spec §"`ancestor` Attribute",
-     * a Version's `ancestor` MUST be the `versionid` of its predecessor
-     * in the lineage; for the root version it MUST be its own `versionid`.
-     *
-     * npm exposes per-version publish timestamps under `metadata.time`
-     * (an object with `created`, `modified`, and one entry per version
-     * string). Sort versions by that timestamp and walk back one step.
-     * Falls back to self when no ancestor can be identified.
-     */
-    private computeAncestor(packageMetadata: any, version: string): string {
-        const time: Record<string, string> = packageMetadata?.time || {};
-        const versions = Object.keys(packageMetadata?.versions || {})
-            .filter((v) => typeof time[v] === 'string')
-            .sort((a, b) => Date.parse(time[a]!) - Date.parse(time[b]!));
-
-        if (versions.length === 0) {
-            return version;
-        }
-        const idx = versions.indexOf(version);
-        if (idx <= 0) {
-            return version; // root version's ancestor is itself
-        }
-        return versions[idx - 1] || version;
-    }
-
-    /**
-     * Handle package filtering using FilterOptimizer with two-step filtering support
-     */
-    private async handlePackageFilter(filter: string, limit: number, offset: number): Promise<any[]> {
-        try {
-            // If we have cached packages, use FilterOptimizer for advanced filtering
-            if (this.packageNamesCache.length > 0) {
-                // Use optimized filter which handles both name-only and metadata queries
-                const filteredResults = await this.filterOptimizer.optimizedFilter(
-                    filter,
-                    (entity: any) => entity.name,
-                    this.logger
-                );
-
-                // Return paginated results
-                return filteredResults.slice(offset, offset + limit);
-            }
-
-            // Fallback: Use NPM search API for simple name filtering
-            const filters = this.parseFilterExpressions(filter);
-
-            for (const filterExpr of filters) {
-                if (filterExpr.field === 'name') {
-                    let searchQuery = filterExpr.value;
-
-                    // Handle wildcard patterns
-                    if (searchQuery.includes('*')) {
-                        searchQuery = searchQuery.replace(/\*/g, '');
-                    }
-
-                    if (searchQuery) {
-                        const searchResults = await this.npmService.searchPackages(searchQuery, {
-                            size: limit,
-                            from: offset
-                        });
-
-                        if (searchResults?.objects) {
-                            return searchResults.objects.filter((result: any) => {
-                                const packageName = result.package?.name || '';
-                                return this.matchesFilter(packageName, filterExpr);
-                            });
-                        }
-                    }
-                }
-            }
-
-            return [];
-        } catch (error) {
-            this.logger.error('Filter handling failed', { error, filter });
-            return [];
-        }
-    }
-
-    /**
-     * Parse filter expressions
-     */
-    private parseFilterExpressions(filter: string): Array<{ field: string, operator: string, value: string }> {
-        const expressions = [];
-        const parts = filter.split('&');
-
-        for (const part of parts) {
-            if (part.includes('!=')) {
-                const [field, value] = part.split('!=');
-                if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '!=', value: stripFilterQuotes(value.trim()) });
-                }
-            } else if (part.includes('=')) {
-                const [field, value] = part.split('=');
-                if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '=', value: stripFilterQuotes(value.trim()) });
-                }
-            }
-        }
-
-        return expressions;
-    }
-
-    /**
-     * Check if value matches filter expression
-     */
-    private matchesFilter(value: string, filter: { field: string, operator: string, value: string }): boolean {
-        const filterValue = filter.value;
-
-        if (filter.operator === '=') {
-            if (filterValue.includes('*')) {
-                // Wildcard matching
-                const pattern = filterValue.replace(/\*/g, '.*');
-                const regex = new RegExp(`^${pattern}$`, 'i');
-                return regex.test(value);
+            const names = require('all-the-package-names') as string[];
+            this.packageNamesCache = Array.isArray(names) ? names.sort((left, right) => left.localeCompare(right)) : [];
+            const restored = await this.restoreScopeIndexSnapshot();
+            if (!restored) {
+                this.rebuildPackageIdentityIndex();
+                await this.persistScopeIndexSnapshot();
             } else {
-                // Exact match
-                return value.toLowerCase() === filterValue.toLowerCase();
+                this.rebuildHashedPackageIdentityIndex();
             }
-        } else if (filter.operator === '!=') {
-            if (filterValue.includes('*')) {
-                // Wildcard not matching
-                const pattern = filterValue.replace(/\*/g, '.*');
-                const regex = new RegExp(`^${pattern}$`, 'i');
-                return !regex.test(value);
+            this.logger.info('Package names cache loaded', { count: this.packageNamesCache.length });
+        } catch (error: any) {
+            this.logger.warn('Failed to load all-the-package-names', { error: error.message });
+            this.packageNamesCache = [];
+            this.rebuildPackageIdentityIndex();
+        }
+    }
+
+    private async resolvePackageName(nodescopeId: string, packageId: string): Promise<string | null> {
+        const cached = this.packageNameByIdentity.get(`${nodescopeId}\u0000${packageId}`);
+        if (cached) return cached;
+
+        const fallback = nodescopeId === GROUP_CONFIG.UNSCOPED_ID ? packageId : `@${nodescopeId}/${packageId}`;
+        return matchesPackageIdentity(fallback, nodescopeId, packageId) ? fallback : null;
+    }
+
+    private rebuildPackageIdentityIndex(): void {
+        const counts = new Map<string, number>([[GROUP_CONFIG.UNSCOPED_ID, 0]]);
+        const namesByIdentity = new Map<string, string>();
+        const ranges = new Map<string, Array<{ start: number; end: number }>>();
+
+        for (let index = 0; index < this.packageNamesCache.length; index += 1) {
+            const packageName = this.packageNamesCache[index]!;
+            const nodescopeId = getNodescopeId(packageName);
+            const packageId = normalizePackageId(packageName);
+            counts.set(nodescopeId, (counts.get(nodescopeId) || 0) + 1);
+            if (packageId.startsWith('xh~')) {
+                namesByIdentity.set(`${nodescopeId}\u0000${packageId}`, packageName);
+            }
+            const scopeRanges = ranges.get(nodescopeId);
+            const lastRange = scopeRanges?.[scopeRanges.length - 1];
+            if (lastRange?.end === index) {
+                lastRange.end = index + 1;
             } else {
-                // Not exact match
-                return value.toLowerCase() !== filterValue.toLowerCase();
+                const nextRanges = scopeRanges ?? [];
+                nextRanges.push({ start: index, end: index + 1 });
+                ranges.set(nodescopeId, nextRanges);
             }
         }
 
-        return false;
+        this.scopeCounts = counts;
+        this.scopeIds = Array.from(counts.keys()).sort((left, right) => left.localeCompare(right));
+        this.scopeRanges = ranges;
+        this.packageNameByIdentity = namesByIdentity;
     }
 
-    /**
-     * Setup error handling
-     */
+    private rebuildHashedPackageIdentityIndex(): void {
+        const namesByIdentity = new Map<string, string>();
+        for (const packageName of this.packageNamesCache) {
+            const packageId = normalizePackageId(packageName);
+            if (packageId.startsWith('xh~')) {
+                namesByIdentity.set(`${getNodescopeId(packageName)}\u0000${packageId}`, packageName);
+            }
+        }
+        this.packageNameByIdentity = namesByIdentity;
+    }
+
+    private async restoreScopeIndexSnapshot(): Promise<boolean> {
+        try {
+            const snapshotPath = path.join(this.options.indexCacheDir, 'npm-scope-index.json');
+            const snapshot = JSON.parse(await readFile(snapshotPath, 'utf8')) as ScopeIndexSnapshot;
+            if (
+                snapshot.packageCount !== this.packageNamesCache.length
+                || snapshot.firstPackageName !== (this.packageNamesCache[0] ?? '')
+                || snapshot.lastPackageName !== (this.packageNamesCache[this.packageNamesCache.length - 1] ?? '')
+                || !Array.isArray(snapshot.scopes)
+            ) {
+                return false;
+            }
+            const counts = new Map<string, number>();
+            const ranges = new Map<string, Array<{ start: number; end: number }>>();
+            for (const scope of snapshot.scopes) {
+                if (!scope || typeof scope.id !== 'string' || !Array.isArray(scope.ranges)) return false;
+                for (const range of scope.ranges) {
+                    if (range.start < 0 || range.end < range.start || range.end > this.packageNamesCache.length) return false;
+                }
+                counts.set(scope.id, this.countScopeRangeEntries(scope.ranges));
+                ranges.set(scope.id, scope.ranges.map((range) => ({ ...range })));
+            }
+            this.scopeCounts = counts;
+            this.scopeIds = snapshot.scopes.map((scope) => scope.id);
+            this.scopeRanges = ranges;
+            this.logger.info('Restored npm scope index snapshot', { scopes: this.scopeIds.length });
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async persistScopeIndexSnapshot(): Promise<void> {
+        try {
+            const cacheDir = this.options.indexCacheDir;
+            const snapshotPath = path.join(cacheDir, 'npm-scope-index.json');
+            const temporaryPath = `${snapshotPath}.${process.pid}.tmp`;
+            const snapshot: ScopeIndexSnapshot = {
+                packageCount: this.packageNamesCache.length,
+                firstPackageName: this.packageNamesCache[0] ?? '',
+                lastPackageName: this.packageNamesCache[this.packageNamesCache.length - 1] ?? '',
+                scopes: this.scopeIds.map((id) => {
+                    const ranges = this.scopeRanges.get(id)!;
+                    return { id, ranges };
+                }),
+            };
+            await mkdir(cacheDir, { recursive: true });
+            await writeFile(temporaryPath, JSON.stringify(snapshot), 'utf8');
+            await rename(temporaryPath, snapshotPath);
+        } catch (error: any) {
+            this.logger.warn('Failed to persist npm scope index snapshot', { error: error.message });
+        }
+    }
+
     private setupErrorHandling(): void {
-        // xRegistry RFC 9457 error handler (must be registered last)
         this.app.use(xregistryErrorHandler);
-        // Fallback error handler
         this.app.use(errorHandler);
     }
 
-    /**
-     * Start the server
-     */
     async start(): Promise<void> {
         return new Promise((resolve, reject) => {
             try {
                 this.server = require('http').createServer(this.app);
-
                 this.server.listen(this.options.port, this.options.host, () => {
                     this.logger.info('xRegistry NPM Wrapper Server started', {
                         port: this.options.port,
                         host: this.options.host,
                         npmRegistry: this.options.npmRegistryUrl,
-                        cacheEnabled: this.options.cacheEnabled
+                        cacheEnabled: this.options.cacheEnabled,
                     });
                     resolve();
                 });
@@ -1135,7 +805,6 @@ export class XRegistryServer {
 
                 process.on('SIGTERM', () => this.shutdown('SIGTERM'));
                 process.on('SIGINT', () => this.shutdown('SIGINT'));
-
             } catch (error) {
                 this.logger.error('Failed to start server', { error });
                 reject(error);
@@ -1143,10 +812,8 @@ export class XRegistryServer {
         });
     }
 
-    /**
-     * Stop the server
-     */
     async stop(): Promise<void> {
+        this.cacheManager.destroy();
         return new Promise((resolve) => {
             if (this.server) {
                 this.server.close(() => {
@@ -1159,9 +826,6 @@ export class XRegistryServer {
         });
     }
 
-    /**
-     * Graceful shutdown
-     */
     private async shutdown(signal: string): Promise<void> {
         this.logger.info(`Received ${signal}, shutting down gracefully`);
         try {
@@ -1174,33 +838,22 @@ export class XRegistryServer {
         }
     }
 
-    /**
-     * Get Express app instance
-     */
     getApp(): express.Application {
         return this.app;
     }
 
-    /**
-     * Get server instance
-     */
     getServer(): any {
         return this.server;
     }
 }
 
-/**
- * Create and start server
- */
 export async function createServer(options?: ServerOptions): Promise<XRegistryServer> {
     const server = new XRegistryServer(options);
     await server.start();
     return server;
 }
 
-// Start server if called directly
 if (require.main === module) {
-    // Parse command line arguments
     const args = process.argv.slice(2);
     let port = parseInt(process.env['PORT'] || '3100', 10);
     let host = process.env['HOST'] || 'localhost';
@@ -1222,9 +875,9 @@ if (require.main === module) {
     createServer({
         port,
         host,
-        cacheEnabled: true
+        cacheEnabled: true,
     }).catch((error) => {
         console.error('Failed to start server:', error);
         process.exit(1);
     });
-} 
+}

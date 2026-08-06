@@ -295,23 +295,27 @@ export class RegistryService {
             const baseUrl = getBaseUrl(req);
             const resourcePath = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}`;
             
-            let packageEntity: XRegistryEntity & Record<string, any> = createXRegistryEntity({
+            const entityOptions: any = {
                 xid: resourcePath,
                 self: `${baseUrl}${resourcePath}`,
                 id: packageMetadata['packageid'],
-                name: packageMetadata['name'] || packageMetadata['packageid'],
-                description: packageMetadata['description'],
-                docs: packageMetadata['documentation']
-            });
+                name: packageMetadata['name'] || packageMetadata['packageid']
+            };
+            if (packageMetadata['description']) {
+                entityOptions.description = packageMetadata['description'];
+            }
+            if (packageMetadata['documentation']) {
+                entityOptions.docs = packageMetadata['documentation'];
+            }
 
-            // Add package-specific properties
+            let packageEntity: XRegistryEntity & Record<string, any> = createXRegistryEntity(entityOptions);
+
             Object.assign(packageEntity, {
                 packageid: packageMetadata['packageid'],
-                author: packageMetadata.author?.name,
-                license: packageMetadata.license,
-                homepage: packageMetadata.homepage,
-                repository: packageMetadata.repository?.url,
-                keywords: packageMetadata.keywords
+                license: packageMetadata['license_expression'] || packageMetadata['license_url'],
+                homepage: packageMetadata['project_url'],
+                repository: packageMetadata['repository']?.url,
+                keywords: packageMetadata['tags']
             });
 
             // Apply xRegistry query parameter processing

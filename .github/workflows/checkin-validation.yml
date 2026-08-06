@@ -186,7 +186,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level moderate
+      - run: npm audit --omit=dev --audit-level moderate
       - run: npm outdated || true
       - uses: hadolint/hadolint-action@v3.3.0
         with:

@@ -2,8 +2,8 @@
 
 import { UpstreamError } from '@xregistry/registry-core';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import { decodeProviderIdentity, REGISTRY_METADATA } from '../config/constants';
-import { ProviderPlatformDistribution, TFGPGKey, TFProviderDownloadResponse, TFProviderVersionSummary } from '../types/terraform';
+import { decodeProviderIdentity, encodeVersionId, REGISTRY_METADATA, TERRAFORM_API } from '../config/constants';
+import { ProviderPlatformDistribution, TFProviderVersionSummary } from '../types/terraform';
 import { entityNotFound } from '../utils/xregistry-errors';
 import { predecessorOf, sortTerraformVersionObjects } from '../utils/versions';
 import { TerraformService } from './terraform-service';
@@ -46,33 +46,33 @@ export class ProviderService {
     private versionEntity(
         resolved: ResolvedProvider,
         version: TFProviderVersionSummary,
-        orderedIds: readonly string[],
+        orderedVersions: readonly string[],
         baseUrl: string,
         metadata: ProviderMetadata,
-        platforms: readonly unknown[] = version.platforms,
-        signingKeys?: { gpg_public_keys: TFGPGKey[] },
+        platforms: readonly ProviderPlatformDistribution[] = version.platforms.map(platform => ({ os: platform.os, arch: platform.arch })),
     ): Record<string, unknown> {
-        const { GROUP_TYPE, REGISTRY_HOST, PROVIDER_RESOURCE_TYPE } = REGISTRY_METADATA;
-        const versionPath = `/${GROUP_TYPE}/${resolved.namespace}/${PROVIDER_RESOURCE_TYPE}/${resolved.type}/versions/${version.version}`;
+        const { GROUP_TYPE, PROVIDER_RESOURCE_TYPE } = REGISTRY_METADATA;
+        const versionId = encodeVersionId(version.version);
+        const versionPath = `/${GROUP_TYPE}/${resolved.namespace}/${PROVIDER_RESOURCE_TYPE}/${resolved.type}/versions/${versionId}`;
         return {
-            versionid: version.version,
+            versionid: versionId,
             providerid: resolved.type,
             xid: versionPath,
-            self: `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(resolved.namespace)}/${PROVIDER_RESOURCE_TYPE}/${encodeURIComponent(resolved.type)}/versions/${encodeURIComponent(version.version)}`,
+            self: `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(resolved.namespace)}/${PROVIDER_RESOURCE_TYPE}/${encodeURIComponent(resolved.type)}/versions/${encodeURIComponent(versionId)}`,
             epoch: this.entityState.getEpoch(versionPath),
             createdat: this.entityState.getCreatedAt(versionPath),
             modifiedat: this.entityState.getModifiedAt(versionPath),
-            name: `${resolved.namespace}/${resolved.type}`,
-            description: metadata?.description ?? '',
+            name: resolved.type,
+            version: version.version,
+            ...(metadata?.description !== undefined ? { description: metadata.description } : {}),
             namespace: resolved.namespace,
             type: resolved.type,
             source: `${resolved.namespace}/${resolved.type}`,
-            registryhost: REGISTRY_HOST,
-            isdefault: version.version === orderedIds.at(-1),
-            ancestor: predecessorOf([...orderedIds], version.version),
+            sourceurl: TERRAFORM_API.REGISTRY_URL,
+            isdefault: version.version === orderedVersions.at(-1),
+            ancestor: encodeVersionId(predecessorOf([...orderedVersions], version.version)),
             protocols: version.protocols,
             platforms,
-            ...(signingKeys === undefined ? {} : { signing_keys: signingKeys }),
         };
     }
 
@@ -82,8 +82,8 @@ export class ProviderService {
         const selected = versions.at(-1);
         if (!selected) throw entityNotFound(`/${REGISTRY_METADATA.PROVIDER_RESOURCE_TYPE}/${providerId}`, 'provider', providerId);
         const metadata = await this.tfService.fetchProviderV2Attributes(resolved.namespace, resolved.type);
-        const versionIds = versions.map(version => version.version);
-        const projected = this.versionEntity(resolved, selected, versionIds, baseUrl, metadata);
+        const orderedVersions = versions.map(version => version.version);
+        const projected = this.versionEntity(resolved, selected, orderedVersions, baseUrl, metadata);
         const { GROUP_TYPE, PROVIDER_RESOURCE_TYPE } = REGISTRY_METADATA;
         const resourcePath = `/${GROUP_TYPE}/${resolved.namespace}/${PROVIDER_RESOURCE_TYPE}/${resolved.type}`;
         const resourceBaseUrl = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(resolved.namespace)}/${PROVIDER_RESOURCE_TYPE}/${encodeURIComponent(resolved.type)}`;
@@ -116,50 +116,43 @@ export class ProviderService {
             modifiedat: this.entityState.getModifiedAt(metaPath),
             readonly: true,
             compatibility: 'none',
-            defaultversionid: latestVersion,
-            defaultversionurl: `${resourceBaseUrl}/versions/${encodeURIComponent(latestVersion)}`,
+            defaultversionid: encodeVersionId(latestVersion),
+            defaultversionurl: `${resourceBaseUrl}/versions/${encodeURIComponent(encodeVersionId(latestVersion))}`,
             defaultversionsticky: false,
-            downloads: metadata?.downloads ?? 0,
-            tier: metadata?.tier ?? 'community',
-            logo_url: metadata?.logo_url ?? '',
-            categories: metadata?.categories ?? [],
-            featured: metadata?.featured ?? false,
-            unlisted: metadata?.unlisted ?? false,
-            ...(metadata?.warning ? { warning: metadata.warning } : {}),
-            ...(metadata?.aliases?.length ? { aliases: metadata.aliases } : {}),
+            ...(metadata?.downloads !== undefined ? { downloads: metadata.downloads } : {}),
+            ...(metadata?.tier !== undefined ? { tier: metadata.tier } : {}),
+            ...(metadata?.logo_url !== undefined ? { logo_url: metadata.logo_url } : {}),
+            ...(metadata?.categories !== undefined ? { categories: metadata.categories } : {}),
+            ...(metadata?.featured !== undefined ? { featured: metadata.featured } : {}),
+            ...(metadata?.unlisted !== undefined ? { unlisted: metadata.unlisted } : {}),
+            ...(metadata?.warning !== undefined ? { warning: metadata.warning } : {}),
+            ...(metadata?.aliases !== undefined ? { aliases: metadata.aliases } : {}),
         };
     }
 
     async getProviderVersions(namespaceId: string, providerId: string, baseUrl: string): Promise<Record<string, unknown>> {
         const resolved = await this.resolveProvider(namespaceId, providerId);
         const versions = sortTerraformVersionObjects(resolved.versionsResp.versions ?? []);
-        const versionIds = versions.map(version => version.version);
+        const orderedVersions = versions.map(version => version.version);
         const metadata = await this.tfService.fetchProviderV2Attributes(resolved.namespace, resolved.type);
         return Object.fromEntries(versions.map(version => [
-            version.version,
-            this.versionEntity(resolved, version, versionIds, baseUrl, metadata),
+            encodeVersionId(version.version),
+            this.versionEntity(resolved, version, orderedVersions, baseUrl, metadata),
         ]));
     }
 
     async getProviderVersion(namespaceId: string, providerId: string, versionId: string, baseUrl: string): Promise<Record<string, unknown>> {
         const resolved = await this.resolveProvider(namespaceId, providerId);
         const versions = sortTerraformVersionObjects(resolved.versionsResp.versions ?? []);
-        const versionIds = versions.map(version => version.version);
-        const summary = versions.find(version => version.version === versionId);
+        const orderedVersions = versions.map(version => version.version);
+        const requestedVersion = versionId.replace(/~/g, '+');
+        const summary = versions.find(version => version.version === requestedVersion);
         if (!summary) {
             throw entityNotFound(`/${REGISTRY_METADATA.GROUP_TYPE}/${resolved.namespace}/${REGISTRY_METADATA.PROVIDER_RESOURCE_TYPE}/${resolved.type}/versions/${versionId}`, 'version', versionId);
         }
         const metadata = await this.tfService.fetchProviderV2Attributes(resolved.namespace, resolved.type);
-        const platforms = await this.fetchPlatformDistributions(resolved.namespace, resolved.type, versionId, summary);
-        return this.versionEntity(
-            resolved,
-            summary,
-            versionIds,
-            baseUrl,
-            metadata,
-            platforms.enriched,
-            this.extractSigningKeys(platforms.raw),
-        );
+        const platforms = await this.fetchPlatformDistributions(resolved.namespace, resolved.type, requestedVersion, summary);
+        return this.versionEntity(resolved, summary, orderedVersions, baseUrl, metadata, platforms);
     }
 
     private async fetchPlatformDistributions(
@@ -167,49 +160,24 @@ export class ProviderService {
         type: string,
         version: string,
         summary: TFProviderVersionSummary,
-    ): Promise<{ enriched: ProviderPlatformDistribution[]; raw: TFProviderDownloadResponse[] }> {
-        const raw: TFProviderDownloadResponse[] = [];
-        const enriched: ProviderPlatformDistribution[] = [];
-        await Promise.all(summary.platforms.map(async platform => {
+    ): Promise<ProviderPlatformDistribution[]> {
+        const enriched = await Promise.all(summary.platforms.map(async platform => {
             const download = await this.tfService.fetchProviderPlatformDownload(namespace, type, version, platform.os, platform.arch);
-            if (download) {
-                raw.push(download);
-                enriched.push({
-                    os: platform.os,
-                    arch: platform.arch,
-                    filename: download.filename,
-                    download_url: download.download_url,
-                    shasums_url: download.shasums_url,
-                    shasums_signature_url: download.shasums_signature_url,
-                    shasum: download.shasum,
-                });
-            } else {
-                enriched.push({
-                    os: platform.os,
-                    arch: platform.arch,
-                    filename: '',
-                    download_url: '',
-                    shasums_url: '',
-                    shasums_signature_url: '',
-                    shasum: '',
-                });
+            if (!download) {
+                return { os: platform.os, arch: platform.arch } satisfies ProviderPlatformDistribution;
             }
+            return {
+                os: platform.os,
+                arch: platform.arch,
+                protocols: download.protocols,
+                filename: download.filename,
+                download_url: download.download_url,
+                shasums_url: download.shasums_url,
+                shasums_signature_url: download.shasums_signature_url,
+                shasum: download.shasum,
+                signing_keys: download.signing_keys,
+            } satisfies ProviderPlatformDistribution;
         }));
-        enriched.sort((a, b) => a.os.localeCompare(b.os) || a.arch.localeCompare(b.arch));
-        return { enriched, raw };
-    }
-
-    private extractSigningKeys(rawDownloads: TFProviderDownloadResponse[]): { gpg_public_keys: TFGPGKey[] } {
-        const seen = new Set<string>();
-        const keys: TFGPGKey[] = [];
-        for (const download of rawDownloads) {
-            for (const key of download.signing_keys?.gpg_public_keys ?? []) {
-                if (!seen.has(key.key_id)) {
-                    seen.add(key.key_id);
-                    keys.push(key);
-                }
-            }
-        }
-        return { gpg_public_keys: keys };
+        return enriched.sort((a, b) => a.os.localeCompare(b.os) || a.arch.localeCompare(b.arch));
     }
 }

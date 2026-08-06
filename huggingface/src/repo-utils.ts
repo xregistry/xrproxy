@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
+
 /** Hugging Face native namespace/repository identity mapping. */
 
 export const UNNAMESPACED_GROUP_ID = '_';
 export const LEGACY_HF_GROUP_ID = 'huggingface.co';
+export const HASHED_ENTITY_PREFIX = 'xh~';
 
 export interface HuggingFaceRepoIdentity {
   readonly groupId: string;
@@ -30,7 +33,7 @@ export function repoIdToIdentity(repoId: string): HuggingFaceRepoIdentity {
 export function identityToRepoId(groupId: string, resourceId: string): string {
   if (
     !groupId || !resourceId || groupId.includes('/') || resourceId.includes('/') ||
-    groupId.includes('~') || resourceId.includes('~') ||
+    isHashedEntityId(groupId) || isHashedEntityId(resourceId) ||
     (groupId !== UNNAMESPACED_GROUP_ID && !isValidRepoPart(groupId)) ||
     !isValidRepoPart(resourceId)
   ) {
@@ -46,6 +49,50 @@ export function identityToRepoId(groupId: string, resourceId: string): string {
 
 export function isValidRepoPart(value: string): boolean {
   return Boolean(value) && value.length <= 128 && value !== '.' && value !== '..' && !value.includes('~') && PART.test(value);
+}
+
+export function isHashedEntityId(value: string): boolean {
+  return /^xh~[0-9a-f]{64}$/.test(value);
+}
+
+export function projectGroupIds(groupIds: readonly string[]): ReadonlyMap<string, string> {
+  return projectEntityIds(groupIds);
+}
+
+export function projectResourceIds(resourceIds: readonly string[]): ReadonlyMap<string, string> {
+  return projectEntityIds(resourceIds);
+}
+
+function projectEntityIds(values: readonly string[]): ReadonlyMap<string, string> {
+  const projected = new Map<string, string>();
+  const collisions = new Map<string, string[]>();
+
+  for (const value of values) {
+    const key = value.toLowerCase();
+    const bucket = collisions.get(key) ?? [];
+    bucket.push(value);
+    collisions.set(key, bucket);
+  }
+
+  for (const bucket of collisions.values()) {
+    const unique = [...new Set(bucket)].sort();
+    if (unique.length === 1) {
+      projected.set(unique[0]!, unique[0]!);
+      continue;
+    }
+
+    const winner = unique[0]!;
+    projected.set(winner, winner);
+    for (const value of unique.slice(1)) {
+      projected.set(value, hashCollisionId(value));
+    }
+  }
+
+  return projected;
+}
+
+function hashCollisionId(value: string): string {
+  return `${HASHED_ENTITY_PREFIX}${createHash('sha256').update(value, 'utf8').digest('hex')}`;
 }
 
 /** Decode the removed `owner~repo` resource identity for a migration hint. */

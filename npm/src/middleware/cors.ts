@@ -62,6 +62,7 @@ const DEFAULT_CORS_OPTIONS: CorsOptions = {
         'X-Registry-Version',
         'X-Registry-Epoch',
         'X-Registry-Self',
+        'X-Total-Count',
     ],
     credentials: false,
     maxAge: 86400, // 24 hours

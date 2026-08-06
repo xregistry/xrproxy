@@ -1,27 +1,24 @@
 /**
  * Registry Service
- * @fileoverview Service implementing xRegistry-compliant endpoints for NPM packages
+ * @fileoverview Service implementing xRegistry-compliant endpoints for npm packages.
  */
 
 import { Request, Response } from 'express';
 import { CacheService } from '../cache/cache-service';
-import { GROUP_CONFIG, PAGINATION, RESOURCE_CONFIG } from '../config/constants';
+import { GROUP_CONFIG, NPM_REGISTRY, PAGINATION, RESOURCE_CONFIG } from '../config/constants';
 import { throwEntityNotFound, throwInternalError } from '../middleware/xregistry-error-handler';
 import { applyFilterFlag, applySortFlag } from '../middleware/xregistry-flags';
-import {
-    XRegistryEntity,
-    XRegistryGroupResponse,
-    XRegistryResourceResponse
-} from '../types/xregistry';
+import { XRegistryEntity, XRegistryGroupResponse, XRegistryResourceResponse } from '../types/xregistry';
 import {
     createXRegistryEntity,
     generateETag,
     handleEpochFlag,
     handleInlineFlag,
     handleNoReadonlyFlag,
-    handleSchemaFlag
+    handleSchemaFlag,
 } from '../utils/xregistry-utils';
 import { NpmService } from './npm-service';
+import { getNodescopeId, normalizePackageId } from '../utils/package-utils';
 
 export interface RegistryServiceOptions {
     npmService: NpmService;
@@ -29,12 +26,9 @@ export interface RegistryServiceOptions {
     logger?: any;
 }
 
-/**
- * xRegistry-compliant service for NPM packages
- */
 export class RegistryService {
     private readonly npmService: NpmService;
-    // @ts-ignore - Reserved for future use
+    // @ts-ignore - reserved for future use
     private readonly cacheService: CacheService;
     private readonly logger: any;
 
@@ -44,348 +38,246 @@ export class RegistryService {
         this.logger = options.logger || console;
     }
 
-    /**
-     * Get registry root endpoint
-     */
     async getRegistry(req: Request, res: Response): Promise<void> {
         try {
             const baseUrl = `${req.protocol}://${req.get('host')}`;
-
+            const scopeMap = await this.buildScopeMap();
             let registryEntity: XRegistryEntity & Record<string, any> = createXRegistryEntity({
                 xid: '/',
                 self: baseUrl,
                 name: 'NPM Registry Service',
-                description: 'xRegistry-compliant NPM package registry',
-                docs: 'https://docs.npmjs.com/'
+                description: 'xRegistry-compliant npm package registry',
+                docs: 'https://docs.npmjs.com/',
             });
 
-            // Apply xRegistry query parameter processing
+            registryEntity['specversion'] = '1.0-rc2';
+            registryEntity['registryid'] = 'npm-wrapper';
+            registryEntity['nodescopesurl'] = `${baseUrl}/${GROUP_CONFIG.TYPE}`;
+            registryEntity['nodescopescount'] = scopeMap.size;
+            registryEntity['modelurl'] = `${baseUrl}/model`;
+            registryEntity['capabilitiesurl'] = `${baseUrl}/capabilities`;
+
+            const shouldInline = req.query['inline'] === 'true' || req.query['inline'] === '1';
+            if (shouldInline) {
+                registryEntity[GROUP_CONFIG.TYPE] = await this.getGroupsInline(req);
+            }
+
             registryEntity = handleInlineFlag(req, registryEntity);
             registryEntity = handleEpochFlag(req, registryEntity);
             registryEntity = handleNoReadonlyFlag(req, registryEntity);
             registryEntity = handleSchemaFlag(req, registryEntity, 'registry');
 
-            // Add groups information
-            const shouldInline = req.query['inline'] === 'true' || req.query['inline'] === '1';
-            if (shouldInline) {
-                const groups = await this.getGroupsInline(req);
-                registryEntity[GROUP_CONFIG.TYPE] = groups;
-            } else {
-                registryEntity[`${GROUP_CONFIG.TYPE}url`] = `${baseUrl}/${GROUP_CONFIG.TYPE}`;
-                registryEntity[`${GROUP_CONFIG.TYPE}count`] = 1; // Only one group (npm)
-            }
-
-            const etag = generateETag(registryEntity);
-            res.set('ETag', etag);
+            res.set('ETag', generateETag(registryEntity));
             res.set('Content-Type', 'application/json');
             res.json(registryEntity);
-
-            this.logger.info('Registry root served', {
-                path: req.path,
-                inline: shouldInline,
-                hasSchema: !!req.query['schema']
-            });
-
         } catch (error: any) {
-            this.logger.error('Failed to serve registry root', {
-                error: error.message,
-                stack: error.stack,
-                path: req.path
-            });
+            this.logger.error('Failed to serve registry root', { error: error.message, path: req.path });
             throwInternalError(req.originalUrl, 'Failed to retrieve registry information');
         }
     }
 
-    /**
-     * Get groups collection
-     */
     async getGroups(req: Request, res: Response): Promise<void> {
         try {
             let groups = await this.getGroupsInline(req);
-
-            // Apply xRegistry filter flag if present
             if (req.xregistryFlags?.filter) {
                 groups = applyFilterFlag(groups, req.xregistryFlags.filter) as typeof groups;
             }
-
-            // Apply xRegistry sort flag if present
             if (req.xregistryFlags?.sort) {
                 groups = applySortFlag(groups, req.xregistryFlags.sort) as typeof groups;
             }
 
-            // Apply xRegistry query parameter processing to each group (legacy support)
-            groups = groups.map(group => {
-                let processedGroup = handleInlineFlag(req, group);
-                processedGroup = handleEpochFlag(req, processedGroup);
-                processedGroup = handleNoReadonlyFlag(req, processedGroup);
-                return processedGroup;
+            Object.keys(groups).forEach((key) => {
+                let processed = handleInlineFlag(req, groups[key]);
+                processed = handleEpochFlag(req, processed);
+                processed = handleNoReadonlyFlag(req, processed);
+                groups[key] = processed;
             });
 
-            const response: XRegistryGroupResponse = {
-                [GROUP_CONFIG.TYPE]: groups
-            };
-
-            const etag = generateETag(response);
-            res.set('ETag', etag);
+            const response: XRegistryGroupResponse = { [GROUP_CONFIG.TYPE]: groups };
+            res.set('ETag', generateETag(response));
             res.set('Content-Type', 'application/json');
             res.json(response);
-
-            this.logger.info('Groups collection served', {
-                path: req.path,
-                count: groups.length,
-                hasFilter: !!req.xregistryFlags?.filter,
-                hasSort: !!req.xregistryFlags?.sort
-            });
-
         } catch (error: any) {
-            this.logger.error('Failed to serve groups collection', {
-                error: error.message,
-                stack: error.stack,
-                path: req.path
-            });
+            this.logger.error('Failed to serve groups collection', { error: error.message, path: req.path });
             throwInternalError(req.originalUrl, 'Failed to retrieve groups');
         }
     }
 
-    /**
-     * Get specific group
-     */
     async getGroup(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'];
-
-            if (groupId !== GROUP_CONFIG.ID) {
-                throwEntityNotFound(req.originalUrl, 'group', groupId || '');
+            const nodescopeId = this.getNodescopeIdParam(req);
+            const scopeMap = await this.buildScopeMap();
+            if (!scopeMap.has(nodescopeId)) {
+                throwEntityNotFound(req.originalUrl, 'group', nodescopeId);
             }
 
-            let groupEntity: XRegistryEntity & Record<string, any> = createXRegistryEntity({
-                xid: `/${GROUP_CONFIG.TYPE}/${groupId}`,
-                self: `${req.protocol}://${req.get('host')}${req.originalUrl.split('?')[0]}`,
-                id: groupId,
-                name: 'NPM Registry',
-                description: 'NPM package registry at npmjs.org',
-                docs: 'https://docs.npmjs.com/',
-                tags: {
-                    registry: 'npm',
-                    public: 'true'
-                }
-            });
-
-            // Add resources if inline is requested
+            let groupEntity = this.createGroupEntity(req, nodescopeId, scopeMap.get(nodescopeId) || 0);
             const shouldInline = req.query['inline'] === 'true' || req.query['inline'] === '1';
             if (shouldInline) {
-                const packages = await this.getResourcesInline(req, groupId);
-                groupEntity[RESOURCE_CONFIG.TYPE] = packages.slice(0, PAGINATION.DEFAULT_PAGE_LIMIT);
-            } else {
-                groupEntity[`${RESOURCE_CONFIG.TYPE}url`] = `${groupEntity.self}/${RESOURCE_CONFIG.TYPE}`;
-                const totalCount = await this.npmService.getTotalPackageCount();
-                groupEntity[`${RESOURCE_CONFIG.TYPE}count`] = totalCount;
+                groupEntity['packages'] = await this.getResourcesInline(req, nodescopeId);
             }
 
-            // Apply xRegistry query parameter processing
             groupEntity = handleInlineFlag(req, groupEntity);
             groupEntity = handleEpochFlag(req, groupEntity);
             groupEntity = handleNoReadonlyFlag(req, groupEntity);
 
-            const etag = generateETag(groupEntity);
-            res.set('ETag', etag);
+            res.set('ETag', generateETag(groupEntity));
             res.set('Content-Type', 'application/json');
             res.json(groupEntity);
-
-            this.logger.info('Group served', {
-                path: req.path,
-                groupId,
-                inline: shouldInline
-            });
-
         } catch (error: any) {
-            this.logger.error('Failed to serve group', {
-                error: error.message,
-                stack: error.stack,
-                path: req.path,
-                groupId: req.params['groupId']
-            });
+            this.logger.error('Failed to serve group', { error: error.message, path: req.path });
             throwInternalError(req.originalUrl, 'Failed to retrieve group');
         }
     }
 
-    /**
-     * Get resources (packages) collection
-     */
     async getResources(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'];
-
-            if (groupId !== GROUP_CONFIG.ID) {
-                throwEntityNotFound(req.originalUrl, 'group', groupId || '');
+            const nodescopeId = this.getNodescopeIdParam(req);
+            const scopeMap = await this.buildScopeMap();
+            if (!scopeMap.has(nodescopeId)) {
+                throwEntityNotFound(req.originalUrl, 'group', nodescopeId);
             }
 
-            // Get resources (use default pagination for now)
-            let resources = await this.getResourcesInline(req, groupId, {
-                page: 1,
-                limit: 100
-            });
-
-            // Apply xRegistry filter flag if present
+            let resources = await this.getResourcesInline(req, nodescopeId);
             if (req.xregistryFlags?.filter) {
                 resources = applyFilterFlag(resources, req.xregistryFlags.filter) as typeof resources;
             }
-
-            // Apply xRegistry sort flag if present
             if (req.xregistryFlags?.sort) {
                 resources = applySortFlag(resources, req.xregistryFlags.sort) as typeof resources;
             }
 
-            // Apply xRegistry query parameter processing to each resource (legacy support)
-            resources = resources.map(resource => {
-                let processedResource = handleInlineFlag(req, resource);
-                processedResource = handleEpochFlag(req, processedResource);
-                processedResource = handleNoReadonlyFlag(req, processedResource);
-                return processedResource;
+            Object.keys(resources).forEach((key) => {
+                let processed = handleInlineFlag(req, resources[key]);
+                processed = handleEpochFlag(req, processed);
+                processed = handleNoReadonlyFlag(req, processed);
+                resources[key] = processed;
             });
 
-            const response: XRegistryResourceResponse = {
-                [RESOURCE_CONFIG.TYPE]: resources
-            };
-
-            const etag = generateETag(response);
-            res.set('ETag', etag);
+            const response: XRegistryResourceResponse = { [RESOURCE_CONFIG.TYPE]: resources };
+            res.set('ETag', generateETag(response));
             res.set('Content-Type', 'application/json');
             res.json(response);
-
-            this.logger.info('Resources collection served', {
-                path: req.path,
-                groupId,
-                count: resources.length,
-                hasFilter: !!req.xregistryFlags?.filter,
-                hasSort: !!req.xregistryFlags?.sort
-            });
-
         } catch (error: any) {
-            this.logger.error('Failed to serve resources collection', {
-                error: error.message,
-                stack: error.stack,
-                path: req.path,
-                groupId: req.params['groupId']
-            });
+            this.logger.error('Failed to serve resources collection', { error: error.message, path: req.path });
             throwInternalError(req.originalUrl, 'Failed to retrieve resources');
         }
     }
 
-    /**
-     * Get specific resource (package)
-     */
     async getResource(req: Request, res: Response): Promise<void> {
         try {
-            const groupId = req.params['groupId'];
-            const resourceId = req.params['resourceId'];
-
-            if (groupId !== GROUP_CONFIG.ID) {
-                throwEntityNotFound(req.originalUrl, 'group', groupId || '');
+            const nodescopeId = this.getNodescopeIdParam(req);
+            const packageId = this.getPackageIdParam(req);
+            const canonicalName = await this.resolvePackageName(nodescopeId, packageId);
+            if (!canonicalName) {
+                throwEntityNotFound(req.originalUrl, 'package', packageId);
             }
 
-            const packageMetadata = await this.npmService.getPackageMetadata(resourceId || '');
+            const packageMetadata = await this.npmService.getPackageMetadata(canonicalName);
             if (!packageMetadata) {
-                throwEntityNotFound(req.originalUrl, 'package', resourceId || '');
+                throwEntityNotFound(req.originalUrl, 'package', packageId);
             }
 
-            let packageEntity: XRegistryEntity & Record<string, any> = createXRegistryEntity({
-                xid: `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${resourceId}`,
-                self: `${req.protocol}://${req.get('host')}${req.originalUrl.split('?')[0]}`,
-                id: packageMetadata['packageid'],
-                name: packageMetadata['name'] || packageMetadata['packageid'],
-                description: packageMetadata['description'],
-                docs: packageMetadata['documentation']
-            });
+            const self = `${req.protocol}://${req.get('host')}${req.originalUrl.split('?')[0]}`;
+            let packageEntity: XRegistryEntity & Record<string, any> = {
+                ...packageMetadata,
+                xid: `/${GROUP_CONFIG.TYPE}/${nodescopeId}/${RESOURCE_CONFIG.TYPE}/${packageId}`,
+                self,
+                packageid: packageId,
+                versionsurl: `${self}/versions`,
+                metaurl: `${self}/meta`,
+                versionscount: Object.keys(packageMetadata.versions || {}).length,
+            };
 
-            // Add package-specific properties
-            Object.assign(packageEntity, {
-                packageid: packageMetadata['packageid'],
-                author: packageMetadata.author?.name,
-                license: packageMetadata.license,
-                homepage: packageMetadata.homepage,
-                repository: packageMetadata.repository?.url,
-                keywords: packageMetadata.keywords
-            });
-
-            // Apply xRegistry query parameter processing
             packageEntity = handleInlineFlag(req, packageEntity);
             packageEntity = handleEpochFlag(req, packageEntity);
             packageEntity = handleNoReadonlyFlag(req, packageEntity);
 
-            const etag = generateETag(packageEntity);
-            res.set('ETag', etag);
+            res.set('ETag', generateETag(packageEntity));
             res.set('Content-Type', 'application/json');
             res.json(packageEntity);
-
-            this.logger.info('Resource served', {
-                path: req.path,
-                groupId,
-                resourceId
-            });
-
         } catch (error: any) {
-            this.logger.error('Failed to serve resource', {
-                error: error.message,
-                stack: error.stack,
-                path: req.path,
-                groupId: req.params['groupId'],
-                resourceId: req.params['resourceId']
-            });
+            this.logger.error('Failed to serve resource', { error: error.message, path: req.path });
             throwInternalError(req.originalUrl, 'Failed to retrieve resource');
         }
     }
 
-    /**
-     * Get groups for inline inclusion
-     */
-    private async getGroupsInline(req: Request): Promise<XRegistryEntity[]> {
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+    private async buildScopeMap(): Promise<Map<string, number>> {
+        const packageNames = await this.npmService.getKnownPackageNames();
+        const scopeMap = new Map<string, number>([[GROUP_CONFIG.UNSCOPED_ID, 0]]);
 
-        return [
-            createXRegistryEntity({
-                xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`,
-                self: `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`,
-                id: GROUP_CONFIG.ID,
-                name: 'NPM Registry',
-                description: 'NPM package registry at npmjs.org',
-                docs: 'https://docs.npmjs.com/'
-            })
-        ];
-    }
-
-    /**
-     * Get resources for inline inclusion
-     */
-    private async getResourcesInline(
-        req: Request,
-        groupId: string,
-        options?: { page?: number; limit?: number; filter?: string }
-    ): Promise<XRegistryEntity[]> {
-        const { page = 1, limit = PAGINATION.DEFAULT_PAGE_LIMIT, filter } = options || {};
-        const offset = (page - 1) * limit;
-
-        const packageOptions: { offset: number; limit: number; query?: string } = {
-            offset,
-            limit
-        };
-        if (filter) {
-            packageOptions.query = filter;
+        for (const packageName of packageNames) {
+            const nodescopeId = getNodescopeId(packageName);
+            scopeMap.set(nodescopeId, (scopeMap.get(nodescopeId) || 0) + 1);
         }
-        const packageResults = await this.npmService.getPackages(packageOptions);
 
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-
-        return packageResults.packages.map(pkg =>
-            createXRegistryEntity({
-                xid: `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${pkg['packageid']}`,
-                self: `${baseUrl}/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${pkg['packageid']}`,
-                id: pkg['packageid'],
-                name: pkg['name'] || pkg['packageid'],
-                description: pkg['description'],
-                docs: pkg['documentation']
-            })
-        );
+        return scopeMap;
     }
 
-} 
+    private createGroupEntity(req: Request, nodescopeId: string, packageCount: number): XRegistryEntity & Record<string, any> {
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const xid = `/${GROUP_CONFIG.TYPE}/${nodescopeId}`;
+        const entity = createXRegistryEntity({
+            xid,
+            self: `${baseUrl}${xid}`,
+            id: nodescopeId,
+            name: nodescopeId === GROUP_CONFIG.UNSCOPED_ID ? 'unscoped packages' : `@${nodescopeId}`,
+            description: nodescopeId === GROUP_CONFIG.UNSCOPED_ID ? 'Flat namespace of unscoped npm packages' : `npm scope @${nodescopeId}`,
+        });
+
+        entity['nodescopeid'] = nodescopeId;
+        entity['packagesurl'] = `${baseUrl}${xid}/${RESOURCE_CONFIG.TYPE}`;
+        entity['packagescount'] = packageCount;
+        entity['sourceurl'] = NPM_REGISTRY.BASE_URL;
+        if (nodescopeId !== GROUP_CONFIG.UNSCOPED_ID) {
+            entity['scope'] = nodescopeId;
+        }
+        return entity;
+    }
+
+    private async getGroupsInline(req: Request): Promise<Record<string, XRegistryEntity>> {
+        const scopeMap = await this.buildScopeMap();
+        const groups: Record<string, XRegistryEntity> = {};
+
+        Array.from(scopeMap.keys()).sort().forEach((nodescopeId) => {
+            groups[nodescopeId] = this.createGroupEntity(req, nodescopeId, scopeMap.get(nodescopeId) || 0);
+        });
+
+        return groups;
+    }
+
+    private async getResourcesInline(req: Request, nodescopeId: string): Promise<Record<string, XRegistryEntity>> {
+        const packageNames = await this.npmService.getKnownPackageNames();
+        const offset = Number(req.query['offset'] || 0);
+        const limit = Number(req.query['limit'] || PAGINATION.DEFAULT_PAGE_LIMIT);
+        const filtered = packageNames.filter((packageName) => getNodescopeId(packageName) === nodescopeId);
+        const page = filtered.slice(offset, offset + limit);
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const resources: Record<string, XRegistryEntity> = {};
+
+        page.forEach((packageName) => {
+            const packageId = normalizePackageId(packageName);
+            resources[packageId] = createXRegistryEntity({
+                xid: `/${GROUP_CONFIG.TYPE}/${nodescopeId}/${RESOURCE_CONFIG.TYPE}/${packageId}`,
+                self: `${baseUrl}/${GROUP_CONFIG.TYPE}/${nodescopeId}/${RESOURCE_CONFIG.TYPE}/${packageId}`,
+                id: packageId,
+                name: packageName,
+                description: packageName,
+            });
+            resources[packageId]['packageid'] = packageId;
+        });
+
+        return resources;
+    }
+
+    private async resolvePackageName(nodescopeId: string, packageId: string): Promise<string | null> {
+        return this.npmService.resolveCanonicalPackageName(nodescopeId, packageId);
+    }
+
+    private getNodescopeIdParam(req: Request): string {
+        return req.params['nodescopeId'] || req.params['groupId'] || '';
+    }
+
+    private getPackageIdParam(req: Request): string {
+        return req.params['packageId'] || req.params['resourceId'] || req.params['packageName'] || '';
+    }
+}

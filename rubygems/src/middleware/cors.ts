@@ -5,7 +5,7 @@ export function createCorsMiddleware() {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Accept, Authorization, Content-Type, X-Base-Url');
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Type, Link');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Type, Link, X-Total-Count');
 
         if (req.method === 'OPTIONS') {
             res.status(204).end();

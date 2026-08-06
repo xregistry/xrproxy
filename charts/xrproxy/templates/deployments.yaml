@@ -1,6 +1,12 @@
 {{- range $id, $service := .Values.services }}
 {{- if $service.enabled }}
 {{- $imageService := $service }}
+{{- $servicePersistenceEnabled := dig "persistence" "enabled" false $service.cache }}
+{{- $serviceExistingClaim := dig "persistence" "existingClaim" "" $service.cache }}
+{{- $persistenceEnabled := and $.Values.cache.enabled $service.cache.enabled (or $.Values.cache.persistence.enabled $servicePersistenceEnabled) }}
+{{- if and $persistenceEnabled (or (gt (int $service.replicas) 1) $service.autoscaling.enabled) }}
+{{- fail (printf "service %s uses a ReadWriteOnce cache and must have replicas=1 with autoscaling disabled" $id) }}
+{{- end }}
 {{- if and (eq $id "bridge") $.Values.viewer.enabled }}
 {{- $imageService = dict "image" $.Values.viewer.image }}
 {{- end }}
@@ -18,10 +24,14 @@ spec:
   {{- end }}
   revisionHistoryLimit: 3
   strategy:
+    {{- if $persistenceEnabled }}
+    type: Recreate
+    {{- else }}
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+    {{- end }}
   selector:
     matchLabels:
       {{- include "xrproxy.selectorLabels" (dict "root" $ "id" $id) | nindent 6 }}
@@ -111,11 +121,16 @@ spec:
       volumes:
         {{- if and $.Values.cache.enabled $service.cache.enabled }}
         - name: cache
+          {{- if $persistenceEnabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (include "xrproxy.serviceName" (dict "root" $ "id" $id)) $serviceExistingClaim }}
+          {{- else }}
           emptyDir:
             {{- $sizeLimit := default $.Values.cache.sizeLimit $service.cache.sizeLimit }}
             {{- if $sizeLimit }}
             sizeLimit: {{ $sizeLimit }}
             {{- end }}
+          {{- end }}
         {{- end }}
         {{- if eq $service.role "bridge" }}
         - name: downstreams

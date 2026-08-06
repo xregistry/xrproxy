@@ -59,6 +59,29 @@ export const RETRY_INTERVAL = parseInt(process.env['RETRY_INTERVAL'] || '60000')
 export const SERVER_HEALTH_TIMEOUT = parseInt(process.env['SERVER_HEALTH_TIMEOUT'] || '10000'); // 10 seconds
 export const ROOT_METADATA_TIMEOUT = parseInt(process.env['ROOT_METADATA_TIMEOUT'] || '2000'); // 2 seconds
 
+// Response body rewriting
+//
+// Downstream services already receive the X-Base-Url header (see
+// ProxyService) and are expected to emit bridge-correct absolute URLs
+// themselves. The default, fast path therefore streams proxied responses
+// through unmodified (status + headers preserved, no buffering, no JSON
+// parse/re-serialize). Set ENABLE_BODY_URL_REWRITE=true only as an explicit
+// compatibility fallback for downstreams that do not yet honor the header
+// and still emit their own (downstream-absolute) URLs in JSON bodies.
+export const ENABLE_BODY_URL_REWRITE = (process.env['ENABLE_BODY_URL_REWRITE'] || '').toLowerCase() === 'true';
+
+// Health/readiness caching
+//
+// /health and /ready must be constant-time and safe for Kubernetes
+// liveness/readiness probes: they report the cached downstream state
+// maintained by the background retry loop, never performing a live
+// network fan-out to downstreams on the request path. Active,
+// on-demand probing is still available (see HealthService.getDetailedHealth)
+// but is bounded by SERVER_HEALTH_TIMEOUT per downstream and memoized for
+// HEALTH_PROBE_CACHE_TTL milliseconds so repeated diagnostic calls cannot
+// turn into a downstream DoS amplifier.
+export const HEALTH_PROBE_CACHE_TTL = parseInt(process.env['HEALTH_PROBE_CACHE_TTL'] || '5000'); // 5 seconds
+
 // Downstream configuration
 export const CONFIG_FILE = process.env['BRIDGE_CONFIG_FILE'] || 'downstreams.json';
 export const DOWNSTREAMS_JSON = process.env['DOWNSTREAMS_JSON'];

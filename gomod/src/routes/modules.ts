@@ -2,7 +2,9 @@
  * Module and version routes.
  *
  * Go's native namespace maps to the xRegistry group ID. The remaining module
- * path is encoded as one colon-delimited xRegistry resource ID.
+ * path is encoded as one colon-delimited xRegistry resource ID unless the
+ * specification requires the reserved `@` root marker or the `xh~...` hash
+ * fallback for case collisions and overlong IDs.
  */
 
 import { NextFunction, Request, Response, Router } from 'express';
@@ -11,7 +13,9 @@ import { CheckpointService } from '../services/checkpoint-service';
 import { ModuleService } from '../services/module-service';
 import {
     identityToModulePath,
-    modulePathToIdentity,
+    isHashedModuleId,
+    versionIdToVersion,
+    versionToId,
 } from '../utils/path-escaping';
 import { entityNotFound } from '../utils/xregistry-errors';
 import { buildPaginationLinkHeader } from '../utils/pagination';
@@ -42,14 +46,17 @@ function routeParam(req: Request, name: string): string {
     return value;
 }
 
-function modulePathFromRoute(req: Request): string {
+function modulePathFromRoute(req: Request, checkpointService: CheckpointService): string | null {
+    const groupId = routeParam(req, 'groupId');
+    const moduleId = routeParam(req, 'moduleId');
+
+    const knownPath = checkpointService.resolveModulePath(groupId, moduleId);
+    if (knownPath) return knownPath;
+    if (isHashedModuleId(moduleId)) return null;
+
     try {
-        return identityToModulePath(
-            routeParam(req, 'groupId'),
-            routeParam(req, 'moduleId')
-        );
-    } catch (error) {
-        if (error instanceof InvalidRouteIdentityError) throw error;
+        return identityToModulePath(groupId, moduleId);
+    } catch {
         throw new InvalidRouteIdentityError('Invalid Go module group/resource identity');
     }
 }
@@ -61,9 +68,6 @@ export function createModuleRoutes(
     const router = Router();
     const collectionPath = `/${GROUP_TYPE}/:groupId/${RESOURCE_TYPE}`;
 
-    // -------------------------------------------------------------------------
-    // Module collection  GET /goregistries/github.com/modules
-    // -------------------------------------------------------------------------
     router.get(
         collectionPath,
         asyncHandler(async (req: Request, res: Response): Promise<void> => {
@@ -72,10 +76,7 @@ export function createModuleRoutes(
                 parseInt(String(req.query['limit'] ?? SERVER_CONFIG.DEFAULT_PAGE_LIMIT), 10),
                 SERVER_CONFIG.MAX_PAGE_LIMIT
             );
-            const offset = Math.max(
-                parseInt(String(req.query['offset'] ?? '0'), 10),
-                0
-            );
+            const offset = Math.max(parseInt(String(req.query['offset'] ?? '0'), 10), 0);
             const filterParam = req.query['filter'] as string | undefined;
             const groupId = routeParam(req, 'groupId');
 
@@ -84,54 +85,52 @@ export function createModuleRoutes(
                 return;
             }
 
-            const nameMatch = filterParam?.match(/name=(.+)/i);
+            const nameMatch = filterParam?.match(/(?:name|modulepath|moduleid)=(.+)/i);
             const pattern = filterParam ? (nameMatch ? nameMatch[1] : filterParam) : undefined;
             const result = checkpointService.listGroupModulePaths(groupId, pattern, offset, limit);
             const { paths, totalMatched: totalKnown } = result;
 
             const modules: Record<string, unknown> = {};
-            for (const p of paths) {
-                const catalogEntry = checkpointService.getModule(p);
-                const { moduleId } = modulePathToIdentity(p);
+            for (const modulePath of paths) {
+                const catalogEntry = checkpointService.getModule(modulePath);
+                const { moduleId } = checkpointService.getModuleIdentity(modulePath);
                 const xp = `/${GROUP_TYPE}/${groupId}/${RESOURCE_TYPE}/${moduleId}`;
                 const selfUrl = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_TYPE}/${encodeURIComponent(moduleId)}`;
                 modules[moduleId] = {
                     moduleid: moduleId,
-                    versionid: catalogEntry?.latestVersion,
+                    ...(catalogEntry?.latestVersion ? {
+                        versionid: versionToId(catalogEntry.latestVersion),
+                        version: catalogEntry.latestVersion,
+                        meta: { latest_version: catalogEntry.latestVersion },
+                    } : {}),
                     isdefault: true,
                     xid: xp,
-                    name: p,
-                    modulepath: p,
+                    name: modulePath,
+                    modulepath: modulePath,
                     self: selfUrl,
                     versionsurl: `${selfUrl}/versions`,
                     versionscount: catalogEntry ? catalogEntry.versions.length : undefined,
-                    latest_version: catalogEntry ? catalogEntry.latestVersion : undefined,
                 };
             }
 
             const collectionUrl = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_TYPE}`;
             res.setHeader('X-Total-Count', String(totalKnown));
-            const linkHeader = buildPaginationLinkHeader(
-                collectionUrl,
-                offset,
-                limit,
-                totalKnown,
-                { filter: filterParam }
-            );
+            const linkHeader = buildPaginationLinkHeader(collectionUrl, offset, limit, totalKnown, { filter: filterParam });
             if (linkHeader) res.setHeader('Link', linkHeader);
 
             res.json(modules);
         })
     );
 
-    // -------------------------------------------------------------------------
-    // Single version
-    // -------------------------------------------------------------------------
     router.get(
         `${collectionPath}/:moduleId/versions/:versionId`,
         asyncHandler(async (req: Request, res: Response): Promise<void> => {
-            const modulePath = modulePathFromRoute(req);
-            const version = routeParam(req, 'versionId');
+            const modulePath = modulePathFromRoute(req, checkpointService);
+            if (!modulePath) {
+                res.status(404).json(entityNotFound(req.originalUrl, 'module', `${routeParam(req, 'groupId')}/${routeParam(req, 'moduleId')}`));
+                return;
+            }
+            const version = versionIdToVersion(routeParam(req, 'versionId'));
             const record = await moduleService.getVersion(req, modulePath, version);
             if (!record) {
                 res.status(404).json(entityNotFound(req.originalUrl, 'version', `${modulePath}@${version}`));
@@ -141,14 +140,18 @@ export function createModuleRoutes(
         })
     );
 
-    // Version collection
     router.get(
         `${collectionPath}/:moduleId/versions`,
         asyncHandler(async (req: Request, res: Response): Promise<void> => {
             const baseUrl = getBaseUrl(req);
             const groupId = routeParam(req, 'groupId');
             const moduleId = routeParam(req, 'moduleId');
-            const modulePath = modulePathFromRoute(req);
+            const modulePath = modulePathFromRoute(req, checkpointService);
+            if (!modulePath) {
+                res.status(404).json(entityNotFound(req.originalUrl, 'module', `${groupId}/${moduleId}`));
+                return;
+            }
+
             const limit = Math.min(
                 parseInt(String(req.query['limit'] ?? SERVER_CONFIG.DEFAULT_PAGE_LIMIT), 10),
                 SERVER_CONFIG.MAX_PAGE_LIMIT
@@ -163,12 +166,7 @@ export function createModuleRoutes(
             const { versions, totalCount } = result;
             const versionsUrl = `${baseUrl}/${GROUP_TYPE}/${encodeURIComponent(groupId)}/${RESOURCE_TYPE}/${encodeURIComponent(moduleId)}/versions`;
             res.setHeader('X-Total-Count', String(totalCount));
-            const linkHeader = buildPaginationLinkHeader(
-                versionsUrl,
-                offset,
-                limit,
-                totalCount
-            );
+            const linkHeader = buildPaginationLinkHeader(versionsUrl, offset, limit, totalCount);
             if (linkHeader) res.setHeader('Link', linkHeader);
 
             const body: Record<string, unknown> = {};
@@ -179,11 +177,14 @@ export function createModuleRoutes(
         })
     );
 
-    // Exact module lookup
     router.get(
         `${collectionPath}/:moduleId`,
         asyncHandler(async (req: Request, res: Response): Promise<void> => {
-            const modulePath = modulePathFromRoute(req);
+            const modulePath = modulePathFromRoute(req, checkpointService);
+            if (!modulePath) {
+                res.status(404).json(entityNotFound(req.originalUrl, 'module', `${routeParam(req, 'groupId')}/${routeParam(req, 'moduleId')}`));
+                return;
+            }
             const module = await moduleService.getModule(req, modulePath);
             if (!module) {
                 res.status(404).json(entityNotFound(req.originalUrl, 'module', modulePath));

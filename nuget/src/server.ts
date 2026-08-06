@@ -1,193 +1,88 @@
-/**
- * xRegistry NuGet Wrapper Server
- * @fileoverview Service for NuGet packages
- */
-
 import express from 'express';
 import { EntityStateManager } from '../../shared/entity-state-manager';
 import * as modelData from '../model.json';
 import { CacheManager } from './cache/cache-manager';
 import { CacheService } from './cache/cache-service';
-import { CACHE_CONFIG, getBaseUrl, NUGET_REGISTRY } from './config/constants';
+import { CACHE_CONFIG, getBaseUrl, GROUP_CONFIG, HTTP_STATUS, NUGET_REGISTRY, PAGINATION, REGISTRY_CONFIG, RESOURCE_CONFIG } from './config/constants';
 import { corsMiddleware } from './middleware/cors';
-import { errorHandler } from './middleware/error-handler';
 import { createLoggingMiddleware } from './middleware/logging';
-import { xregistryErrorHandler } from './middleware/xregistry-error-handler';
 import { parseXRegistryFlags } from './middleware/xregistry-flags';
 import { NuGetService } from './services/nuget-service';
+import { PackageMetadata, Registry } from './types/xregistry';
 
-// Import shared filter utilities for two-step filtering
-// @ts-ignore - JavaScript module without TypeScript declarations
-import { FilterOptimizer } from '../../shared/filter/index.js';
-
-/**
- * Strip a matched pair of surrounding single or double quotes from an
- * xRegistry filter value. Per core spec §"Filter Flag" the value
- * following `=` MAY be quoted; the route layer was leaking the quote
- * characters into the search term.
- */
-function stripFilterQuotes(value: string): string {
-    if (value.length >= 2 &&
-        ((value.startsWith("'") && value.endsWith("'")) ||
-         (value.startsWith('"') && value.endsWith('"')))) {
-        return value.slice(1, -1);
-    }
-    return value;
-}
-
-/**
- * Emit an RFC 9457 / xRegistry-style problem-details response. Per core
- * spec §"Error Processing" the body is a JSON object with `type`, `title`,
- * `status`, `instance`, and optional `detail`/`subject`/`args` fields,
- * served with content-type application/problem+json.
- */
-function sendProblem(
-    res: express.Response,
-    status: number,
-    typeAnchor: string,
-    title: string,
-    instance: string,
-    detail?: string
-): void {
-    res.status(status).type('application/problem+json').json({
-        type: `https://github.com/xregistry/spec/blob/main/core/${typeAnchor}`,
-        title,
-        status,
-        ...(detail ? { detail } : {}),
-        instance
-    });
-}
-
-// Simple console logger
 class SimpleLogger {
-    info(message: string, data?: any) {
-        console.log(`[INFO] ${message}`, data ? JSON.stringify(data, null, 2) : '');
-    }
-    error(message: string, data?: any) {
-        console.error(`[ERROR] ${message}`, data ? JSON.stringify(data, null, 2) : '');
-    }
-    warn(message: string, data?: any) {
-        console.warn(`[WARN] ${message}`, data ? JSON.stringify(data, null, 2) : '');
-    }
-    debug(message: string, data?: any) {
-        console.debug(`[DEBUG] ${message}`, data ? JSON.stringify(data, null, 2) : '');
-    }
+    info(message: string, data?: unknown): void { console.log(`[INFO] ${message}`, data ? JSON.stringify(data, null, 2) : ''); }
+    error(message: string, data?: unknown): void { console.error(`[ERROR] ${message}`, data ? JSON.stringify(data, null, 2) : ''); }
+    warn(message: string, data?: unknown): void { console.warn(`[WARN] ${message}`, data ? JSON.stringify(data, null, 2) : ''); }
+    debug(message: string, data?: unknown): void { console.debug(`[DEBUG] ${message}`, data ? JSON.stringify(data, null, 2) : ''); }
 }
 
-export interface ServerOptions {
-    port?: number;
-    host?: string;
-    nugetRegistryUrl?: string;
-    cacheEnabled?: boolean;
-    cacheTtl?: number;
-    logLevel?: string;
+function sendProblem(res: express.Response, status: number, title: string, instance: string, detail?: string): void {
+    res.status(status).type('application/problem+json').json({ type: 'about:blank', title, status, ...(detail ? { detail } : {}), instance });
 }
+
+function isCanonicalPackageId(packageId: string): boolean { return packageId === packageId.toLowerCase(); }
+
+function matchesExpression(entity: Record<string, unknown>, expression: string): boolean {
+    const operator = expression.includes('!=') ? '!=' : '=';
+    const parts = expression.split(operator).map((part) => part.trim());
+    if (parts.length !== 2 || !parts[0]) return false;
+    const attribute = parts[0];
+    const rawValue = (parts[1] || '').replace(/^['\"]|['\"]$/g, '');
+    const entityValue = entity[attribute];
+    if (entityValue === undefined) return operator === '!=';
+    const values = Array.isArray(entityValue) ? entityValue.map(String) : [String(entityValue)];
+    const pattern = rawValue.includes('*') ? new RegExp(`^${rawValue.replace(/[.+?^${}()|[\\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i') : null;
+    const matched = values.some((value) => pattern ? pattern.test(value) : value === rawValue);
+    return operator === '=' ? matched : !matched;
+}
+
+function applyFilters(packages: Record<string, PackageMetadata>, filterGroups: string[][] | undefined): Record<string, PackageMetadata> {
+    if (!filterGroups || filterGroups.length === 0) return packages;
+    return Object.fromEntries(Object.entries(packages).filter(([, pkg]) => {
+        const candidate = pkg as unknown as Record<string, unknown>;
+        return filterGroups.some((group) => group.every((expression) => matchesExpression(candidate, expression)));
+    }));
+}
+
+function applySort(packages: Record<string, PackageMetadata>, sort: { attribute: string; direction: 'asc' | 'desc' } | undefined): Record<string, PackageMetadata> {
+    if (!sort) return packages;
+    const entries = Object.entries(packages).sort(([, left], [, right]) => {
+        const leftValue = left[sort.attribute]; const rightValue = right[sort.attribute];
+        if (leftValue === undefined) return 1; if (rightValue === undefined) return -1;
+        const comparison = String(leftValue).localeCompare(String(rightValue));
+        return sort.direction === 'desc' ? -comparison : comparison;
+    });
+    return Object.fromEntries(entries);
+}
+
+export interface ServerOptions { port?: number; host?: string; nugetRegistryUrl?: string; cacheEnabled?: boolean; cacheTtl?: number; logLevel?: string; }
 
 export class XRegistryServer {
-    private app: express.Application;
-    private server: any;
-    private NuGetService!: NuGetService;
-    // @ts-ignore - Reserved for future use
-    private cacheService!: CacheService;
-    private cacheManager!: CacheManager;
-    private logger!: SimpleLogger;
-    private options: Required<ServerOptions>;
-    private entityState!: EntityStateManager;
-    private filterOptimizer: any; // FilterOptimizer instance
-    private packageNamesCache: any[] = [];
-    private model: any; // Loaded from model.json
+    private readonly app: express.Application;
+    private server: unknown;
+    private readonly nugetService: NuGetService;
+    private readonly cacheService: CacheService;
+    private readonly cacheManager: CacheManager;
+    private readonly logger: SimpleLogger;
+    private readonly options: Required<ServerOptions>;
+    private readonly entityState: EntityStateManager;
+    private readonly model: unknown;
 
     constructor(options: ServerOptions = {}) {
-        this.options = {
-            port: options.port || 3100,
-            host: options.host || '0.0.0.0',
-            nugetRegistryUrl: options.nugetRegistryUrl || 'https://registry.nuget.org',
-            cacheEnabled: options.cacheEnabled !== false,
-            cacheTtl: options.cacheTtl || CACHE_CONFIG.CACHE_TTL_MS,
-            logLevel: options.logLevel || 'info'
-        };
-
+        this.options = { port: options.port || 3100, host: options.host || '0.0.0.0', nugetRegistryUrl: options.nugetRegistryUrl || NUGET_REGISTRY.BASE_URL, cacheEnabled: options.cacheEnabled !== false, cacheTtl: options.cacheTtl || CACHE_CONFIG.CACHE_TTL_MS, logLevel: options.logLevel || 'info' };
         this.logger = new SimpleLogger();
         this.app = express();
-        this.loadModel();
-        this.initializeServices();
+        this.model = modelData;
+        this.entityState = new EntityStateManager();
+        this.cacheService = new CacheService({ maxSize: CACHE_CONFIG.MAX_CACHE_SIZE, ttlMs: this.options.cacheTtl, enablePersistence: true, cacheDir: CACHE_CONFIG.CACHE_DIR });
+        this.cacheManager = new CacheManager({ baseDir: CACHE_CONFIG.CACHE_DIR, defaultTtl: this.options.cacheTtl });
+        this.nugetService = new NuGetService({ searchUrl: NUGET_REGISTRY.SEARCH_URL, registrationBaseUrl: NUGET_REGISTRY.REGISTRATION_BASE_URL, catalogIndexUrl: NUGET_REGISTRY.CATALOG_INDEX_URL, serviceIndexUrl: NUGET_REGISTRY.SERVICE_INDEX_URL, flatContainerUrl: NUGET_REGISTRY.FLAT_CONTAINER_URL, cacheTtl: this.options.cacheTtl, cacheDir: CACHE_CONFIG.CACHE_DIR, entityState: this.entityState, cacheManager: this.cacheManager });
         this.setupMiddleware();
         this.setupRoutes();
         this.setupErrorHandling();
     }
 
-    /**
-     * Load model.json
-     */
-    private loadModel(): void {
-        // Import model.json directly as a module
-        this.model = modelData;
-    }
-
-    /**
-     * Initialize services
-     */
-    private initializeServices(): void {
-        // Initialize entity state manager
-        this.entityState = new EntityStateManager();
-
-        // Initialize cache service
-        this.cacheService = new CacheService({
-            maxSize: CACHE_CONFIG.MAX_CACHE_SIZE,
-            ttlMs: this.options.cacheTtl,
-            enablePersistence: true,
-            cacheDir: CACHE_CONFIG.CACHE_DIR
-        });
-
-        // Initialize cache manager
-        this.cacheManager = new CacheManager({
-            baseDir: CACHE_CONFIG.CACHE_DIR,
-            defaultTtl: this.options.cacheTtl
-        });
-
-        // Initialize NuGet service
-        if (this.options.cacheEnabled) {
-            this.NuGetService = new NuGetService({
-                searchUrl: NUGET_REGISTRY.SEARCH_URL,
-                registrationBaseUrl: NUGET_REGISTRY.REGISTRATION_BASE_URL,
-                catalogIndexUrl: NUGET_REGISTRY.CATALOG_INDEX_URL,
-                cacheManager: this.cacheManager,
-                cacheTtl: this.options.cacheTtl,
-                cacheDir: CACHE_CONFIG.CACHE_DIR,
-                entityState: this.entityState
-            });
-        } else {
-            this.NuGetService = new NuGetService({
-                searchUrl: NUGET_REGISTRY.SEARCH_URL,
-                registrationBaseUrl: NUGET_REGISTRY.REGISTRATION_BASE_URL,
-                catalogIndexUrl: NUGET_REGISTRY.CATALOG_INDEX_URL,
-                cacheTtl: this.options.cacheTtl,
-                cacheDir: CACHE_CONFIG.CACHE_DIR,
-                entityState: this.entityState
-            });
-        }
-
-        // Initialize FilterOptimizer for two-step filtering.
-        // liteMode skips building per-entity Map indices over the ~452k
-        // NuGet package-name catalog; that index costs ~70 MB heap for
-        // negligible benefit since wildcard queries already linear-scan
-        // and direct package lookups go through a different path. See
-        // shared/filter/index.js for details.
-        this.filterOptimizer = new FilterOptimizer({
-            cacheSize: 2000,
-            maxCacheAge: 600000, // 10 minutes
-            enableTwoStepFiltering: true,
-            maxMetadataFetches: 100,
-            liteMode: true
-        });
-
-        // Set metadata fetcher function
-        this.filterOptimizer.setMetadataFetcher(this.fetchPackageMetadata.bind(this));
-    }
-
-    /**
-     * Setup middleware
-     */
     private setupMiddleware(): void {
         this.app.set('trust proxy', true);
         this.app.use(express.json({ limit: '10mb' }));
@@ -196,793 +91,158 @@ export class XRegistryServer {
         this.app.use(createLoggingMiddleware({ logger: this.logger }));
         this.app.use(parseXRegistryFlags);
     }
+    private async buildRegistry(baseUrl: string, inlineGroups: boolean): Promise<Registry> {
+        const rootPath = '/';
+        const registry: Registry = {
+            specversion: REGISTRY_CONFIG.SPEC_VERSION,
+            registryid: REGISTRY_CONFIG.ID,
+            xid: rootPath,
+            self: baseUrl,
+            epoch: this.entityState.getEpoch(rootPath),
+            createdat: this.entityState.getCreatedAt(rootPath),
+            modifiedat: this.entityState.getModifiedAt(rootPath),
+            name: 'NuGet Registry Service',
+            description: 'xRegistry projection of the NuGet V3 package registry model',
+            modelurl: `${baseUrl}/model`,
+            capabilitiesurl: `${baseUrl}/capabilities`,
+            dotnetregistriesurl: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
+            dotnetregistriescount: 1,
+        };
+        if (inlineGroups) registry.dotnetregistries = { [GROUP_CONFIG.ID]: await this.nugetService.getGroup(baseUrl, false) };
+        return registry;
+    }
 
-    /**
-     * Setup routes
-     */
+    private buildPaginationLink(baseUrl: string, query: Record<string, unknown>, totalCount: number, limit: number, offset: number): string | null {
+        if (offset + limit >= totalCount) return null;
+        const nextUrl = new URL(`${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}`);
+        for (const [key, value] of Object.entries(query)) if (value !== undefined) nextUrl.searchParams.set(key, String(value));
+        nextUrl.searchParams.set('limit', String(limit));
+        nextUrl.searchParams.set('offset', String(offset + limit));
+        return `<${nextUrl.toString()}>; rel="next"`;
+    }
+
     private setupRoutes(): void {
-        // Health check
         this.app.get('/health', (_req, res) => {
-            res.json({
-                status: 'healthy',
-                timestamp: new Date().toISOString(),
-                version: process.env['npm_package_version'] || '1.0.0',
-                uptime: process.uptime(),
-                cache: {
-                    enabled: this.options.cacheEnabled,
-                    stats: this.cacheManager.getStats()
-                }
-            });
+            res.json({ status: 'healthy', timestamp: new Date().toISOString(), version: process.env['npm_package_version'] || '1.0.0', uptime: process.uptime(), cache: { enabled: this.options.cacheEnabled, stats: this.cacheManager.getStats(), volatileStats: this.cacheService.getStats() } });
         });
 
-        // xRegistry root endpoint
         this.app.get('/', async (req, res) => {
             try {
                 const baseUrl = getBaseUrl(req);
-                const registryInfo = {
-                    specversion: '1.0-rc2',
-                    registryid: 'nuget-wrapper',
-                    xid: '/',
-                    name: 'NuGet Registry Service',
-                    self: baseUrl,
-                    description: 'xRegistry-compliant NuGet package registry',
-                    documentation: 'https://learn.microsoft.com/nuget/',
-                    epoch: 1,
-                    createdat: new Date().toISOString(),
-                    modifiedat: new Date().toISOString(),
-                    modelurl: `${baseUrl}/model`,
-                    capabilitiesurl: `${baseUrl}/capabilities`,
-                    dotnetregistriesurl: `${baseUrl}/dotnetregistries`,
-                    dotnetregistriescount: 1,
-                    dotnetregistries: {
-                        'nuget.org': {
-                            name: 'nuget.org',
-                            xid: '/dotnetregistries/nuget.org',
-                            self: `${baseUrl}/dotnetregistries/nuget.org`,
-                            packagesurl: `${baseUrl}/dotnetregistries/nuget.org/packages`
-                        }
-                    }
-                };
-
+                const inline = req.xregistryFlags?.inline;
+                const registry = await this.buildRegistry(baseUrl, !!inline && (inline.includes('*') || inline.includes(GROUP_CONFIG.TYPE)));
+                if (inline && (inline.includes('*') || inline.includes('capabilities'))) registry.capabilities = { apis: ['/capabilities', '/model', '/export'], filter: true, sort: true, doc: true, mutable: false, pagination: true };
+                if (inline && (inline.includes('*') || inline.includes('model'))) registry.model = this.model as Record<string, unknown>;
                 res.set('Content-Type', 'application/json');
-                res.set('xRegistry-Version', '1.0-rc2');
-                res.json(registryInfo);
-            } catch (error) {
-                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve registry information`, req.originalUrl);
-            }
+                res.set('xRegistry-Version', REGISTRY_CONFIG.SPEC_VERSION);
+                res.json(registry);
+            } catch (error) { this.logger.error('Failed to retrieve registry information', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve registry information', req.originalUrl); }
         });
 
-        // Capabilities endpoint
         this.app.get('/capabilities', (_req, res) => {
-            // Per core spec §"Design: JSON Serialization".
-            const capabilities = {
-                apis: ['/capabilities', '/model', '/export'],
-                flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
-                formats: ['xRegistry-json/1.0-rc2'],
-                mutable: [],
-                pagination: true,
-                specversions: ['1.0-rc2']
-            };
-            res.json(capabilities);
+            res.json({ apis: ['/capabilities', '/model', '/export'], filter: true, sort: true, doc: true, mutable: false, pagination: true });
         });
+        this.app.get('/export', (req, res) => { res.redirect(`${getBaseUrl(req)}/?doc&inline=*,capabilities,model`); });
+        this.app.get('/model', (_req, res) => { res.json(this.model); });
 
-        // Export endpoint - redirect to root with inline flags
-        this.app.get('/export', (req, res) => {
-            const baseUrl = getBaseUrl(req);
-            res.redirect(`${baseUrl}/?doc&inline=*,capabilities,modelsource`);
-        });
-
-        // Performance stats endpoint
-        this.app.get('/performance/stats', (_req, res) => {
-            const optimizerStats = typeof this.filterOptimizer.getCacheStats === 'function'
-                ? this.filterOptimizer.getCacheStats()
-                : {};
-            const stats = {
-                filterOptimizer: {
-                    ...optimizerStats,
-                    indexedEntities: optimizerStats.indexedEntities ?? this.packageNamesCache.length
-                },
-                packageCache: {
-                    size: this.packageNamesCache.length
-                }
-            };
-            res.json(stats);
-        });
-
-        // Model endpoint
-        this.app.get('/model', (_req, res) => {
-            // Return the full model.json content
-            res.json(this.model);
-        });
-
-        // Node registries collection
-        this.app.get('/dotnetregistries', (req, res) => {
-            const baseUrl = getBaseUrl(req);
-            const groupPath = '/dotnetregistries/nuget.org';
-            const dotnetregistries = {
-                'nuget.org': {
-                    name: 'nuget.org',
-                    xid: groupPath,
-                    self: `${baseUrl}/dotnetregistries/nuget.org`,
-                    dotnetregistryid: 'nuget.org',
-                    epoch: this.entityState.getEpoch(groupPath),
-                    createdat: this.entityState.getCreatedAt(groupPath),
-                    modifiedat: this.entityState.getModifiedAt(groupPath),
-                    packagesurl: `${baseUrl}/dotnetregistries/nuget.org/packages`,
-                    packagescount: this.packageNamesCache.length
-                }
-            };
-            res.json(dotnetregistries);
-        });
-
-        // Specific node registry
-        this.app.get('/dotnetregistries/:registryId', (req, res) => {
-            const registryId = req.params['registryId'];
-            if (registryId !== 'nuget.org') {
-                sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
-                return;
-            }
-
-            const baseUrl = `${req.protocol}://${req.get('host')}`;
-            const groupPath = '/dotnetregistries/nuget.org';
-            const registry = {
-                name: 'nuget.org',
-                xid: groupPath,
-                self: `${baseUrl}/dotnetregistries/nuget.org`,
-                dotnetregistryid: 'nuget.org',
-                epoch: this.entityState.getEpoch(groupPath),
-                createdat: this.entityState.getCreatedAt(groupPath),
-                modifiedat: this.entityState.getModifiedAt(groupPath),
-                packagesurl: `${baseUrl}/dotnetregistries/nuget.org/packages`,
-                packagescount: this.packageNamesCache.length
-            };
-            res.json(registry);
-        });
-
-        // Packages collection with filtering and pagination
-        this.app.get('/dotnetregistries/:registryId/packages', async (req, res) => {
+        this.app.get(`/${GROUP_CONFIG.TYPE}`, async (req, res) => {
             try {
-                const registryId = req.params['registryId'];
-                if (registryId !== 'nuget.org') {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
-                    return;
-                }
-
                 const baseUrl = getBaseUrl(req);
-                const limit = parseInt(req.query['limit'] as string || '20', 10);
-                const offset = parseInt(req.query['offset'] as string || '0', 10);
-                const filter = req.query['filter'] as string;
+                const includePackages = !!req.xregistryFlags?.inline && (req.xregistryFlags.inline.includes('*') || req.xregistryFlags.inline.includes(RESOURCE_CONFIG.TYPE));
+                const group = await this.nugetService.getGroup(baseUrl, includePackages, { query: '', offset: 0, limit: PAGINATION.DEFAULT_PAGE_LIMIT });
+                res.json({ [GROUP_CONFIG.ID]: group });
+            } catch (error) { this.logger.error('Failed to retrieve groups', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve groups', req.originalUrl); }
+        });
 
-                let packages: any = {};
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:registryId`, async (req, res) => {
+            try {
+                if ((req.params['registryId'] || '') !== GROUP_CONFIG.ID) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Registry not found', req.originalUrl, 'No xRegistry group with that id.'); return; }
+                const baseUrl = getBaseUrl(req);
+                const includePackages = !!req.xregistryFlags?.inline && (req.xregistryFlags.inline.includes('*') || req.xregistryFlags.inline.includes(RESOURCE_CONFIG.TYPE));
+                res.json(await this.nugetService.getGroup(baseUrl, includePackages, { query: '', offset: 0, limit: PAGINATION.DEFAULT_PAGE_LIMIT }));
+            } catch (error) { this.logger.error('Failed to retrieve group', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve group', req.originalUrl); }
+        });
 
-                if (filter) {
-                    // Handle filtering
-                    const searchResults = await this.handlePackageFilter(filter, limit, offset);
-                    if (searchResults) {
-                        searchResults.forEach((pkg: any) => {
-                            const packageName = pkg.name || pkg.package?.name;
-                            if (packageName) {
-                                const resourcePath = `/dotnetregistries/nuget.org/packages/${packageName}`;
-                                const version = pkg.version || pkg.package?.version || '1.0.0';
-                                packages[packageName] = {
-                                    name: packageName,
-                                    xid: resourcePath,
-                                    self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}`,
-                                    packageid: packageName,
-                                    versionid: version,
-                                    isdefault: true,
-                                    versionscount: 1,
-                                    versionsurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions`,
-                                    metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
-                                    epoch: this.entityState.getEpoch(resourcePath),
-                                    createdat: pkg.date || this.entityState.getCreatedAt(resourcePath),
-                                    modifiedat: pkg.date || this.entityState.getModifiedAt(resourcePath),
-                                    description: pkg.description || pkg.package?.description || '',
-                                    version
-                                };
-                            }
-                        });
-                    }
-                } else {
-                    // Get popular packages when no filter
-                    const searchResults = await this.NuGetService.searchPackages('', false, limit);
-                    if (searchResults && Array.isArray(searchResults)) {
-                        searchResults.forEach((result: any) => {
-                            const packageName = result.id;
-                            if (packageName) {
-                                const resourcePath = `/dotnetregistries/nuget.org/packages/${packageName}`;
-                                const version = result.version || '1.0.0';
-                                packages[packageName] = {
-                                    name: packageName,
-                                    xid: resourcePath,
-                                    self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}`,
-                                    packageid: packageName,
-                                    versionid: version,
-                                    isdefault: true,
-                                    versionscount: 1,
-                                    versionsurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions`,
-                                    metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
-                                    epoch: this.entityState.getEpoch(resourcePath),
-                                    createdat: this.entityState.getCreatedAt(resourcePath),
-                                    modifiedat: this.entityState.getModifiedAt(resourcePath),
-                                    description: result.description || result.summary || '',
-                                    version
-                                };
-                            }
-                        });
-                    }
-                }
-
-                // Add pagination headers
-                const totalCount = Object.keys(packages).length;
-                if (totalCount >= limit) {
-                    const nextOffset = offset + limit;
-                    const nextUrl = `${baseUrl}/dotnetregistries/nuget.org/packages?limit=${limit}&offset=${nextOffset}`;
-                    if (filter) {
-                        res.set('Link', `<${nextUrl}&filter=${encodeURIComponent(filter)}>; rel="next"`);
-                    } else {
-                        res.set('Link', `<${nextUrl}>; rel="next"`);
-                    }
-                }
-
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:registryId/${RESOURCE_CONFIG.TYPE}`, async (req, res) => {
+            try {
+                if ((req.params['registryId'] || '') !== GROUP_CONFIG.ID) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Registry not found', req.originalUrl, 'No xRegistry group with that id.'); return; }
+                const baseUrl = getBaseUrl(req);
+                const limit = Math.min(parseInt(String(req.query['limit'] || PAGINATION.DEFAULT_PAGE_LIMIT), 10), PAGINATION.MAX_PAGE_LIMIT);
+                const offset = Math.max(parseInt(String(req.query['offset'] || 0), 10), 0);
+                const searchResults = await this.nugetService.searchPackageResources(baseUrl, { query: '', offset, limit });
+                let packages = searchResults.packages;
+                packages = applySort(applyFilters(packages, req.xregistryFlags?.filter), req.xregistryFlags?.sort);
+                const link = this.buildPaginationLink(baseUrl, req.query as Record<string, unknown>, searchResults.totalCount, limit, offset);
+                if (link) res.set('Link', link);
                 res.json(packages);
-            } catch (error) {
-                this.logger.error('Failed to retrieve packages', { error });
-                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve packages`, req.originalUrl);
-            }
+            } catch (error) { this.logger.error('Failed to retrieve packages', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve packages', req.originalUrl); }
         });
-
-        // Specific package
-        this.app.get('/dotnetregistries/:registryId/packages/:packageName', async (req, res) => {
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:registryId/${RESOURCE_CONFIG.TYPE}/:packageId`, async (req, res) => {
             try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-
-                if (registryId !== 'nuget.org') {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
-                    return;
-                }
-
-                const metadata = await this.NuGetService.getPackageMetadata(packageName);
-                if (!metadata) {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Package not found`, req.originalUrl, `No package with that id`);
-                    return;
-                }
-
+                const packageId = req.params['packageId'] || '';
+                if ((req.params['registryId'] || '') !== GROUP_CONFIG.ID) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Registry not found', req.originalUrl, 'No xRegistry group with that id.'); return; }
+                if (!isCanonicalPackageId(packageId)) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'Package identifiers are lowercase in this projection.'); return; }
                 const baseUrl = getBaseUrl(req);
-                const resourcePath = `/dotnetregistries/nuget.org/packages/${packageName}`;
-
-                // Get versions information
-                const versions = metadata.versions || {};
-                const versionsList = Object.keys(versions);
-                const latestVersion = metadata.distTags?.['latest'] || metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
-
-                const packageInfo = {
-                    name: packageName,
-                    xid: resourcePath,
-                    self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}`,
-                    packageid: packageName,
-                    versionid: latestVersion,
-                    isdefault: true,
-                    versionscount: versionsList.length,
-                    versionsurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions`,
-                    // `metaurl` MUST point at this server's own /meta endpoint
-                    // per core spec, not at the upstream registration index.
-                    metaurl: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/meta`,
-                    epoch: this.entityState.getEpoch(resourcePath),
-                    createdat: metadata.time?.[latestVersion] || metadata.time?.['created'] || this.entityState.getCreatedAt(resourcePath),
-                    modifiedat: metadata.time?.[latestVersion] || metadata.time?.['modified'] || this.entityState.getModifiedAt(resourcePath),
-                    description: metadata['description'] || '',
-                    homepage: metadata.homepage || '',
-                    repository: metadata.repository || {},
-                    keywords: metadata.keywords || [],
-                    license: metadata.license || '',
-                    author: metadata.author || {},
-                    maintainers: metadata.maintainers || []
-                    // versions intentionally not inlined; clients must request
-                    // ?inline=versions or fetch the /versions collection.
-                };
-
-                res.json(packageInfo);
-            } catch (error) {
-                this.logger.error('Failed to retrieve package', { error });
-                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve package metadata`, req.originalUrl);
-            }
+                const pkg = await this.nugetService.getPackageMetadata(packageId, baseUrl);
+                if (!pkg) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'No package with that id.'); return; }
+                const inline = req.xregistryFlags?.inline;
+                if (inline && (inline.includes('*') || inline.includes('meta'))) { const meta = await this.nugetService.getPackageMeta(packageId, baseUrl); if (meta) pkg.meta = meta; }
+                if (inline && (inline.includes('*') || inline.includes('versions'))) { const versions = await this.nugetService.getPackageVersions(packageId, baseUrl); if (versions) pkg.versions = versions; }
+                res.json(pkg);
+            } catch (error) { this.logger.error('Failed to retrieve package', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve package metadata', req.originalUrl); }
         });
 
-        // GET /dotnetregistries/:registryId/packages/:packageName/meta -
-        // Resource meta sub-entity per core spec §"Design: JSON Serialization".
-        // Previously absent: the resource advertised metaurl pointing to
-        // api.nuget.org (off-domain contract leak) and any direct GET against
-        // /meta returned the bridge's 404.
-        this.app.get('/dotnetregistries/:registryId/packages/:packageName/meta', async (req, res) => {
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:registryId/${RESOURCE_CONFIG.TYPE}/:packageId/meta`, async (req, res) => {
             try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-
-                if (registryId !== 'nuget.org') {
-                    res.status(404).json({ error: 'Registry not found' });
-                    return;
-                }
-
-                const metadata = await this.NuGetService.getPackageMetadata(packageName);
-                if (!metadata) {
-                    res.status(404).json({ error: 'Package not found' });
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const resourcePath = `/dotnetregistries/nuget.org/packages/${packageName}`;
-                const metaPath = `${resourcePath}/meta`;
-
-                const versions = metadata.versions || {};
-                const versionsList = Object.keys(versions);
-                const latestVersion = metadata.distTags?.['latest'] || metadata['version'] || versionsList[versionsList.length - 1] || '1.0.0';
-
-                res.json({
-                    packageid: packageName,
-                    xid: metaPath,
-                    self: `${baseUrl}${metaPath}`,
-                    epoch: this.entityState.getEpoch(metaPath),
-                    createdat: metadata.time?.['created'] || this.entityState.getCreatedAt(metaPath),
-                    modifiedat: metadata.time?.['modified'] || this.entityState.getModifiedAt(metaPath),
-                    readonly: true,
-                    defaultversionid: latestVersion,
-                    defaultversionurl: `${baseUrl}${resourcePath}/versions/${encodeURIComponent(latestVersion)}`,
-                    defaultversionsticky: false
-                });
-            } catch (error) {
-                this.logger.error('Failed to retrieve package meta', { error });
-                res.status(500).json({ error: 'Failed to retrieve package metadata' });
-            }
+                const packageId = req.params['packageId'] || '';
+                if ((req.params['registryId'] || '') !== GROUP_CONFIG.ID) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Registry not found', req.originalUrl, 'No xRegistry group with that id.'); return; }
+                if (!isCanonicalPackageId(packageId)) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'Package identifiers are lowercase in this projection.'); return; }
+                const meta = await this.nugetService.getPackageMeta(packageId, getBaseUrl(req));
+                if (!meta) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'No package with that id.'); return; }
+                res.json(meta);
+            } catch (error) { this.logger.error('Failed to retrieve package meta', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve package metadata', req.originalUrl); }
         });
 
-        // GET /dotnetregistries/:registryId/packages/:packageName/versions —
-        // Versions collection per core spec §"Registry Collections":
-        // flat map keyed by versionid. Earlier the route was absent and
-        // viewers hit a 404.
-        this.app.get('/dotnetregistries/:registryId/packages/:packageName/versions', async (req, res) => {
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:registryId/${RESOURCE_CONFIG.TYPE}/:packageId/versions`, async (req, res) => {
             try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-
-                if (registryId !== 'nuget.org') {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
-                    return;
-                }
-
-                const metadata = await this.NuGetService.getPackageMetadata(packageName);
-                if (!metadata || !metadata.versions) {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Package not found`, req.originalUrl, `No package with that id`);
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const defaultVersion = metadata.distTags?.['latest'];
-                const out: Record<string, any> = {};
-                for (const [vid, v] of Object.entries(metadata.versions)) {
-                    out[vid] = {
-                        ...(v as any),
-                        self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(vid)}`,
-                        isdefault: vid === defaultVersion
-                    };
-                }
-
-                res.json(out);
-            } catch (error) {
-                this.logger.error('Failed to retrieve versions', { error });
-                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve versions`, req.originalUrl);
-            }
+                const packageId = req.params['packageId'] || '';
+                if ((req.params['registryId'] || '') !== GROUP_CONFIG.ID) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Registry not found', req.originalUrl, 'No xRegistry group with that id.'); return; }
+                if (!isCanonicalPackageId(packageId)) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'Package identifiers are lowercase in this projection.'); return; }
+                const versions = await this.nugetService.getPackageVersions(packageId, getBaseUrl(req));
+                if (!versions) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'No package with that id.'); return; }
+                res.json(versions);
+            } catch (error) { this.logger.error('Failed to retrieve versions', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve versions', req.originalUrl); }
         });
 
-        // GET /dotnetregistries/:registryId/packages/:packageName/versions/:versionId
-        this.app.get('/dotnetregistries/:registryId/packages/:packageName/versions/:versionId', async (req, res) => {
+        this.app.get(`/${GROUP_CONFIG.TYPE}/:registryId/${RESOURCE_CONFIG.TYPE}/:packageId/versions/:versionId`, async (req, res) => {
             try {
-                const registryId = req.params['registryId'];
-                const packageName = req.params['packageName'];
-                const versionId = req.params['versionId'];
-
-                if (registryId !== 'nuget.org') {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Registry not found`, req.originalUrl, `No xRegistry group with that id`);
-                    return;
-                }
-
-                const baseUrl = getBaseUrl(req);
-                const versionMetadata = await this.NuGetService.getVersionMetadata(packageName, versionId, baseUrl);
-                if (!versionMetadata) {
-                    sendProblem(res, 404, 'spec.md#unknown_id', `Version not found`, req.originalUrl, `No version with that id`);
-                    return;
-                }
-
-                // Resolve default version so we can set isdefault correctly
-                // on individual version reads (previously hardcoded false in
-                // convertToVersionMetadata).
-                const pkgMeta = await this.NuGetService.getPackageMetadata(packageName);
-                const defaultVersion = pkgMeta?.distTags?.['latest'];
-
-                const versionInfo = {
-                    ...versionMetadata,
-                    xid: `/dotnetregistries/nuget.org/packages/${packageName}/versions/${versionId}`,
-                    self: `${baseUrl}/dotnetregistries/nuget.org/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(versionId)}`,
-                    isdefault: defaultVersion ? versionId === defaultVersion : false
-                };
-
-                res.json(versionInfo);
-            } catch (error) {
-                this.logger.error('Failed to retrieve version', { error });
-                sendProblem(res, 500, 'spec.md#server_error', `Failed to retrieve version metadata`, req.originalUrl);
-            }
+                const packageId = req.params['packageId'] || '';
+                const versionId = req.params['versionId'] || '';
+                if ((req.params['registryId'] || '') !== GROUP_CONFIG.ID) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Registry not found', req.originalUrl, 'No xRegistry group with that id.'); return; }
+                if (!isCanonicalPackageId(packageId)) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Package not found', req.originalUrl, 'Package identifiers are lowercase in this projection.'); return; }
+                if (versionId.includes('+')) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Version not found', req.originalUrl, 'Version identifiers replace + with ~ in this projection.'); return; }
+                const version = await this.nugetService.getVersionMetadata(packageId, versionId, getBaseUrl(req));
+                if (!version) { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'Version not found', req.originalUrl, 'No version with that id.'); return; }
+                res.json(version);
+            } catch (error) { this.logger.error('Failed to retrieve version', { error }); sendProblem(res, HTTP_STATUS.INTERNAL_SERVER_ERROR, 'Failed to retrieve version metadata', req.originalUrl); }
         });
 
-        // 404 handler — emit RFC 9457 problem-details per core spec
-        // §"Error Processing". Earlier code returned a custom
-        // {error,message,timestamp} blob that didn't follow the spec.
-        this.app.use('*', (req, res) => {
-            res.status(404).type('application/problem+json').json({
-                type: 'https://github.com/xregistry/spec/blob/main/http.md#api_not_found',
-                title: `The specified path (${req.originalUrl}) is not supported.`,
-                status: 404,
-                detail: `No xRegistry route matches ${req.method} ${req.originalUrl}.`,
-                instance: req.originalUrl
-            });
-        });
+        this.app.use('*', (req, res) => { sendProblem(res, HTTP_STATUS.NOT_FOUND, 'The specified path is not supported.', req.originalUrl, `No xRegistry route matches ${req.method} ${req.originalUrl}.`); });
     }
 
-    /**
-     * Handle package filtering using FilterOptimizer with two-step filtering support
-     */
-    private async handlePackageFilter(filter: string, limit: number, offset: number): Promise<any[]> {
-        try {
-            // If we have cached packages, use FilterOptimizer for advanced filtering
-            if (this.packageNamesCache.length > 0) {
-                // Use optimized filter which handles both name-only and metadata queries
-                const filteredResults = await this.filterOptimizer.optimizedFilter(
-                    filter,
-                    (entity: any) => entity.name,
-                    this.logger
-                );
-
-                // Return paginated results
-                return filteredResults.slice(offset, offset + limit);
-            }
-
-            // Fallback: Use NuGet search API for simple name filtering
-            const filters = this.parseFilterExpressions(filter);
-
-            for (const filterExpr of filters) {
-                if (filterExpr.field === 'name') {
-                    let searchQuery = filterExpr.value;
-
-                    // Handle wildcard patterns
-                    if (searchQuery.includes('*')) {
-                        searchQuery = searchQuery.replace(/\*/g, '');
-                    }
-
-                    if (searchQuery) {
-                        const searchResults = await this.NuGetService.searchPackages(searchQuery, false, limit);
-
-                        if (searchResults && Array.isArray(searchResults)) {
-                            return searchResults.filter((result: any) => {
-                                const packageName = result.id || '';
-                                return this.matchesFilter(packageName, filterExpr);
-                            });
-                        }
-                    }
-                }
-            }
-
-            return [];
-        } catch (error) {
-            this.logger.error('Filter handling failed', { error, filter });
-            return [];
-        }
-    }
-
-    /**
-     * Parse filter expressions
-     */
-    private parseFilterExpressions(filter: string): Array<{ field: string, operator: string, value: string }> {
-        const expressions = [];
-        const parts = filter.split('&');
-
-        for (const part of parts) {
-            if (part.includes('!=')) {
-                const [field, value] = part.split('!=');
-                if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '!=', value: stripFilterQuotes(value.trim()) });
-                }
-            } else if (part.includes('=')) {
-                const [field, value] = part.split('=');
-                if (field && value) {
-                    expressions.push({ field: field.trim(), operator: '=', value: stripFilterQuotes(value.trim()) });
-                }
-            }
-        }
-
-        return expressions;
-    }
-
-    /**
-     * Check if value matches filter expression
-     */
-    private matchesFilter(value: string, filter: { field: string, operator: string, value: string }): boolean {
-        const filterValue = filter.value;
-
-        if (filter.operator === '=') {
-            if (filterValue.includes('*')) {
-                // Wildcard matching
-                const pattern = filterValue.replace(/\*/g, '.*');
-                const regex = new RegExp(`^${pattern}$`, 'i');
-                return regex.test(value);
-            } else {
-                // Exact match
-                return value.toLowerCase() === filterValue.toLowerCase();
-            }
-        } else if (filter.operator === '!=') {
-            if (filterValue.includes('*')) {
-                // Wildcard not matching
-                const pattern = filterValue.replace(/\*/g, '.*');
-                const regex = new RegExp(`^${pattern}$`, 'i');
-                return !regex.test(value);
-            } else {
-                // Not exact match
-                return value.toLowerCase() !== filterValue.toLowerCase();
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Fetch package metadata for two-step filtering
-     */
-    private async fetchPackageMetadata(packageName: string): Promise<any> {
-        try {
-            const packageData: any = await this.NuGetService.getPackageMetadata(packageName);
-
-            if (!packageData) {
-                throw new Error('Package data is null');
-            }
-
-            const result: any = {
-                name: packageName
-            };
-
-            // Extract metadata from NuGet package data
-            const description = packageData.description;
-            result.description = description || packageName;
-
-            const author = packageData.author?.name || packageData.author;
-            if (author) result.author = author;
-
-            const license = packageData.license;
-            if (license) result.license = license;
-
-            const homepage = packageData.homepage;
-            if (homepage) result.homepage = homepage;
-
-            const keywords = packageData.keywords;
-            if (keywords && keywords.length > 0) result.keywords = keywords;
-
-            const version = packageData.version;
-            if (version) result.version = version;
-
-            const repository = packageData.repository?.url || packageData.repository;
-            if (repository) result.repository = repository;
-
-            return result;
-        } catch (error: any) {
-            // Return minimal metadata if fetch fails (just name)
-            return {
-                name: packageName
-            };
-        }
-    }
-
-    /**
-     * Setup error handling
-     */
     private setupErrorHandling(): void {
-        // 405 Method Not Allowed handler for unsupported methods
-        this.app.all('*', (req, res, next) => {
-            if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
-                return next();
-            }
-
-            res.status(405).json({
-                type: 'about:blank',
-                title: 'Method Not Allowed',
-                status: 405,
-                detail: `The ${req.method} method is not allowed for this resource. This registry is read-only.`,
-                instance: req.originalUrl
-            });
-        });
-
-        this.app.use(xregistryErrorHandler);
-        this.app.use(errorHandler);
-    }
-
-    /**
-     * Initialize package cache in the background
-     */
-    private async initializePackageCache(): Promise<void> {
-        const cacheCount = this.NuGetService.getTotalPackageCount();
-        if (cacheCount === 0) {
-            this.logger.info('Initializing package cache from NuGet catalog...');
-            try {
-                await this.NuGetService.refreshPackageNamesFromCatalog();
-                const newCount = this.NuGetService.getTotalPackageCount();
-                this.logger.info('Package cache initialized', { packageCount: newCount });
-
-                // Build indices for FilterOptimizer
-                this.packageNamesCache = this.NuGetService.getPackageNamesCache().map((name: string) => ({ name }));
-                if (this.packageNamesCache.length > 0) {
-                    this.filterOptimizer.buildIndices(
-                        this.packageNamesCache,
-                        (entity: any) => entity.name
-                    );
-
-                    this.logger.info('FilterOptimizer indices built', {
-                        packageCount: this.packageNamesCache.length
-                    });
-                }
-            } catch (error) {
-                this.logger.error('Failed to initialize package cache from catalog', {
-                    error: error instanceof Error ? error.message : String(error)
-                });
-                this.logger.info('Server will continue with empty cache. Packages can still be accessed directly by name.');
-            }
-        } else {
-            this.logger.info('Package cache already initialized', { packageCount: cacheCount });
-
-            // Build indices for FilterOptimizer with existing cache
-            this.packageNamesCache = this.NuGetService.getPackageNamesCache().map((name: string) => ({ name }));
-            if (this.packageNamesCache.length > 0) {
-                this.filterOptimizer.buildIndices(
-                    this.packageNamesCache,
-                    (entity: any) => entity.name
-                );
-
-                this.logger.info('FilterOptimizer indices built', {
-                    packageCount: this.packageNamesCache.length
-                });
-            }
-        }
-    }
-
-    /**
-     * Start the server
-     */
-    async start(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            try {
-                this.server = require('http').createServer(this.app);
-
-                this.server.listen(this.options.port, this.options.host, async () => {
-                    this.logger.info('xRegistry NuGet Wrapper Server started', {
-                        port: this.options.port,
-                        host: this.options.host,
-                        nugetRegistry: this.options.nugetRegistryUrl,
-                        cacheEnabled: this.options.cacheEnabled
-                    });
-
-                    console.log(`Server listening on port ${this.options.port}`);
-
-                    // Initialize package names cache in the background
-                    this.initializePackageCache().catch((error: Error) => {
-                        this.logger.error('Failed to initialize package cache', { error: error.message });
-                    });
-
-                    resolve();
-                });
-
-                this.server.on('error', (error: Error) => {
-                    this.logger.error('Server error', { error: error.message });
-                    reject(error);
-                });
-
-                process.on('SIGTERM', () => this.shutdown('SIGTERM'));
-                process.on('SIGINT', () => this.shutdown('SIGINT'));
-
-            } catch (error) {
-                this.logger.error('Failed to start server', { error });
-                reject(error);
-            }
+        this.app.use((req, res, next) => {
+            if (['PUT', 'PATCH', 'POST', 'DELETE'].includes(req.method)) { sendProblem(res, HTTP_STATUS.METHOD_NOT_ALLOWED, 'Method Not Allowed', req.originalUrl, `The ${req.method} method is not allowed for this resource. This registry is read-only.`); return; }
+            next();
         });
     }
 
-    /**
-     * Stop the server
-     */
-    async stop(): Promise<void> {
-        return new Promise((resolve) => {
-            if (this.server) {
-                this.server.close(() => {
-                    this.logger.info('Server stopped');
-                    resolve();
-                });
-            } else {
-                resolve();
-            }
-        });
-    }
-
-    /**
-     * Graceful shutdown
-     */
-    private shutdown(signal: string): void {
-        this.logger.info(`Received ${signal}, shutting down gracefully`);
-
-        // Set a timeout to force exit if graceful shutdown takes too long
-        const forceExitTimeout = setTimeout(() => {
-            this.logger.warn('Forcefully exiting after timeout');
-            process.exit(1);
-        }, 5000);
-
-        this.stop()
-            .then(() => {
-                clearTimeout(forceExitTimeout);
-                this.logger.info('Graceful shutdown completed');
-                process.exit(0);
-            })
-            .catch((error) => {
-                clearTimeout(forceExitTimeout);
-                this.logger.error('Error during shutdown', { error });
-                process.exit(1);
-            });
-    }
-
-    /**
-     * Get Express app instance
-     */
-    getApp(): express.Application {
-        return this.app;
-    }
-
-    /**
-     * Get server instance
-     */
-    getServer(): any {
-        return this.server;
-    }
+    public listen(callback?: () => void): void { this.server = this.app.listen(this.options.port, this.options.host, callback); }
+    public close(callback?: (err?: Error) => void): void { const closable = this.server as { close?: (cb?: (err?: Error) => void) => void } | undefined; if (closable?.close) { closable.close(callback); return; } callback?.(); }
+    public getApp(): express.Application { return this.app; }
 }
 
-/**
- * Create and start server
- */
-export async function createServer(options?: ServerOptions): Promise<XRegistryServer> {
-    const server = new XRegistryServer(options);
-    await server.start();
-    return server;
-}
-
-// Start server if called directly
 if (require.main === module) {
-    // Parse command line arguments
-    const args = process.argv.slice(2);
-    let port = parseInt(process.env['PORT'] || '3300', 10);
-    let host = process.env['HOST'] || 'localhost';
-
-    for (let i = 0; i < args.length; i++) {
-        if (args[i] === '--port' && i + 1 < args.length) {
-            const portArg = args[i + 1];
-            if (portArg) {
-                port = parseInt(portArg, 10);
-            }
-        } else if (args[i] === '--host' && i + 1 < args.length) {
-            const hostArg = args[i + 1];
-            if (hostArg) {
-                host = hostArg;
-            }
-        }
-    }
-
-    createServer({
-        port,
-        host,
-        cacheEnabled: true
-    }).catch((error) => {
-        console.error('Failed to start server:', error);
-        process.exit(1);
-    });
-} 
+    const server = new XRegistryServer({ port: parseInt(process.env['PORT'] || '3100', 10), host: process.env['HOST'] || '0.0.0.0' });
+    server.listen(() => { console.log(`NuGet xRegistry wrapper listening on ${process.env['HOST'] || '0.0.0.0'}:${process.env['PORT'] || '3100'}`); });
+}

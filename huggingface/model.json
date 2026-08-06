@@ -11,9 +11,14 @@
           "description": "A Hugging Face model whose resource ID is the repository basename within its owner group.",
           "hasdocument": false,
           "attributes": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "The full Hub repository identity in 'owner/name' form, verbatim and unaltered including the '/' separator. This is the authoritative name of the repository; the modelid is only the basename and does not identify the repository on its own."
+            },
             "repoid": {
               "type": "string",
-              "description": "Full Hugging Face repository ID (owner/name or name)."
+              "description": "Full Hugging Face repository ID (owner/name or name), taken from the Hub 'id' field."
             },
             "author": {
               "type": "string",
@@ -34,14 +39,59 @@
             "message": {
               "type": "string",
               "description": "Commit title or message for a Version."
+            },
+            "siblings": {
+              "type": "array",
+              "description": "File manifest of this commit, from the Hub 'siblings' field.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "rfilename": {
+                    "type": "string",
+                    "description": "Repository-relative file name."
+                  },
+                  "size": {
+                    "type": "uinteger",
+                    "description": "File size in bytes, present only when blob details are requested."
+                  },
+                  "blobid": {
+                    "type": "string",
+                    "description": "Git blob SHA, from 'blobId', present only when blob details are requested."
+                  },
+                  "lfs": {
+                    "type": "object",
+                    "description": "Git LFS pointer details, present only for LFS-tracked files.",
+                    "attributes": {
+                      "size": {
+                        "type": "uinteger",
+                        "description": "Size in bytes of the LFS object."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "description": "SHA-256 digest of the LFS object."
+                      },
+                      "pointersize": {
+                        "type": "uinteger",
+                        "description": "Size in bytes of the LFS pointer file, from 'pointerSize'."
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "maxversions": 0,
           "setversionid": true,
-          "setdefaultversionsticky": false,
           "versionmode": "manual",
           "singleversionroot": false,
           "metaattributes": {
+            "defaultversionsticky": {
+              "type": "boolean",
+              "description": "Sticky default Versions are not supported: the default Version always tracks the default branch tip.",
+              "enum": [ false ],
+              "required": true,
+              "default": false
+            },
             "private": {
               "type": "boolean",
               "description": "Whether the repository is private."
@@ -50,13 +100,36 @@
               "type": "any",
               "description": "Gated-access status as returned by the Hub (false, 'auto', or 'manual')."
             },
+            "disabled": {
+              "type": "boolean",
+              "description": "Whether the repository has been disabled by the Hub."
+            },
+            "used_storage": {
+              "type": "uinteger",
+              "description": "Storage consumed by the repository in bytes, from 'usedStorage'."
+            },
             "downloads": {
-              "type": "integer",
+              "type": "uinteger",
               "description": "Total download count (anonymously visible)."
             },
             "likes": {
-              "type": "integer",
+              "type": "uinteger",
               "description": "Like count."
+            },
+            "card_data": {
+              "type": "object",
+              "namecharset": "extended",
+              "description": "Model card front matter, from 'cardData'.",
+              "attributes": {
+                "license": {
+                  "type": "string",
+                  "description": "License identifier declared in the card front matter."
+                },
+                "*": {
+                  "type": "any",
+                  "description": "Any other model card front matter key."
+                }
+              }
             },
             "pipeline_tag": {
               "type": "string",
@@ -65,6 +138,70 @@
             "library_name": {
               "type": "string",
               "description": "Primary ML library (e.g., transformers, diffusers)."
+            },
+            "config": {
+              "type": "object",
+              "namecharset": "extended",
+              "description": "Model configuration summary, from 'config'.",
+              "attributes": {
+                "*": {
+                  "type": "any",
+                  "description": "Any configuration key, such as architectures or model_type."
+                }
+              }
+            },
+            "transformers_info": {
+              "type": "object",
+              "description": "Transformers auto-class information, from 'transformersInfo'.",
+              "attributes": {
+                "auto_model": {
+                  "type": "string",
+                  "description": "Auto model class name, from 'auto_model'."
+                },
+                "pipeline_tag": {
+                  "type": "string",
+                  "description": "Pipeline tag reported by the Transformers integration."
+                },
+                "processor": {
+                  "type": "string",
+                  "description": "Processor or tokenizer class name."
+                }
+              }
+            },
+            "safetensors": {
+              "type": "object",
+              "description": "Safetensors weight summary.",
+              "attributes": {
+                "parameters": {
+                  "type": "map",
+                  "item": {
+                    "type": "uinteger"
+                  },
+                  "description": "Parameter count per tensor dtype."
+                },
+                "total": {
+                  "type": "uinteger",
+                  "description": "Total parameter count."
+                }
+              }
+            },
+            "model_index": {
+              "type": "array",
+              "item": {
+                "type": "any"
+              },
+              "description": "Evaluation results declared in the card, from 'model-index'."
+            },
+            "inference": {
+              "type": "any",
+              "description": "Inference provider availability as returned by the Hub."
+            },
+            "widget_data": {
+              "type": "array",
+              "item": {
+                "type": "any"
+              },
+              "description": "Example inputs shown by the Hub widget, from 'widgetData'."
             },
             "tags": {
               "type": "array",
@@ -82,10 +219,16 @@
                     "type": "object",
                     "attributes": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Short branch name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/heads/main."
                       },
                       "targetcommit": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
                       }
                     }
                   }
@@ -96,16 +239,42 @@
                     "type": "object",
                     "attributes": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Short tag name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/tags/v1.0."
                       },
                       "targetcommit": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
+                      }
+                    }
+                  }
+                },
+                "converts": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string",
+                        "description": "Short conversion ref name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/convert/parquet."
+                      },
+                      "targetcommit": {
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
                       }
                     }
                   }
                 }
               },
-              "description": "Mutable branch and tag aliases with their target commit SHAs."
+              "description": "Mutable branch, tag and conversion aliases with their target commit SHAs."
             }
           }
         },
@@ -115,9 +284,14 @@
           "description": "A Hugging Face dataset whose resource ID is the repository basename within its owner group.",
           "hasdocument": false,
           "attributes": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "The full Hub repository identity in 'owner/name' form, verbatim and unaltered including the '/' separator. This is the authoritative name of the repository; the datasetid is only the basename and does not identify the repository on its own."
+            },
             "repoid": {
               "type": "string",
-              "description": "Full Hugging Face repository ID (owner/name or name)."
+              "description": "Full Hugging Face repository ID (owner/name or name), taken from the Hub 'id' field."
             },
             "author": {
               "type": "string",
@@ -138,14 +312,59 @@
             "message": {
               "type": "string",
               "description": "Commit title or message for a Version."
+            },
+            "siblings": {
+              "type": "array",
+              "description": "File manifest of this commit, from the Hub 'siblings' field.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "rfilename": {
+                    "type": "string",
+                    "description": "Repository-relative file name."
+                  },
+                  "size": {
+                    "type": "uinteger",
+                    "description": "File size in bytes, present only when blob details are requested."
+                  },
+                  "blobid": {
+                    "type": "string",
+                    "description": "Git blob SHA, from 'blobId', present only when blob details are requested."
+                  },
+                  "lfs": {
+                    "type": "object",
+                    "description": "Git LFS pointer details, present only for LFS-tracked files.",
+                    "attributes": {
+                      "size": {
+                        "type": "uinteger",
+                        "description": "Size in bytes of the LFS object."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "description": "SHA-256 digest of the LFS object."
+                      },
+                      "pointersize": {
+                        "type": "uinteger",
+                        "description": "Size in bytes of the LFS pointer file, from 'pointerSize'."
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "maxversions": 0,
           "setversionid": true,
-          "setdefaultversionsticky": false,
           "versionmode": "manual",
           "singleversionroot": false,
           "metaattributes": {
+            "defaultversionsticky": {
+              "type": "boolean",
+              "description": "Sticky default Versions are not supported: the default Version always tracks the default branch tip.",
+              "enum": [ false ],
+              "required": true,
+              "default": false
+            },
             "private": {
               "type": "boolean",
               "description": "Whether the repository is private."
@@ -154,13 +373,40 @@
               "type": "any",
               "description": "Gated-access status as returned by the Hub (false, 'auto', or 'manual')."
             },
+            "disabled": {
+              "type": "boolean",
+              "description": "Whether the repository has been disabled by the Hub."
+            },
+            "used_storage": {
+              "type": "uinteger",
+              "description": "Storage consumed by the repository in bytes, from 'usedStorage'."
+            },
             "downloads": {
-              "type": "integer",
+              "type": "uinteger",
               "description": "Total download count (anonymously visible)."
             },
             "likes": {
-              "type": "integer",
+              "type": "uinteger",
               "description": "Like count."
+            },
+            "card_data": {
+              "type": "object",
+              "namecharset": "extended",
+              "description": "Dataset card front matter, from 'cardData'.",
+              "attributes": {
+                "license": {
+                  "type": "string",
+                  "description": "License identifier declared in the card front matter."
+                },
+                "*": {
+                  "type": "any",
+                  "description": "Any other dataset card front matter key."
+                }
+              }
+            },
+            "paperswithcode_id": {
+              "type": "string",
+              "description": "Papers With Code dataset identifier."
             },
             "tags": {
               "type": "array",
@@ -178,10 +424,16 @@
                     "type": "object",
                     "attributes": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Short branch name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/heads/main."
                       },
                       "targetcommit": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
                       }
                     }
                   }
@@ -192,16 +444,42 @@
                     "type": "object",
                     "attributes": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Short tag name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/tags/v1.0."
                       },
                       "targetcommit": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
+                      }
+                    }
+                  }
+                },
+                "converts": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string",
+                        "description": "Short conversion ref name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/convert/parquet."
+                      },
+                      "targetcommit": {
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
                       }
                     }
                   }
                 }
               },
-              "description": "Mutable branch and tag aliases with their target commit SHAs."
+              "description": "Mutable branch, tag and conversion aliases with their target commit SHAs."
             }
           }
         },
@@ -211,9 +489,14 @@
           "description": "A Hugging Face space whose resource ID is the repository basename within its owner group.",
           "hasdocument": false,
           "attributes": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "The full Hub repository identity in 'owner/name' form, verbatim and unaltered including the '/' separator. This is the authoritative name of the repository; the spaceid is only the basename and does not identify the repository on its own."
+            },
             "repoid": {
               "type": "string",
-              "description": "Full Hugging Face repository ID (owner/name)."
+              "description": "Full Hugging Face repository ID (owner/name), taken from the Hub 'id' field."
             },
             "author": {
               "type": "string",
@@ -234,14 +517,59 @@
             "message": {
               "type": "string",
               "description": "Commit title or message for a Version."
+            },
+            "siblings": {
+              "type": "array",
+              "description": "File manifest of this commit, from the Hub 'siblings' field.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "rfilename": {
+                    "type": "string",
+                    "description": "Repository-relative file name."
+                  },
+                  "size": {
+                    "type": "uinteger",
+                    "description": "File size in bytes, present only when blob details are requested."
+                  },
+                  "blobid": {
+                    "type": "string",
+                    "description": "Git blob SHA, from 'blobId', present only when blob details are requested."
+                  },
+                  "lfs": {
+                    "type": "object",
+                    "description": "Git LFS pointer details, present only for LFS-tracked files.",
+                    "attributes": {
+                      "size": {
+                        "type": "uinteger",
+                        "description": "Size in bytes of the LFS object."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "description": "SHA-256 digest of the LFS object."
+                      },
+                      "pointersize": {
+                        "type": "uinteger",
+                        "description": "Size in bytes of the LFS pointer file, from 'pointerSize'."
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "maxversions": 0,
           "setversionid": true,
-          "setdefaultversionsticky": false,
           "versionmode": "manual",
           "singleversionroot": false,
           "metaattributes": {
+            "defaultversionsticky": {
+              "type": "boolean",
+              "description": "Sticky default Versions are not supported: the default Version always tracks the default branch tip.",
+              "enum": [ false ],
+              "required": true,
+              "default": false
+            },
             "private": {
               "type": "boolean",
               "description": "Whether the space is private."
@@ -250,17 +578,90 @@
               "type": "any",
               "description": "Gated-access status as returned by the Hub (false, 'auto', or 'manual')."
             },
-            "downloads": {
-              "type": "integer",
-              "description": "Total download count (anonymously visible)."
+            "disabled": {
+              "type": "boolean",
+              "description": "Whether the space has been disabled by the Hub."
+            },
+            "used_storage": {
+              "type": "uinteger",
+              "description": "Storage consumed by the space in bytes, from 'usedStorage'."
             },
             "likes": {
-              "type": "integer",
+              "type": "uinteger",
               "description": "Like count."
+            },
+            "card_data": {
+              "type": "object",
+              "namecharset": "extended",
+              "description": "Space card front matter, from 'cardData'.",
+              "attributes": {
+                "license": {
+                  "type": "string",
+                  "description": "License identifier declared in the card front matter."
+                },
+                "*": {
+                  "type": "any",
+                  "description": "Any other space card front matter key."
+                }
+              }
             },
             "sdk": {
               "type": "string",
               "description": "Space SDK (gradio, streamlit, docker, static, etc.)."
+            },
+            "runtime": {
+              "type": "object",
+              "description": "Current runtime state of the space.",
+              "attributes": {
+                "stage": {
+                  "type": "string",
+                  "description": "Runtime stage, e.g. RUNNING, SLEEPING, BUILDING, RUNTIME_ERROR."
+                },
+                "hardware": {
+                  "type": "object",
+                  "description": "Hardware flavor currently in use and requested.",
+                  "attributes": {
+                    "current": {
+                      "type": "string",
+                      "description": "Hardware flavor currently allocated, e.g. cpu-basic."
+                    },
+                    "requested": {
+                      "type": "string",
+                      "description": "Hardware flavor requested by the owner."
+                    }
+                  }
+                },
+                "resources": {
+                  "type": "object",
+                  "description": "Compute resources allocated to the running space.",
+                  "attributes": {
+                    "cpu": {
+                      "type": "string",
+                      "description": "Allocated CPU quota."
+                    },
+                    "memory": {
+                      "type": "string",
+                      "description": "Allocated memory quota."
+                    },
+                    "gpu": {
+                      "type": "string",
+                      "description": "Allocated GPU count or type."
+                    },
+                    "gpu_memory": {
+                      "type": "string",
+                      "description": "Allocated GPU memory, from 'gpuModel' sizing."
+                    }
+                  }
+                }
+              }
+            },
+            "subdomain": {
+              "type": "string",
+              "description": "Subdomain label under which the space is served."
+            },
+            "host": {
+              "type": "string",
+              "description": "Fully qualified host name serving the running space."
             },
             "tags": {
               "type": "array",
@@ -278,10 +679,16 @@
                     "type": "object",
                     "attributes": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Short branch name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/heads/main."
                       },
                       "targetcommit": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
                       }
                     }
                   }
@@ -292,16 +699,42 @@
                     "type": "object",
                     "attributes": {
                       "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Short tag name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/tags/v1.0."
                       },
                       "targetcommit": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
+                      }
+                    }
+                  }
+                },
+                "converts": {
+                  "type": "array",
+                  "item": {
+                    "type": "object",
+                    "attributes": {
+                      "name": {
+                        "type": "string",
+                        "description": "Short conversion ref name."
+                      },
+                      "ref": {
+                        "type": "string",
+                        "description": "Fully qualified Git ref, e.g. refs/convert/parquet."
+                      },
+                      "targetcommit": {
+                        "type": "string",
+                        "description": "Commit SHA the ref points at, from 'targetCommit'."
                       }
                     }
                   }
                 }
               },
-              "description": "Mutable branch and tag aliases with their target commit SHAs."
+              "description": "Mutable branch, tag and conversion aliases with their target commit SHAs."
             }
           }
         }

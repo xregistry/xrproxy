@@ -3,6 +3,12 @@
   "groups": {
     "containerregistries": {
       "description": "A group representing an OCI container registry provider (e.g., Docker Hub, GHCR). Contains all available container registries.",
+      "attributes": {
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the OCI Distribution API from which these images were projected, e.g. 'https://registry-1.docker.io/v2/'. This records provenance only; a repository name denotes the same repository whichever registry serves it."
+        }
+      },
       "plural": "containerregistries",
       "singular": "containerregistry",
       "resources": {
@@ -12,28 +18,12 @@
           "singular": "image",
           "maxversions": 0,
           "setversionid": true,
-          "setdefaultversionsticky": true,
           "hasdocument": false,
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The canonical name of the container image."
-            },
-            "description": {
-              "type": "string",
-              "description": "A short description of the container image."
-            },
-            "registry": {
-              "type": "string",
-              "description": "The registry URL where this image is hosted."
-            },
-            "namespace": {
-              "type": "string",
-              "description": "The namespace or organization under which the image is published."
-            },
-            "repository": {
-              "type": "string",
-              "description": "The repository name of the container image."
+              "required": true,
+              "description": "The complete OCI repository name, verbatim and unaltered, including its '/' separators (e.g. 'library/nginx'). This is the authoritative name of the image; the imageid is only an addressing key derived from it and MUST NOT be reversed to recover this value."
             },
             "metadata": {
               "type": "object",
@@ -45,7 +35,8 @@
                 },
                 "manifest_mediatype": {
                   "type": "string",
-                  "description": "The media type of the image manifest.",
+                  "description": "The media type of the image manifest. The listed values are the common ones; any RFC 6838 conformant media type is permitted and implementations MUST NOT reject an unknown value.",
+                  "strict": false,
                   "enum": [
                     "application/vnd.docker.distribution.manifest.v1+json",
                     "application/vnd.docker.distribution.manifest.v2+json",
@@ -54,31 +45,76 @@
                     "application/vnd.oci.image.index.v1+json"
                   ]
                 },
+                "artifact_type": {
+                  "type": "string",
+                  "description": "The manifest 'artifactType', which discriminates non-image OCI artifacts and is the filter key of the referrers API."
+                },
+                "subject": {
+                  "type": "object",
+                  "description": "The manifest 'subject' descriptor, identifying the artifact this one is attached to (signatures, SBOMs, attestations).",
+                  "attributes": {
+                    "mediatype": {
+                      "type": "string"
+                    },
+                    "digest": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "uinteger"
+                    }
+                  }
+                },
+                "config": {
+                  "type": "object",
+                  "description": "The required manifest 'config' descriptor.",
+                  "attributes": {
+                    "mediatype": {
+                      "type": "string"
+                    },
+                    "digest": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "uinteger"
+                    }
+                  }
+                },
                 "schema_version": {
-                  "type": "decimal",
-                  "description": "The schema version of the manifest."
+                  "type": "uinteger",
+                  "description": "The schema version of the manifest. For the OCI image manifest and image index this MUST be 2.",
+                  "enum": [
+                    2
+                  ]
                 },
                 "layers_count": {
-                  "type": "decimal",
+                  "type": "uinteger",
                   "description": "The number of layers in the image."
                 },
                 "architecture": {
                   "type": "string",
-                  "description": "The target architecture for the container image.",
+                  "description": "The target architecture for the container image. Values SHOULD be drawn from the Go GOARCH list; the enum below is illustrative and MUST NOT be treated as exhaustive.",
+                  "strict": false,
                   "enum": [
                     "amd64",
                     "arm64",
                     "arm",
                     "386",
+                    "ppc64",
                     "ppc64le",
                     "s390x",
+                    "mips",
+                    "mipsle",
+                    "mips64",
                     "mips64le",
-                    "riscv64"
+                    "loong64",
+                    "riscv64",
+                    "wasm"
                   ]
                 },
                 "os": {
                   "type": "string",
-                  "description": "The target operating system for the container image.",
+                  "description": "The target operating system for the container image. Values SHOULD be drawn from the Go GOOS list; the enum below is illustrative and MUST NOT be treated as exhaustive.",
+                  "strict": false,
                   "enum": [
                     "linux",
                     "windows",
@@ -87,12 +123,34 @@
                     "netbsd",
                     "openbsd",
                     "dragonfly",
-                    "solaris"
+                    "solaris",
+                    "illumos",
+                    "aix",
+                    "android",
+                    "ios",
+                    "js",
+                    "plan9",
+                    "wasip1"
                   ]
                 },
                 "size_bytes": {
-                  "type": "decimal",
+                  "type": "uinteger",
                   "description": "The total size of the container image in bytes."
+                },
+                "variant": {
+                  "type": "string",
+                  "description": "Platform variant of the selected manifest (e.g., v7 for arm)."
+                },
+                "os_version": {
+                  "type": "string",
+                  "description": "Platform 'os.version' of the selected manifest."
+                },
+                "os_features": {
+                  "type": "array",
+                  "item": {
+                    "type": "string"
+                  },
+                  "description": "Platform 'os.features' of the selected manifest."
                 },
                 "is_multi_platform": {
                   "type": "boolean",
@@ -101,7 +159,6 @@
                 "available_platforms": {
                   "type": "array",
                   "description": "Available platforms for multi-platform images.",
-                  "namecharset": "extended",
                   "item": {
                     "type": "object",
                     "attributes": {
@@ -122,10 +179,10 @@
                         "description": "Platform-specific manifest digest."
                       },
                       "size": {
-                        "type": "decimal",
+                        "type": "uinteger",
                         "description": "Platform-specific size in bytes."
                       },
-                      "mediaType": {
+                      "mediatype": {
                         "type": "string",
                         "description": "Platform-specific media type."
                       }
@@ -156,6 +213,22 @@
                       "type": "string",
                       "description": "org.opencontainers.image.licenses"
                     },
+                    "description": {
+                      "type": "string",
+                      "description": "org.opencontainers.image.description"
+                    },
+                    "ref_name": {
+                      "type": "string",
+                      "description": "org.opencontainers.image.ref.name"
+                    },
+                    "base_digest": {
+                      "type": "string",
+                      "description": "org.opencontainers.image.base.digest"
+                    },
+                    "base_name": {
+                      "type": "string",
+                      "description": "org.opencontainers.image.base.name"
+                    },
                     "vendor": {
                       "type": "string",
                       "description": "org.opencontainers.image.vendor"
@@ -165,7 +238,7 @@
                       "description": "org.opencontainers.image.authors"
                     },
                     "url": {
-                      "type": "string",
+                      "type": "uri",
                       "description": "org.opencontainers.image.url"
                     },
                     "title": {
@@ -173,7 +246,7 @@
                       "description": "org.opencontainers.image.title"
                     },
                     "created": {
-                      "type": "string",
+                      "type": "timestamp",
                       "description": "org.opencontainers.image.created"
                     }
                   }
@@ -207,6 +280,21 @@
                   "type": "string",
                   "description": "Default user for running the container."
                 },
+                "stop_signal": {
+                  "type": "string",
+                  "description": "The image config 'StopSignal': the system call signal sent to the container to exit."
+                },
+                "author": {
+                  "type": "string",
+                  "description": "The image config 'author': the name and/or email address of the person or entity which created and is responsible for maintaining the image."
+                },
+                "rootfs_diff_ids": {
+                  "type": "array",
+                  "item": {
+                    "type": "string"
+                  },
+                  "description": "The image config 'rootfs.diff_ids': the ordered list of uncompressed layer digests, base first. The corresponding 'rootfs.type' MUST be 'layers'. This array is the input to the ImageID computation."
+                },
                 "exposed_ports": {
                   "type": "array",
                   "description": "Ports exposed by the container.",
@@ -234,10 +322,10 @@
                     "description": "The digest of the layer."
                   },
                   "size": {
-                    "type": "decimal",
+                    "type": "uinteger",
                     "description": "The size of the layer in bytes."
                   },
-                  "mediaType": {
+                  "mediatype": {
                     "type": "string",
                     "description": "The media type of the layer."
                   }
@@ -251,11 +339,11 @@
                 "type": "object",
                 "attributes": {
                   "step": {
-                    "type": "decimal",
+                    "type": "uinteger",
                     "description": "Build step number."
                   },
                   "created": {
-                    "type": "string",
+                    "type": "timestamp",
                     "description": "When this step was created."
                   },
                   "created_by": {
@@ -265,6 +353,10 @@
                   "empty_layer": {
                     "type": "boolean",
                     "description": "Whether this step created an empty layer."
+                  },
+                  "author": {
+                    "type": "string",
+                    "description": "The author of this build step."
                   },
                   "comment": {
                     "type": "string",
@@ -292,28 +384,84 @@
               }
             },
             "annotations": {
-              "type": "object",
-              "description": "OCI annotations applied to the image."
+              "type": "map",
+              "item": {
+                "type": "string"
+              },
+              "description": "OCI manifest annotations. Both keys and values are strings; keys are conventionally in reverse domain notation."
+            },
+            "config_labels": {
+              "type": "map",
+              "item": {
+                "type": "string"
+              },
+              "description": "The 'Labels' map of the image configuration blob. Distinct from manifest annotations: labels are fixed at build time inside the content-addressed config blob, annotations live on the manifest and may change without rebuilding. The two MUST NOT be merged."
+            },
+            "referrers": {
+              "type": "array",
+              "description": "The descriptors returned by the OCI referrers API for this manifest digest, i.e. the manifests whose 'subject' points at this one. See GET /v2/<name>/referrers/<digest>.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "mediatype": {
+                    "type": "string",
+                    "description": "Media type of the referring manifest."
+                  },
+                  "digest": {
+                    "type": "string",
+                    "description": "Digest of the referring manifest."
+                  },
+                  "size": {
+                    "type": "uinteger",
+                    "description": "Size in bytes of the referring manifest."
+                  },
+                  "artifact_type": {
+                    "type": "string",
+                    "description": "The 'artifactType' of the referring manifest; the value on which the referrers API filters."
+                  },
+                  "annotations": {
+                    "type": "map",
+                    "item": {
+                      "type": "string"
+                    },
+                    "description": "Annotations of the referring manifest, as returned in the referrers index."
+                  }
+                }
+              }
             },
             "vulnerabilities": {
-              "type": "object",
-              "description": "Security vulnerability information if available."
+              "type": "any",
+              "description": "Security vulnerability information if available. Not defined by the OCI specifications; the shape is scanner-specific."
             },
             "pushed": {
-              "type": "string",
+              "type": "timestamp",
               "description": "The timestamp when the image was pushed to the registry."
+            }
+          },
+          "metaattributes": {
+            "sourceurl": {
+              "type": "url",
+              "description": "Base URL of the OCI Distribution API this image was actually fetched from, e.g. 'https://registry-1.docker.io/v2/'. For a mirrored image this is the mirror rather than the registry named in the reference. This records provenance only and is not part of the image's identity."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "The namespace or organization under which the repository is published."
+            },
+            "repository": {
+              "type": "string",
+              "description": "The canonical repository path within the registry, including any '/' separators."
             },
             "pulled": {
-              "type": "decimal",
-              "description": "Number of times this image has been pulled."
+              "type": "uinteger",
+              "description": "Number of times this repository has been pulled. REGISTRY-PROPRIETARY and OPTIONAL: it appears in neither the OCI distribution specification nor the OCI image specification, and MUST be omitted when the registry does not publish it."
             },
             "starred": {
-              "type": "decimal",
-              "description": "Number of stars/favorites for this image."
+              "type": "uinteger",
+              "description": "Number of stars/favorites for this repository. REGISTRY-PROPRIETARY and OPTIONAL: it appears in neither the OCI distribution specification nor the OCI image specification, and MUST be omitted when the registry does not publish it."
             },
-            "deprecated": {
+            "deprecated_message": {
               "type": "string",
-              "description": "Deprecation notice if the image is deprecated."
+              "description": "Free-text deprecation notice for the repository. REGISTRY-PROPRIETARY and OPTIONAL: it appears in neither the OCI distribution specification nor the OCI image specification. The core 'deprecated' object attribute MUST also be set when this attribute is present."
             }
           }
         }

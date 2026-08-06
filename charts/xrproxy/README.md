@@ -25,7 +25,40 @@ Production deployments should pin each `services.<id>.image.digest`. Tags remain
 
 The chart creates one Deployment and ClusterIP Service for each active entry in `config/services.json`. Only the bridge should be exposed externally. Its unauthenticated downstream configuration is generated as a ConfigMap using Kubernetes service DNS.
 
-The default cache is an `emptyDir`. This matches the applications' rebuildable local-cache behavior and avoids implying that their cache files are safe for concurrent shared-volume access.
+The default cache is an `emptyDir`. This matches the applications' rebuildable
+local-cache behavior. Registry index snapshots can instead use one
+`ReadWriteOnce` PVC per proxy:
+
+```yaml
+cache:
+  persistence:
+    storageClassName: managed-csi
+    size: 4Gi
+services:
+  npm:
+    cache:
+      persistence:
+        enabled: true
+  rubygems:
+    cache:
+      persistence:
+        enabled: true
+```
+
+The Maven proxy can ingest Maven Central's published Nexus index and then apply
+its incremental chunks. Enable `MAVEN_INDEX_REFRESH_ENABLED=true` only with a
+persistent Maven cache and sufficient storage; the production profile uses a
+16 GiB claim and keeps serving the previous snapshot while a full rebuild runs.
+
+Each enabled service receives a separate claim because cache files are not safe
+for concurrent cross-service access. Set
+`services.<id>.cache.persistence.existingClaim` to mount a pre-provisioned
+claim. Immutable registry artifacts may be copied from object storage into
+these local volumes by deployment automation; applications should read the
+local snapshot rather than querying an object-store filesystem for each row.
+Persistent-cache deployments use the `Recreate` strategy because the default
+claim is `ReadWriteOnce`; they must remain single-replica with autoscaling
+disabled.
 
 ## Viewer
 

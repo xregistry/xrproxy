@@ -2,9 +2,10 @@
  * Configuration constants for Terraform Registry xRegistry server
  */
 
-import { createRegistryCapabilities } from "@xregistry/registry-core";
+import { createHash } from 'crypto';
+import { createRegistryCapabilities } from '@xregistry/registry-core';
 import { Request } from 'express';
-import modelData from "../../model.json";
+import modelData from '../../model.json';
 
 /**
  * Get the actual base URL from the request.
@@ -49,16 +50,17 @@ export const REGISTRY_METADATA = {
     SPEC_VERSION: '1.0-rc2',
 } as const;
 
+/** xRegistry 1.0-rc2 runtime features implemented by this proxy. */
+export const CAPABILITIES = createRegistryCapabilities({
+    versionmodes: ['manual', 'semver'],
+});
+
 /**
  * Terraform Registry API endpoints
  */
-/** xRegistry 1.0-rc2 runtime features implemented by this proxy. */
-export const CAPABILITIES = createRegistryCapabilities({
-    versionmodes: ["manual", "semver"],
-});
-
 export const TERRAFORM_API = {
     REGISTRY_URL: 'https://registry.terraform.io',
+    DISCOVERY_URL: 'https://registry.terraform.io/.well-known/terraform.json',
     /** Provider versions list */
     providerVersionsUrl: (namespace: string, type: string): string =>
         `https://registry.terraform.io/v1/providers/${namespace}/${type}/versions`,
@@ -68,15 +70,17 @@ export const TERRAFORM_API = {
         type: string,
         version: string,
         os: string,
-        arch: string
-    ): string =>
-        `https://registry.terraform.io/v1/providers/${namespace}/${type}/${version}/download/${os}/${arch}`,
+        arch: string,
+    ): string => `https://registry.terraform.io/v1/providers/${namespace}/${type}/${version}/download/${os}/${arch}`,
     /** Module versions list */
     moduleVersionsUrl: (namespace: string, name: string, provider: string): string =>
         `https://registry.terraform.io/v1/modules/${namespace}/${name}/${provider}/versions`,
     /** Single module version detail */
     moduleVersionUrl: (namespace: string, name: string, provider: string, version: string): string =>
         `https://registry.terraform.io/v1/modules/${namespace}/${name}/${provider}/${version}`,
+    /** Single module package locator */
+    moduleDownloadUrl: (namespace: string, name: string, provider: string, version: string): string =>
+        `https://registry.terraform.io/v1/modules/${namespace}/${name}/${provider}/${version}/download`,
     /** Provider search (v2 JSON:API) */
     SEARCH_PROVIDERS: 'https://registry.terraform.io/v2/providers',
     /** Module search (v1) */
@@ -88,15 +92,27 @@ export const TERRAFORM_API = {
  *
  * Group ID: namespace
  * Provider resource ID: provider type
- * Module resource ID: name~provider. Terraform registry identifiers are
- * restricted to alphanumerics, hyphens and underscores, so `~` is a
- * collision-free reversible separator.
+ * Module resource ID: name~provider when both components are xRegistry-safe,
+ * otherwise xh~<sha256(namespace/name/provider)>.
  */
 export const ID_SEP = '~';
+const HASH_PREFIX = 'xh~';
 const TERRAFORM_IDENTIFIER = /^[0-9A-Za-z_][0-9A-Za-z_-]*$/;
 
 export function isTerraformIdentifier(value: string): boolean {
     return Boolean(value) && value.length <= 128 && TERRAFORM_IDENTIFIER.test(value) && !value.includes('/');
+}
+
+export function encodeVersionId(version: string): string {
+    const versionId = version.replace(/\+/g, ID_SEP);
+    if (!versionId || versionId.length > 128) {
+        throw new Error(`Terraform version ID exceeds the xRegistry 128-character limit: ${version}`);
+    }
+    return versionId;
+}
+
+export function decodeVersionId(versionId: string): string {
+    return versionId.replace(/~/g, '+');
 }
 
 export function providerIdentity(namespace: string, type: string): { groupId: string; resourceId: string } {
@@ -115,16 +131,21 @@ export function decodeProviderIdentity(groupId: string, resourceId: string): { n
     }
 }
 
-export function encodeModuleId(name: string, provider: string): string {
-    if (!isTerraformIdentifier(name) || !isTerraformIdentifier(provider)) {
-        throw new Error(`Invalid Terraform module identity: ${name}/${provider}`);
-    }
+function literalModuleId(name: string, provider: string): string | null {
+    if (!isTerraformIdentifier(name) || !isTerraformIdentifier(provider)) return null;
     const id = `${name}${ID_SEP}${provider}`;
-    if (id.length > 128) throw new Error('Terraform module resource ID exceeds the xRegistry 128-character limit');
-    return id;
+    return id.length <= 128 ? id : null;
+}
+
+export function encodeModuleId(namespace: string, name: string, provider: string): string {
+    const direct = literalModuleId(name, provider);
+    if (direct) return direct;
+    const canonical = `${namespace}/${name}/${provider}`;
+    return `${HASH_PREFIX}${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
 }
 
 export function decodeModuleId(id: string): { name: string; provider: string } | null {
+    if (id.startsWith(HASH_PREFIX)) return null;
     const parts = id.split(ID_SEP);
     if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
     if (!isTerraformIdentifier(parts[0]) || !isTerraformIdentifier(parts[1])) return null;
@@ -143,15 +164,15 @@ export function decodeLegacyProviderId(id: string): { namespace: string; type: s
     return parts.length === 2 ? decodeProviderIdentity(parts[0] ?? '', parts[1] ?? '') : null;
 }
 
-/** Decode old namespace~name~provider module IDs for a migration hint. */
+/** Decode old namespace~name~provider module IDs for a 410 migration hint. */
 export function decodeLegacyModuleId(id: string): { namespace: string; name: string; provider: string } | null {
     const parts = id.split(ID_SEP);
     if (parts.length !== 3 || !parts[0]) return null;
-    try {
-        return decodeModuleIdentity(parts[0], encodeModuleId(parts[1] ?? '', parts[2] ?? ''));
-    } catch {
-        return null;
-    }
+    const namespace = parts[0] ?? '';
+    const name = parts[1] ?? '';
+    const provider = parts[2] ?? '';
+    const encoded = encodeModuleId(namespace, name, provider);
+    return decodeModuleIdentity(namespace, encoded);
 }
 
 /**

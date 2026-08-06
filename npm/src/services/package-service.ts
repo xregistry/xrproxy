@@ -1,10 +1,11 @@
 /**
  * Package Service
- * @fileoverview Service for package operations wrapping NPM service
+ * @fileoverview Service for package operations wrapping the npm service.
  */
 
 import { throwEntityNotFound } from '../middleware/xregistry-error-handler';
 import { PackageMetadata } from '../types/xregistry';
+import { findVersionById } from '../utils/package-utils';
 import { NpmService } from './npm-service';
 
 export interface PackageServiceOptions {
@@ -21,9 +22,9 @@ export class PackageService {
         this.baseUrl = options.baseUrl || 'http://localhost:3100';
     }
 
-    private buildInstanceUrl(packageName: string, version?: string): string {
-        const base = `/groups/npmjs.org/packages/${packageName}`;
-        return version ? `${base}/versions/${version}` : base;
+    private buildInstanceUrl(nodescopeId: string, packageId: string, versionId?: string): string {
+        const base = `/nodescopes/${nodescopeId}/packages/${packageId}`;
+        return versionId ? `${base}/versions/${versionId}` : base;
     }
 
     async getAllPackages(
@@ -32,83 +33,71 @@ export class PackageService {
         limit: number = 50
     ): Promise<{ packages: PackageMetadata[]; totalCount: number }> {
         const query = Object.keys(filters).length > 0 ? Object.values(filters).join(' ') : undefined;
-
-        // Build options object conditionally to satisfy exactOptionalPropertyTypes
-        const options: { offset: number; limit: number; query?: string } = {
-            offset,
-            limit
-        };
+        const options: { offset: number; limit: number; query?: string } = { offset, limit };
         if (query !== undefined) {
             options.query = query;
         }
 
         const result = await this.npmService.getPackages(options);
-
-        return {
-            packages: result.packages,
-            totalCount: result.total
-        };
+        return { packages: result.packages, totalCount: result.total };
     }
 
-    async getPackage(packageName: string): Promise<PackageMetadata> {
-        const packageData = await this.npmService.getPackageMetadata(packageName);
+    async getPackage(nodescopeId: string, packageId: string): Promise<PackageMetadata> {
+        const canonicalName = await this.npmService.resolveCanonicalPackageName(nodescopeId, packageId);
+        if (!canonicalName) {
+            throwEntityNotFound(this.buildInstanceUrl(nodescopeId, packageId), 'package', packageId);
+        }
+
+        const packageData = await this.npmService.getPackageMetadata(canonicalName);
         if (!packageData) {
-            throwEntityNotFound(this.buildInstanceUrl(packageName), 'package', packageName);
+            throwEntityNotFound(this.buildInstanceUrl(nodescopeId, packageId), 'package', packageId);
         }
         return packageData;
     }
 
-    async getPackageVersions(
-        packageName: string,
-        offset: number = 0,
-        limit: number = 50
-    ): Promise<{ versions: any[]; totalCount: number }> {
-        const packageData = await this.npmService.getPackageMetadata(packageName);
-        if (!packageData) {
-            throwEntityNotFound(this.buildInstanceUrl(packageName), 'package', packageName);
-        }
-
+    async getPackageVersions(nodescopeId: string, packageId: string): Promise<{ versions: any[]; totalCount: number }> {
+        const packageData = await this.getPackage(nodescopeId, packageId);
         const versionKeys = Object.keys(packageData.versions || {});
-        const startIndex = offset;
-        const endIndex = Math.min(startIndex + limit, versionKeys.length);
 
         return {
-            versions: versionKeys.slice(startIndex, endIndex).map(version => ({
-                versionid: version,
-                name: `${packageName}@${version}`,
-                self: `${this.baseUrl}/groups/npmjs.org/packages/${packageName}/versions/${version}`,
+            versions: versionKeys.map((version) => ({
+                versionid: version.replace(/\+/g, '~'),
+                version,
+                self: `${this.baseUrl}/nodescopes/${nodescopeId}/packages/${packageId}/versions/${version.replace(/\+/g, '~')}`,
                 epoch: 1,
-                createdat: new Date().toISOString(),
-                modifiedat: new Date().toISOString()
+                createdat: packageData.time?.[version] || new Date().toISOString(),
+                modifiedat: packageData.time?.[version] || new Date().toISOString(),
             })),
-            totalCount: versionKeys.length
+            totalCount: versionKeys.length,
         };
     }
 
-    async getPackageVersion(packageName: string, version: string): Promise<any> {
-        const versionData = await this.npmService.getVersionMetadata(packageName, version);
+    async getPackageVersion(nodescopeId: string, packageId: string, versionId: string): Promise<any> {
+        const packageData = await this.getPackage(nodescopeId, packageId);
+        const upstreamVersion = findVersionById(versionId, Object.keys(packageData.versions || {}));
+        if (!upstreamVersion) {
+            throwEntityNotFound(this.buildInstanceUrl(nodescopeId, packageId, versionId), 'version', versionId);
+        }
+
+        const versionData = await this.npmService.getVersionMetadata(packageData.name || '', upstreamVersion);
         if (!versionData) {
-            throwEntityNotFound(this.buildInstanceUrl(packageName, version), 'version', version);
+            throwEntityNotFound(this.buildInstanceUrl(nodescopeId, packageId, versionId), 'version', versionId);
         }
         return versionData;
     }
 
-    async getPackageMeta(packageName: string): Promise<any> {
-        const packageData = await this.npmService.getPackageMetadata(packageName);
-        if (!packageData) {
-            throwEntityNotFound(this.buildInstanceUrl(packageName), 'package', packageName);
-        }
-
+    async getPackageMeta(nodescopeId: string, packageId: string): Promise<any> {
+        const packageData = await this.getPackage(nodescopeId, packageId);
         return {
-            xid: `/groups/npmjs.org/packages/${packageName}/meta`,
-            name: `${packageName}-meta`,
-            self: `${this.baseUrl}/groups/npmjs.org/packages/${packageName}/meta`,
+            xid: `/nodescopes/${nodescopeId}/packages/${packageId}/meta`,
+            name: `${packageData.name}-meta`,
+            self: `${this.baseUrl}/nodescopes/${nodescopeId}/packages/${packageId}/meta`,
             readonly: true,
             compatibility: 'strict',
             epoch: 1,
-            createdat: new Date().toISOString(),
-            modifiedat: new Date().toISOString(),
-            packageData
+            createdat: packageData.createdat,
+            modifiedat: packageData.modifiedat,
+            packageData,
         };
     }
-} 
+}

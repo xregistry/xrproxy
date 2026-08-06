@@ -320,9 +320,9 @@ export class CacheManager {
         return path.join(this.config.baseDir, subDir, `${key}.json`);
     }
 
-    private async ensureCacheDir(): Promise<void> {
+    private ensureCacheDir(): void {
         try {
-            await mkdir(this.config.baseDir, { recursive: true });
+            fs.mkdirSync(this.config.baseDir, { recursive: true });
         } catch (error) {
             console.error('Failed to create cache directory:', error);
         }

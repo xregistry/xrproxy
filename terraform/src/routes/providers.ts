@@ -14,7 +14,7 @@ const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => P
 export function createProviderRoutes(
     providerService: ProviderService,
     searchService: SearchService,
-    _entityState: EntityStateManager
+    _entityState: EntityStateManager,
 ): Router {
     const router = Router();
     const { GROUP_TYPE, PROVIDER_RESOURCE_TYPE } = REGISTRY_METADATA;
@@ -93,7 +93,7 @@ export function createProviderRoutes(
         const all = await providerService.getProviderVersions(
             String(entity['namespace']), String(entity['providerid']), getBaseUrl(req),
         );
-        const entries = Object.entries(all).sort(([a], [b]) => a.localeCompare(b));
+        const entries = Object.entries(all);
         const { offset, limit } = parsePagination(req);
         const body = Object.fromEntries(entries.slice(offset, offset + limit));
         setPaginationHeaders(req, res, offset, limit, entries.length);

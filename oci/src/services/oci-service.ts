@@ -1,8 +1,3 @@
-﻿/**
- * OCI Registry Service
- * @fileoverview Service for interacting with OCI Registry API v2
- */
-
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import * as fs from 'fs';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
@@ -11,12 +6,58 @@ import {
     DockerAuthTokenResponse,
     OCIBackend,
     OCICatalogResponse,
+    OCIDescriptor,
     OCIImageConfig,
     OCIManifest,
     OCITagsResponse,
 } from '../types/oci';
-import { ImageMetadata, VersionMetadata } from '../types/xregistry';
-import { toRFC3339 } from '../utils/xregistry-utils';
+import {
+    BuildHistoryEntry,
+    DescriptorInfo,
+    ImageMeta,
+    ImageMetadata,
+    OciLabelProjection,
+    OciVersionDetails,
+    PlatformInfo,
+    ReferrerInfo,
+    VersionMetadata,
+} from '../types/xregistry';
+import { canonicalizeRegistryId, getNamespaceFromRepository, getSourceApiUrl, matchesImageId, repositoryNameFromImageId, toImageId } from '../utils/image-utils';
+import { normalizeTimestamp } from '../utils/xregistry-utils';
+
+const MANIFEST_ACCEPT = [
+    'application/vnd.oci.image.index.v1+json',
+    'application/vnd.oci.image.manifest.v1+json',
+    'application/vnd.docker.distribution.manifest.list.v2+json',
+    'application/vnd.docker.distribution.manifest.v2+json',
+].join(', ');
+
+interface OCIRequestResult<T> {
+    status: number;
+    body: T;
+    headers: Record<string, string | string[] | undefined>;
+}
+
+interface OCIManifestResult {
+    manifest: OCIManifest;
+    digest?: string;
+}
+
+interface ManifestProjection {
+    createdHint?: string;
+    description?: string;
+    annotations?: Record<string, string>;
+    config_labels?: Record<string, string>;
+    layers?: Array<{ digest: string; size?: number; mediatype?: string }>;
+    build_history?: BuildHistoryEntry[];
+    urls?: {
+        pull?: string;
+        manifest?: string;
+        config?: string;
+    };
+    referrers?: ReferrerInfo[];
+    metadata: OciVersionDetails;
+}
 
 export interface OCIServiceConfig {
     backends?: OCIBackend[];
@@ -28,17 +69,17 @@ export interface OCIServiceConfig {
 }
 
 export class OCIService {
-    private httpClient: AxiosInstance;
-    private cacheDir: string;
-    private backends: OCIBackend[];
-    private authTokens: Map<string, { token: string; expires: number }> = new Map();
-    private baseUrl: string;
-    private entityState: EntityStateManager;
+    private readonly httpClient: AxiosInstance;
+    private readonly cacheDir: string;
+    private readonly backends: OCIBackend[];
+    private readonly authTokens = new Map<string, { token: string; expires: number }>();
+    private readonly baseUrl: string;
+    private readonly entityState: EntityStateManager;
 
     constructor(config: OCIServiceConfig = {}) {
         this.baseUrl = config.baseUrl || 'http://localhost:3400';
         this.entityState = config.entityState || new EntityStateManager();
-        this.backends = config.backends || [{
+        this.backends = (config.backends || [{
             id: 'mcr.microsoft.com',
             name: 'Microsoft Container Registry',
             url: 'https://mcr.microsoft.com',
@@ -47,18 +88,39 @@ export class OCIService {
             enabled: true,
             public: true,
             catalogPath: '/v2/_catalog',
-        }];
+        }]).map((backend) => ({
+            ...backend,
+            id: canonicalizeRegistryId(backend.id),
+        }));
         this.cacheDir = config.cacheDir || CACHE_CONFIG.CACHE_DIR;
         this.httpClient = axios.create({
             timeout: config.timeout || OCI_REGISTRY.TIMEOUT_MS,
             headers: {
                 'User-Agent': config.userAgent || OCI_REGISTRY.USER_AGENT,
-                'Accept': 'application/vnd.docker.distribution.manifest.v2+json',
             },
         });
+
         if (!fs.existsSync(this.cacheDir)) {
             fs.mkdirSync(this.cacheDir, { recursive: true });
         }
+    }
+
+    private buildEntityCommon(path: string, createdHint?: string): Pick<ImageMetadata, 'xid' | 'self' | 'epoch' | 'createdat' | 'modifiedat'> {
+        const normalizedCreated = normalizeTimestamp(createdHint);
+        return {
+            xid: path,
+            self: `${this.baseUrl}${path}`,
+            epoch: this.entityState.getEpoch(path),
+            createdat: normalizedCreated || this.entityState.getCreatedAt(path),
+            modifiedat: this.entityState.getModifiedAt(path),
+        };
+    }
+
+    private getDefaultTag(tags: string[]): string | undefined {
+        if (tags.includes('latest')) {
+            return 'latest';
+        }
+        return tags[0];
     }
 
     private async getAuthToken(backend: OCIBackend, repository: string): Promise<string | null> {
@@ -67,63 +129,342 @@ export class OCIService {
         if (cached && cached.expires > Date.now()) {
             return cached.token;
         }
+
+        if (backend.id !== 'docker.io') {
+            return backend.token || null;
+        }
+
         try {
-            if (backend.id === 'docker.io') {
-                const authUrl = `https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repository}:pull`;
-                const response = await axios.get<DockerAuthTokenResponse>(authUrl);
-                if (response.data.token || response.data.access_token) {
-                    const token = response.data.token || response.data.access_token!;
-                    const expiresIn = response.data.expires_in || 300;
-                    this.authTokens.set(cacheKey, {
-                        token,
-                        expires: Date.now() + (expiresIn * 1000),
-                    });
-                    return token;
+            const authBaseUrl = (backend.authUrl || OCI_REGISTRY.AUTH_URL).replace(/\/+$/, '');
+            const authUrl = `${authBaseUrl}/token?service=registry.docker.io&scope=repository:${repository}:pull`;
+            const authConfig = backend.username && (backend.password || backend.token)
+                ? {
+                    auth: {
+                        username: backend.username,
+                        password: backend.password || backend.token || '',
+                    },
                 }
+                : undefined;
+            const response = await axios.get<DockerAuthTokenResponse>(authUrl, authConfig);
+            const token = response.data.token || response.data.access_token;
+            if (!token) {
+                return null;
             }
-            if (backend.token) {
-                return backend.token;
-            }
-            return null;
-        } catch (error) {
-            console.warn(`Failed to get auth token for ${repository}:`, error);
+
+            const expiresIn = response.data.expires_in || 300;
+            this.authTokens.set(cacheKey, {
+                token,
+                expires: Date.now() + (expiresIn * 1000),
+            });
+            return token;
+        } catch {
             return null;
         }
+    }
+
+    private async buildRequestHeaders(backend: OCIBackend, repository?: string, accept?: string): Promise<Record<string, string>> {
+        const headers: Record<string, string> = {
+            'User-Agent': OCI_REGISTRY.USER_AGENT,
+        };
+
+        if (accept) {
+            headers['Accept'] = accept;
+        }
+
+        if (repository) {
+            const token = await this.getAuthToken(backend, repository);
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+                return headers;
+            }
+        }
+
+        if (backend.username && backend.password) {
+            const basicToken = Buffer.from(`${backend.username}:${backend.password}`, 'utf8').toString('base64');
+            headers['Authorization'] = `Basic ${basicToken}`;
+        } else if (backend.token) {
+            headers['Authorization'] = `Bearer ${backend.token}`;
+        }
+
+        return headers;
     }
 
     private async ociRequest<T>(
         backend: OCIBackend,
         path: string,
-        repository?: string
-    ): Promise<{ body: T; headers: Record<string, string> }> {
-        const url = `${backend.url}${path}`;
-        const headers: Record<string, string> = {
-            'User-Agent': OCI_REGISTRY.USER_AGENT,
+        options: {
+            repository?: string;
+            accept?: string;
+            allowStatuses?: number[];
+        } = {}
+    ): Promise<OCIRequestResult<T>> {
+        const isAbsoluteUrl = /^https?:\/\//i.test(path);
+        const url = isAbsoluteUrl ? path : `${backend.url}${path}`;
+        const headers = await this.buildRequestHeaders(backend, options.repository, options.accept);
+        const response: AxiosResponse<T> = await this.httpClient.get<T>(url, {
+            headers,
+            validateStatus: () => true,
+        });
+
+        if (response.status >= 400 && !(options.allowStatuses || []).includes(response.status)) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        return {
+            status: response.status,
+            body: response.data,
+            headers: response.headers as Record<string, string | string[] | undefined>,
         };
-        if (repository) {
-            const token = await this.getAuthToken(backend, repository);
-            if (token) {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
+    }
+
+    private getNextLink(linkHeader: string | string[] | undefined, backend: OCIBackend): string | undefined {
+        const headerValue = Array.isArray(linkHeader) ? linkHeader.join(',') : linkHeader;
+        if (!headerValue) {
+            return undefined;
         }
+
+        const nextLink = headerValue.split(',').find((link) => link.includes('rel="next"'));
+        if (!nextLink) {
+            return undefined;
+        }
+
+        const match = nextLink.match(/<([^>]+)>/);
+        if (!match || !match[1]) {
+            return undefined;
+        }
+
+        const nextUrl = new URL(match[1], backend.url);
+        return `${nextUrl.pathname}${nextUrl.search}`;
+    }
+
+    private isManifestList(manifest: OCIManifest): boolean {
+        return manifest.mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json'
+            || manifest.mediaType === 'application/vnd.oci.image.index.v1+json';
+    }
+
+    private mapDescriptor(descriptor?: OCIDescriptor): DescriptorInfo | undefined {
+        if (!descriptor) {
+            return undefined;
+        }
+
+        return {
+            digest: descriptor.digest,
+            ...(descriptor.mediaType ? { mediatype: descriptor.mediaType } : {}),
+            ...(descriptor.size !== undefined ? { size: descriptor.size } : {}),
+        };
+    }
+
+    private mapReferrer(descriptor: OCIDescriptor): ReferrerInfo {
+        return {
+            digest: descriptor.digest,
+            ...(descriptor.mediaType ? { mediatype: descriptor.mediaType } : {}),
+            ...(descriptor.size !== undefined ? { size: descriptor.size } : {}),
+            ...(descriptor.artifactType ? { artifact_type: descriptor.artifactType } : {}),
+            ...(descriptor.annotations ? { annotations: descriptor.annotations } : {}),
+        };
+    }
+
+    private mapAvailablePlatforms(manifests: OCIDescriptor[]): PlatformInfo[] {
+        return manifests
+            .filter((manifest) => manifest.platform?.architecture && manifest.platform?.os)
+            .map((manifest) => ({
+                architecture: manifest.platform?.architecture || 'unknown',
+                os: manifest.platform?.os || 'unknown',
+                ...(manifest.platform?.variant ? { variant: manifest.platform.variant } : {}),
+                digest: manifest.digest,
+                ...(manifest.size !== undefined ? { size: manifest.size } : {}),
+                ...(manifest.mediaType ? { mediatype: manifest.mediaType } : {}),
+            }));
+    }
+
+    private mapOciLabels(annotations?: Record<string, string>): OciLabelProjection | undefined {
+        if (!annotations) {
+            return undefined;
+        }
+
+        const labelProjection: OciLabelProjection = {
+            ...(annotations['org.opencontainers.image.title'] ? { title: annotations['org.opencontainers.image.title'] } : {}),
+            ...(annotations['org.opencontainers.image.description'] ? { description: annotations['org.opencontainers.image.description'] } : {}),
+            ...(annotations['org.opencontainers.image.version'] ? { version: annotations['org.opencontainers.image.version'] } : {}),
+            ...(annotations['org.opencontainers.image.created'] ? { created: annotations['org.opencontainers.image.created'] } : {}),
+            ...(annotations['org.opencontainers.image.revision'] ? { revision: annotations['org.opencontainers.image.revision'] } : {}),
+            ...(annotations['org.opencontainers.image.source'] ? { source: annotations['org.opencontainers.image.source'] } : {}),
+            ...(annotations['org.opencontainers.image.url'] ? { url: annotations['org.opencontainers.image.url'] } : {}),
+            ...(annotations['org.opencontainers.image.documentation'] ? { documentation: annotations['org.opencontainers.image.documentation'] } : {}),
+            ...(annotations['org.opencontainers.image.licenses'] ? { licenses: annotations['org.opencontainers.image.licenses'] } : {}),
+            ...(annotations['org.opencontainers.image.vendor'] ? { vendor: annotations['org.opencontainers.image.vendor'] } : {}),
+            ...(annotations['org.opencontainers.image.authors'] ? { authors: annotations['org.opencontainers.image.authors'] } : {}),
+            ...(annotations['org.opencontainers.image.ref.name'] ? { ref_name: annotations['org.opencontainers.image.ref.name'] } : {}),
+            ...(annotations['org.opencontainers.image.base.digest'] ? { base_digest: annotations['org.opencontainers.image.base.digest'] } : {}),
+            ...(annotations['org.opencontainers.image.base.name'] ? { base_name: annotations['org.opencontainers.image.base.name'] } : {}),
+        };
+
+        return Object.keys(labelProjection).length > 0 ? labelProjection : undefined;
+    }
+
+    private async getManifestResponse(backend: OCIBackend, repository: string, reference: string): Promise<OCIManifestResult | null> {
         try {
-            const response: AxiosResponse<T> = await this.httpClient.get(url, {
-                headers,
-                validateStatus: (status) => status < 500,
-            });
-            if (response.status >= 400) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            const response = await this.ociRequest<OCIManifest>(
+                backend,
+                `/v2/${repository}/manifests/${reference}`,
+                {
+                    repository,
+                    accept: MANIFEST_ACCEPT,
+                }
+            );
+
+            const digestHeader = response.headers['docker-content-digest'];
+            const digest = Array.isArray(digestHeader) ? digestHeader[0] : digestHeader;
             return {
-                body: response.data,
-                headers: response.headers as Record<string, string>,
+                manifest: response.body,
+                ...(digest ? { digest } : {}),
             };
-        } catch (error) {
-            if (axios.isAxiosError(error)) {
-                throw new Error(`OCI request failed: ${error.message}`);
-            }
-            throw error;
+        } catch {
+            return null;
         }
+    }
+
+    async getManifest(backend: OCIBackend, repository: string, reference: string): Promise<OCIManifest | null> {
+        const manifestResult = await this.getManifestResponse(backend, repository, reference);
+        return manifestResult?.manifest || null;
+    }
+
+    async getImageConfig(backend: OCIBackend, repository: string, configDigest: string): Promise<OCIImageConfig | null> {
+        try {
+            const response = await this.ociRequest<OCIImageConfig>(backend, `/v2/${repository}/blobs/${configDigest}`, { repository });
+            return response.body;
+        } catch {
+            return null;
+        }
+    }
+
+    private async getReferrers(backend: OCIBackend, repository: string, digest: string): Promise<ReferrerInfo[] | undefined> {
+        let nextPath: string | undefined = `/v2/${repository}/referrers/${digest}`;
+        const referrers: ReferrerInfo[] = [];
+        let sawSuccessfulResponse = false;
+
+        while (nextPath) {
+            const response = await this.ociRequest<OCIManifest>(backend, nextPath, {
+                repository,
+                accept: 'application/vnd.oci.image.index.v1+json',
+                allowStatuses: [404],
+            });
+
+            if (response.status === 404) {
+                return undefined;
+            }
+
+            sawSuccessfulResponse = true;
+            referrers.push(...(response.body.manifests || []).map((manifest) => this.mapReferrer(manifest)));
+            nextPath = this.getNextLink(response.headers['link'], backend);
+        }
+
+        if (!sawSuccessfulResponse) {
+            return undefined;
+        }
+
+        return referrers;
+    }
+
+    private async buildManifestProjection(backend: OCIBackend, repository: string, reference: string): Promise<ManifestProjection | null> {
+        const originalManifestResult = await this.getManifestResponse(backend, repository, reference);
+        if (!originalManifestResult) {
+            return null;
+        }
+
+        const originalManifest = originalManifestResult.manifest;
+        const multiPlatform = this.isManifestList(originalManifest);
+        let selectedManifest = originalManifest;
+
+        if (multiPlatform && originalManifest.manifests && originalManifest.manifests.length > 0) {
+            const preferredManifest = originalManifest.manifests.find((manifest) =>
+                manifest.platform?.architecture === 'amd64' && manifest.platform?.os === 'linux'
+            ) || originalManifest.manifests[0];
+
+            if (preferredManifest) {
+                const preferredManifestResult = await this.getManifestResponse(backend, repository, preferredManifest.digest);
+                if (preferredManifestResult) {
+                    selectedManifest = preferredManifestResult.manifest;
+                }
+            }
+        }
+
+        const configDescriptor = selectedManifest.config;
+        const imageConfig = configDescriptor ? await this.getImageConfig(backend, repository, configDescriptor.digest) : null;
+        const annotations = originalManifest.annotations;
+        const configLabels = imageConfig?.config?.Labels;
+        const availablePlatforms = multiPlatform && originalManifest.manifests
+            ? this.mapAvailablePlatforms(originalManifest.manifests)
+            : undefined;
+
+        const sizeBytes = selectedManifest.layers
+            ? selectedManifest.layers.reduce((sum, layer) => sum + (layer.size || 0), 0)
+            : undefined;
+        const manifestDigest = originalManifestResult.digest || (reference.startsWith('sha256:') ? reference : undefined);
+        const referrers = manifestDigest ? await this.getReferrers(backend, repository, manifestDigest) : undefined;
+        const subject = this.mapDescriptor(originalManifest.subject);
+        const config = this.mapDescriptor(configDescriptor);
+        const ociLabels = this.mapOciLabels(annotations);
+
+        const metadata: OciVersionDetails = {
+            ...(manifestDigest ? { digest: manifestDigest } : {}),
+            ...(originalManifest.mediaType ? { manifest_mediatype: originalManifest.mediaType } : {}),
+            ...(originalManifest.artifactType ? { artifact_type: originalManifest.artifactType } : {}),
+            ...(subject ? { subject } : {}),
+            ...(config ? { config } : {}),
+            ...(originalManifest.schemaVersion !== undefined ? { schema_version: originalManifest.schemaVersion } : {}),
+            ...(selectedManifest.layers ? { layers_count: selectedManifest.layers.length } : {}),
+            ...(sizeBytes !== undefined ? { size_bytes: sizeBytes } : {}),
+            ...(multiPlatform ? { is_multi_platform: true } : {}),
+            ...(!multiPlatform && imageConfig?.architecture ? { architecture: imageConfig.architecture } : {}),
+            ...(!multiPlatform && imageConfig?.os ? { os: imageConfig.os } : {}),
+            ...(!multiPlatform && imageConfig?.variant ? { variant: imageConfig.variant } : {}),
+            ...(!multiPlatform && imageConfig?.['os.version'] ? { os_version: imageConfig['os.version'] } : {}),
+            ...(!multiPlatform && imageConfig?.['os.features'] ? { os_features: imageConfig['os.features'] } : {}),
+            ...(availablePlatforms && availablePlatforms.length > 0 ? { available_platforms: availablePlatforms } : {}),
+            ...(ociLabels ? { oci_labels: ociLabels } : {}),
+            ...(imageConfig?.config?.Env ? { environment: imageConfig.config.Env } : {}),
+            ...(imageConfig?.config?.WorkingDir ? { working_dir: imageConfig.config.WorkingDir } : {}),
+            ...(imageConfig?.config?.Entrypoint ? { entrypoint: imageConfig.config.Entrypoint } : {}),
+            ...(imageConfig?.config?.Cmd ? { cmd: imageConfig.config.Cmd } : {}),
+            ...(imageConfig?.config?.User ? { user: imageConfig.config.User } : {}),
+            ...(imageConfig?.config?.StopSignal ? { stop_signal: imageConfig.config.StopSignal } : {}),
+            ...(imageConfig?.author ? { author: imageConfig.author } : {}),
+            ...(imageConfig?.rootfs?.diff_ids ? { rootfs_diff_ids: imageConfig.rootfs.diff_ids } : {}),
+            ...(imageConfig?.config?.ExposedPorts ? { exposed_ports: Object.keys(imageConfig.config.ExposedPorts) } : {}),
+            ...(imageConfig?.config?.Volumes ? { volumes: Object.keys(imageConfig.config.Volumes) } : {}),
+        };
+
+        const buildHistory = imageConfig?.history?.map<BuildHistoryEntry>((entry, index) => ({
+            step: index + 1,
+            ...(entry.created ? { created: entry.created } : {}),
+            ...(entry.created_by ? { created_by: entry.created_by } : {}),
+            ...(entry.empty_layer !== undefined ? { empty_layer: entry.empty_layer } : {}),
+            ...(entry.author ? { author: entry.author } : {}),
+            ...(entry.comment ? { comment: entry.comment } : {}),
+        }));
+
+        return {
+            ...(imageConfig?.created ? { createdHint: imageConfig.created } : {}),
+            ...(metadata.oci_labels?.description ? { description: metadata.oci_labels.description } : {}),
+            ...(annotations ? { annotations } : {}),
+            ...(configLabels ? { config_labels: configLabels } : {}),
+            ...(selectedManifest.layers ? {
+                layers: selectedManifest.layers.map((layer) => ({
+                    digest: layer.digest,
+                    ...(layer.size !== undefined ? { size: layer.size } : {}),
+                    ...(layer.mediaType ? { mediatype: layer.mediaType } : {}),
+                })),
+            } : {}),
+            ...(buildHistory && buildHistory.length > 0 ? { build_history: buildHistory } : {}),
+            urls: {
+                pull: `${backend.url.replace(/\/+$/, '')}/${repository}:${reference}`,
+                manifest: `${backend.url.replace(/\/+$/, '')}/v2/${repository}/manifests/${reference}`,
+                ...(configDescriptor?.digest ? { config: `${backend.url.replace(/\/+$/, '')}/v2/${repository}/blobs/${configDescriptor.digest}` } : {}),
+            },
+            ...(referrers !== undefined ? { referrers } : {}),
+            metadata,
+        };
     }
 
     async listRepositories(backend: OCIBackend): Promise<string[]> {
@@ -131,406 +472,188 @@ export class OCIService {
         if (catalogPath === 'disabled') {
             return [];
         }
+
         try {
-            const allRepositories: string[] = [];
-            let fetchUrl = `${catalogPath}?n=1000`;
-            while (fetchUrl) {
-                const response = await this.ociRequest<OCICatalogResponse>(backend, fetchUrl);
-                const catalog = response.body;
-                if (catalog && catalog.repositories) {
-                    allRepositories.push(...catalog.repositories);
-                }
-                const linkHeader = response.headers['link'];
-                if (linkHeader) {
-                    const nextLink = linkHeader.split(',').find((link: string) => link.includes('rel="next"'));
-                    if (nextLink) {
-                        const match = nextLink.match(/<([^>]+)>/);
-                        if (match && match[1]) {
-                            const nextUrlObject = new URL(match[1], backend.url);
-                            fetchUrl = nextUrlObject.pathname + nextUrlObject.search;
-                        } else {
-                            fetchUrl = '';
-                        }
-                    } else {
-                        fetchUrl = '';
-                    }
-                } else {
-                    fetchUrl = '';
-                }
+            const repositories: string[] = [];
+            let nextPath: string | undefined = `${catalogPath}${catalogPath.includes('?') ? '&' : '?'}n=1000`;
+
+            while (nextPath) {
+                const response = await this.ociRequest<OCICatalogResponse>(backend, nextPath);
+                repositories.push(...(response.body.repositories || []));
+                nextPath = this.getNextLink(response.headers['link'], backend);
             }
-            return allRepositories;
-        } catch (error) {
-            console.error(`Failed to list repositories for ${backend.id}:`, error);
+
+            return repositories;
+        } catch {
             return [];
         }
+    }
+
+    async resolveRepository(backend: OCIBackend, imageIdOrRepository: string): Promise<string | null> {
+        if (!imageIdOrRepository) {
+            return null;
+        }
+
+        if (imageIdOrRepository.includes('/')) {
+            return imageIdOrRepository;
+        }
+
+        const reversibleRepository = repositoryNameFromImageId(imageIdOrRepository);
+        if (reversibleRepository) {
+            return reversibleRepository;
+        }
+
+        const repositories = await this.listRepositories(backend);
+        return repositories.find((repository) => matchesImageId(repository, imageIdOrRepository)) || null;
     }
 
     async listTags(backend: OCIBackend, repository: string): Promise<string[]> {
         try {
-            const tagsPath = `/v2/${repository}/tags/list`;
-            const response = await this.ociRequest<OCITagsResponse>(backend, tagsPath, repository);
-            return response.body.tags || [];
-        } catch (error) {
-            console.error(`Failed to list tags for ${repository}:`, error);
+            const tags: string[] = [];
+            let nextPath: string | undefined = `/v2/${repository}/tags/list?n=1000`;
+
+            while (nextPath) {
+                const response = await this.ociRequest<OCITagsResponse>(backend, nextPath, { repository });
+                tags.push(...(response.body.tags || []));
+                nextPath = this.getNextLink(response.headers['link'], backend);
+            }
+
+            return tags;
+        } catch {
             return [];
         }
     }
 
-    async getManifest(backend: OCIBackend, repository: string, tag: string): Promise<OCIManifest | null> {
-        try {
-            const manifestPath = `/v2/${repository}/manifests/${tag}`;
-            const response = await this.ociRequest<OCIManifest>(backend, manifestPath, repository);
-            return response.body;
-        } catch (error) {
-            console.error(`Failed to get manifest for ${repository}:${tag}:`, error);
-            return null;
-        }
-    }
-
-    async getImageConfig(backend: OCIBackend, repository: string, configDigest: string): Promise<OCIImageConfig | null> {
-        try {
-            const blobPath = `/v2/${repository}/blobs/${configDigest}`;
-            const response = await this.ociRequest<OCIImageConfig>(backend, blobPath, repository);
-            return response.body;
-        } catch (error) {
-            console.error(`Failed to get image config for ${repository}:`, error);
-            return null;
-        }
-    }
-
     async getImageMetadata(backend: OCIBackend, repository: string): Promise<ImageMetadata | null> {
-        try {
-            const tags = await this.listTags(backend, repository);
-            if (tags.length === 0) {
-                return null;
-            }
-            const latestTag = tags.includes('latest') ? 'latest' : tags[0];
-            let manifest = await this.getManifest(backend, repository, latestTag!);
-            if (!manifest) {
-                return null;
-            }
-
-            // Handle manifest lists - get the first linux/amd64 manifest if available
-            const isManifestList = manifest.mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json' ||
-                manifest.mediaType === 'application/vnd.oci.image.index.v1+json';
-
-            let availablePlatforms: Array<{ architecture: string; os: string; variant?: string; digest: string; size: number; mediaType: string }> | undefined;
-
-            if (isManifestList && manifest.manifests) {
-                // Store available platforms
-                availablePlatforms = manifest.manifests.map(m => ({
-                    architecture: m.platform?.architecture || 'unknown',
-                    os: m.platform?.os || 'unknown',
-                    ...(m.platform?.variant && { variant: m.platform.variant }),
-                    digest: m.digest,
-                    size: m.size,
-                    mediaType: m.mediaType,
-                }));
-
-                // Try to get amd64/linux manifest for metadata
-                const amd64Manifest = manifest.manifests.find(m =>
-                    m.platform?.architecture === 'amd64' && m.platform?.os === 'linux'
-                );
-                if (amd64Manifest) {
-                    // Fetch the actual manifest for this platform
-                    manifest = await this.getManifest(backend, repository, amd64Manifest.digest) || manifest;
-                }
-            }
-
-            // Get config for latest tag to populate image-level metadata
-            let config: OCIImageConfig | null = null;
-            if (manifest.config) {
-                config = await this.getImageConfig(backend, repository, manifest.config.digest);
-            }
-
-            const versions: Record<string, VersionMetadata> = {};
-            for (const tag of tags.slice(0, 10)) {
-                const tagManifest = await this.getManifest(backend, repository, tag);
-                if (tagManifest) {
-                    versions[tag] = await this.convertToVersionMetadata(backend, repository, tag, tagManifest);
-                }
-            }
-
-            // Extract namespace from repository (e.g., "library" from "library/nginx")
-            const namespaceParts = repository.split('/');
-            const namespace = namespaceParts.length > 1 ? namespaceParts[0] : undefined;
-
-            // Calculate total size
-            const totalSize = manifest.layers?.reduce((sum, layer) => sum + (layer.size || 0), 0) || 0;
-
-            // Extract OCI labels from config
-            const labels = config?.config?.Labels || {};
-            const ociLabels = {
-                version: labels['org.opencontainers.image.version'],
-                revision: labels['org.opencontainers.image.revision'],
-                source: labels['org.opencontainers.image.source'],
-                documentation: labels['org.opencontainers.image.documentation'],
-                licenses: labels['org.opencontainers.image.licenses'],
-                vendor: labels['org.opencontainers.image.vendor'],
-                authors: labels['org.opencontainers.image.authors'],
-                url: labels['org.opencontainers.image.url'],
-                title: labels['org.opencontainers.image.title'],
-                created: labels['org.opencontainers.image.created'],
-            };
-
-            // Build history from config
-            const buildHistory = config?.history?.map((historyItem, index) => ({
-                step: index + 1,
-                ...(historyItem.created && { created: historyItem.created }),
-                ...(historyItem.created_by && { created_by: historyItem.created_by }),
-                ...(historyItem.empty_layer !== undefined && { empty_layer: historyItem.empty_layer }),
-                ...(historyItem.comment && { comment: historyItem.comment }),
-            }));
-
-            const resourcePath = `/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}`;
-
-            return {
-                // xRegistry REQUIRED attributes (common to all entities)
-                xid: resourcePath,
-                self: `${this.baseUrl}${resourcePath}`,
-                epoch: this.entityState.getEpoch(resourcePath),
-                createdat: this.entityState.getCreatedAt(resourcePath),
-                modifiedat: this.entityState.getModifiedAt(resourcePath),
-
-                // xRegistry REQUIRED Resource attributes
-                imageid: encodeURIComponent(repository),
-                versionid: latestTag!,  // REQUIRED: ID of the default Version
-                isdefault: true as const, // REQUIRED: Always true for Resource
-
-                // xRegistry OPTIONAL Resource attributes
-                name: repository,
-                description: `OCI image ${repository}`,
-                versionsurl: `${this.baseUrl}/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}/versions`,
-                versionscount: tags.length,
-                metaurl: `${this.baseUrl}/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}/meta`,
-
-                // Resource collection
-                versions: versions,
-
-                // OCI-specific metadata
-                distTags: {
-                    latest: latestTag!,
-                },
-                registry: backend.url,
-                ...(namespace && { namespace }),
-                repository: `${backend.url}/v2/${repository}`,
-                metadata: {
-                    ...(manifest.config?.digest && { digest: manifest.config.digest }),
-                    ...(manifest.mediaType && { manifest_mediatype: manifest.mediaType }),
-                    ...(manifest.schemaVersion && { schema_version: manifest.schemaVersion }),
-                    ...(manifest.layers?.length && { layers_count: manifest.layers.length }),
-                    ...(config?.architecture && { architecture: config.architecture }),
-                    ...(config?.os && { os: config.os }),
-                    ...(totalSize && { size_bytes: totalSize }),
-                    is_multi_platform: manifest.mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json' ||
-                        manifest.mediaType === 'application/vnd.oci.image.index.v1+json',
-                    oci_labels: ociLabels,
-                    ...(config?.config?.Env && { environment: config.config.Env }),
-                    ...(config?.config?.WorkingDir && { working_dir: config.config.WorkingDir }),
-                    ...(config?.config?.Entrypoint && { entrypoint: config.config.Entrypoint }),
-                    ...(config?.config?.Cmd && { cmd: config.config.Cmd }),
-                    ...(config?.config?.User && { user: config.config.User }),
-                    ...(config?.config?.ExposedPorts && { exposed_ports: Object.keys(config.config.ExposedPorts) }),
-                    ...(config?.config?.Volumes && { volumes: Object.keys(config.config.Volumes) }),
-                    ...(availablePlatforms && availablePlatforms.length > 0 && { available_platforms: availablePlatforms }),
-                },
-                ...(manifest.layers && manifest.layers.length > 0 && {
-                    layers: manifest.layers.map((layer) => ({
-                        digest: layer.digest,
-                        size: layer.size,
-                        mediaType: layer.mediaType,
-                    }))
-                }),
-                ...(buildHistory && buildHistory.length > 0 && { build_history: buildHistory }),
-                urls: {
-                    pull: `${backend.url}/${repository}:${latestTag}`,
-                    manifest: `${backend.url}/v2/${repository}/manifests/${latestTag}`,
-                    ...(manifest.config?.digest && { config: `${backend.url}/v2/${repository}/blobs/${manifest.config.digest}` }),
-                },
-                ...(manifest.annotations && { annotations: manifest.annotations }),
-                ...(config?.created && { created: config.created }),
-            };
-        } catch (error) {
-            console.error(`Failed to get image metadata for ${repository}:`, error);
+        const tags = await this.listTags(backend, repository);
+        const defaultTag = this.getDefaultTag(tags);
+        if (!defaultTag) {
             return null;
         }
-    }
 
-    async convertToVersionMetadata(backend: OCIBackend, repository: string, tag: string, manifest: OCIManifest): Promise<VersionMetadata> {
-        // Handle manifest lists - get the linux/amd64 manifest if this is a manifest list
-        const isManifestList = manifest.mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json' ||
-            manifest.mediaType === 'application/vnd.oci.image.index.v1+json';
-
-        let actualManifest = manifest;
-        if (isManifestList && manifest.manifests) {
-            // Try to get amd64/linux manifest
-            const amd64Manifest = manifest.manifests.find(m =>
-                m.platform?.architecture === 'amd64' && m.platform?.os === 'linux'
-            );
-            if (amd64Manifest) {
-                const platformManifest = await this.getManifest(backend, repository, amd64Manifest.digest);
-                if (platformManifest) {
-                    actualManifest = platformManifest;
-                }
-            }
+        const projection = await this.buildManifestProjection(backend, repository, defaultTag);
+        if (!projection) {
+            return null;
         }
 
-        let config: OCIImageConfig | null = null;
-        if (actualManifest.config) {
-            config = await this.getImageConfig(backend, repository, actualManifest.config.digest);
-        }
-
-        // Determine if this is the default version (typically 'latest' tag)
-        const isDefault = tag === 'latest';
-
-        const versionPath = `/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}/versions/${tag}`;
+        const imageId = toImageId(repository);
+        const resourcePath = `/containerregistries/${backend.id}/images/${imageId}`;
+        const meta = await this.getImageMeta(backend, repository, defaultTag);
 
         return {
-            // xRegistry REQUIRED attributes (common to all entities)
-            xid: versionPath,
-            self: `${this.baseUrl}${versionPath}`,
-            epoch: this.entityState.getEpoch(versionPath),
-            createdat: this.entityState.getCreatedAt(versionPath),
-            modifiedat: this.entityState.getModifiedAt(versionPath),
-
-            // xRegistry REQUIRED Version attributes
-            versionid: tag,
-            packageid: encodeURIComponent(repository),  // REQUIRED: Reference to parent Resource
-            isdefault: isDefault,  // REQUIRED: Whether this is the default Version
-            ancestor: tag,  // REQUIRED: For now, self-referencing (lineage not tracked in OCI)
-            contenttype: 'application/vnd.oci.image.manifest.v1+json',  // REQUIRED: OCI manifest content type
-
-            // xRegistry OPTIONAL Version attributes
-            version: tag,  // Alias for versionid
-            name: tag,
-            description: `Tag ${tag} of ${repository}`,
-
-            // OCI-specific version metadata
-            ...(config?.created && { created: config.created }),
-            ...(actualManifest.config?.size && { size: actualManifest.config.size }),
-            ...(actualManifest.config?.digest && { digest: actualManifest.config.digest }),
-            ...(config?.architecture && { architecture: config.architecture }),
-            ...(config?.os && { os: config.os }),
-            ...(actualManifest.layers && actualManifest.layers.length > 0 && {
-                layers: actualManifest.layers.map((layer) => ({
-                    digest: layer.digest,
-                    size: layer.size,
-                    mediaType: layer.mediaType,
-                }))
-            }),
-            config: actualManifest.config ? {
-                digest: actualManifest.config.digest,
-                size: actualManifest.config.size,
-                mediaType: actualManifest.config.mediaType,
-            } : undefined,
-            annotations: actualManifest.annotations,
-            platform: config ? {
-                architecture: config.architecture,
-                os: config.os,
-            } : undefined,
+            imageid: imageId,
+            versionid: defaultTag,
+            isdefault: true,
+            name: repository,
+            ...(projection.description ? { description: projection.description } : {}),
+            versionsurl: `${this.baseUrl}${resourcePath}/versions`,
+            versionscount: tags.length,
+            metaurl: `${this.baseUrl}${resourcePath}/meta`,
+            ...(meta ? { meta } : {}),
+            ...this.buildEntityCommon(resourcePath, projection.createdHint),
+            ...(projection.annotations ? { annotations: projection.annotations } : {}),
+            ...(projection.config_labels ? { config_labels: projection.config_labels } : {}),
+            ...(projection.layers ? { layers: projection.layers } : {}),
+            ...(projection.build_history ? { build_history: projection.build_history } : {}),
+            ...(projection.urls ? { urls: projection.urls } : {}),
+            ...(projection.referrers !== undefined ? { referrers: projection.referrers } : {}),
+            metadata: projection.metadata,
         };
     }
 
-    async getVersionMetadata(backend: OCIBackend, repository: string, tag: string): Promise<VersionMetadata | null> {
-        try {
-            const manifest = await this.getManifest(backend, repository, tag);
-            if (!manifest) {
-                return null;
-            }
-            return await this.convertToVersionMetadata(backend, repository, tag, manifest);
-        } catch (error) {
-            console.error(`Failed to get version metadata for ${repository}:${tag}:`, error);
+    async convertToVersionMetadata(
+        backend: OCIBackend,
+        repository: string,
+        tag: string,
+        defaultTag?: string
+    ): Promise<VersionMetadata | null> {
+        const projection = await this.buildManifestProjection(backend, repository, tag);
+        if (!projection) {
             return null;
         }
+
+        const imageId = toImageId(repository);
+        const versionPath = `/containerregistries/${backend.id}/images/${imageId}/versions/${tag}`;
+        return {
+            versionid: tag,
+            isdefault: tag === defaultTag,
+            name: tag,
+            ...(projection.description ? { description: projection.description } : {}),
+            ...this.buildEntityCommon(versionPath, projection.createdHint),
+            ...(projection.annotations ? { annotations: projection.annotations } : {}),
+            ...(projection.config_labels ? { config_labels: projection.config_labels } : {}),
+            ...(projection.layers ? { layers: projection.layers } : {}),
+            ...(projection.build_history ? { build_history: projection.build_history } : {}),
+            ...(projection.urls ? { urls: projection.urls } : {}),
+            ...(projection.referrers !== undefined ? { referrers: projection.referrers } : {}),
+            metadata: projection.metadata,
+        };
+    }
+
+    async getVersionMetadata(backend: OCIBackend, repository: string, tag: string, defaultTag?: string): Promise<VersionMetadata | null> {
+        return this.convertToVersionMetadata(backend, repository, tag, defaultTag);
     }
 
     async imageExists(backend: OCIBackend, repository: string): Promise<boolean> {
-        try {
-            const tags = await this.listTags(backend, repository);
-            return tags.length > 0;
-        } catch (error) {
-            return false;
-        }
+        const tags = await this.listTags(backend, repository);
+        return tags.length > 0;
     }
 
-    /**
-     * Get Meta entity for a Resource (image)
-     * The Meta entity contains Resource-level metadata separate from Version metadata
-     */
-    async getImageMeta(backend: OCIBackend, repository: string): Promise<import('../types/xregistry').Meta | null> {
-        try {
-            const tags = await this.listTags(backend, repository);
-            if (tags.length === 0) {
-                return null;
-            }
-
-            // Determine default version (typically 'latest')
-            const defaultTag = tags.includes('latest') ? 'latest' : tags[0];
-            const createdTimestamp = toRFC3339();
-
-            // Build Meta entity
-            const meta: import('../types/xregistry').Meta = {
-                // xRegistry REQUIRED attributes (common)
-                xid: `/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}/meta`,
-                self: `${this.baseUrl}/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}/meta`,
-                epoch: 1,
-                createdat: createdTimestamp,
-                modifiedat: createdTimestamp,
-
-                // xRegistry REQUIRED Meta attributes
-                // (none - all Meta attributes are OPTIONAL per spec)
-
-                // xRegistry OPTIONAL Meta attributes
-                readonly: true, // This is a read-only wrapper
-                defaultversionid: defaultTag,
-                defaultversionurl: `${this.baseUrl}/containerregistries/${backend.id}/images/${encodeURIComponent(repository)}/versions/${defaultTag}`,
-                defaultversionsticky: false, // Latest tag can change
-
-                // Additional metadata
-                name: `${repository} metadata`,
-                description: `Meta entity for OCI image ${repository}`,
-            };
-
-            return meta;
-        } catch (error) {
-            console.error(`Failed to get meta for ${repository}:`, error);
+    async getImageMeta(backend: OCIBackend, repository: string, defaultTag?: string): Promise<ImageMeta | null> {
+        const tags = defaultTag ? [] : await this.listTags(backend, repository);
+        const resolvedDefaultTag = defaultTag || this.getDefaultTag(tags);
+        if (!resolvedDefaultTag) {
             return null;
         }
+
+        const imageId = toImageId(repository);
+        const metaPath = `/containerregistries/${backend.id}/images/${imageId}/meta`;
+        const namespace = getNamespaceFromRepository(repository);
+
+        return {
+            ...this.buildEntityCommon(metaPath),
+            readonly: true,
+            defaultversionid: resolvedDefaultTag,
+            defaultversionurl: `${this.baseUrl}/containerregistries/${backend.id}/images/${imageId}/versions/${resolvedDefaultTag}`,
+            defaultversionsticky: true,
+            sourceurl: getSourceApiUrl(backend.url),
+            ...(namespace ? { namespace } : {}),
+            repository,
+        };
     }
 
     async tagExists(backend: OCIBackend, repository: string, tag: string): Promise<boolean> {
-        try {
-            const manifest = await this.getManifest(backend, repository, tag);
-            return manifest !== null;
-        } catch (error) {
-            return false;
-        }
+        const manifest = await this.getManifest(backend, repository, tag);
+        return manifest !== null;
     }
 
     getBackends(): OCIBackend[] {
-        return this.backends.filter((b) => b.enabled);
+        return this.backends.filter((backend) => backend.enabled);
     }
 
     getBackend(id: string): OCIBackend | undefined {
-        return this.backends.find((b) => b.id === id && b.enabled);
+        return this.backends.find((backend) => backend.id === canonicalizeRegistryId(id) && backend.enabled);
     }
 
-    async getImages(backend: OCIBackend, options: { limit?: number; offset?: number; query?: string; } = {}): Promise<{ images: string[]; total: number }> {
-        const allRepos = await this.listRepositories(backend);
-        let filtered = allRepos;
-        if (options.query) {
-            const query = options.query.toLowerCase();
-            filtered = allRepos.filter((repo) => repo.toLowerCase().includes(query));
-        }
-        const total = filtered.length;
+    async getImages(
+        backend: OCIBackend,
+        options: { limit?: number; offset?: number; query?: string } = {}
+    ): Promise<{ images: string[]; total: number }> {
+        const allRepositories = await this.listRepositories(backend);
+        const filteredRepositories = options.query
+            ? allRepositories.filter((repository) => repository.toLowerCase().includes(options.query!.toLowerCase()))
+            : allRepositories;
+
         const offset = options.offset || 0;
         const limit = options.limit || 50;
-        const images = filtered.slice(offset, offset + limit);
-        return { images, total };
+        return {
+            images: filteredRepositories.slice(offset, offset + limit),
+            total: filteredRepositories.length,
+        };
     }
 
     async getTotalImageCount(backend: OCIBackend): Promise<number> {
-        const repos = await this.listRepositories(backend);
-        return repos.length;
+        const repositories = await this.listRepositories(backend);
+        return repositories.length;
     }
 }

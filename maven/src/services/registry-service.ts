@@ -4,61 +4,37 @@
  */
 
 import { Request, Response } from 'express';
-import * as modelData from '../../model.json';
+import modelData from '../../model.json';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
-import {
-    getBaseUrl,
-    GROUP_CONFIG,
-    RESOURCE_CONFIG,
-    XREGISTRY_CONFIG
-} from '../config/constants';
+import { getBaseUrl, GROUP_CONFIG, MAVEN_REGISTRY, RESOURCE_CONFIG, XREGISTRY_CONFIG } from '../config/constants';
 import { throwEntityNotFound } from '../middleware/xregistry-error-handler';
 import { SearchService } from './search-service';
 
 export interface RegistryServiceOptions {
     baseUrl?: string;
     entityState?: EntityStateManager;
-    searchService?: SearchService;
+    searchService: SearchService;
 }
 
 export class RegistryService {
     private readonly entityState: EntityStateManager;
-    private readonly searchService: SearchService | undefined;
-    private model: any; // Loaded from model.json
+    private readonly searchService: SearchService;
+    private readonly model: any;
 
-    constructor(options: RegistryServiceOptions = {}) {
+    constructor(options: RegistryServiceOptions) {
         this.entityState = options.entityState || new EntityStateManager();
         this.searchService = options.searchService;
-        this.loadModel();
-    }
-
-    private async getPackagesCount(): Promise<number> {
-        if (!this.searchService) return 0;
-        try {
-            return await this.searchService.getTotalCount();
-        } catch {
-            // Don't fail registry endpoints just because Solr is down.
-            return 0;
-        }
-    }
-
-    /**
-     * Load model.json
-     */
-    private loadModel(): void {
         this.model = modelData;
     }
 
-    /**
-     * Get registry root
-     */
     async getRegistry(req: Request, res: Response): Promise<void> {
         const baseUrl = getBaseUrl(req);
         const registryPath = '/';
+        const namespaceCount = (await this.searchService.listNamespaces({ limit: 1, offset: 0 })).totalCount;
 
-        const registry = {
+        const registry: any = {
             specversion: XREGISTRY_CONFIG.SPEC_VERSION,
-            registryid: 'maven-wrapper',
+            registryid: XREGISTRY_CONFIG.REGISTRY_ID,
             xid: '/',
             self: `${baseUrl}/`,
             xregistryurl: `${baseUrl}/`,
@@ -66,173 +42,72 @@ export class RegistryService {
             capabilitiesurl: `${baseUrl}/capabilities`,
             epoch: this.entityState.getEpoch(registryPath),
             name: 'Maven Central xRegistry',
-            description: 'xRegistry API wrapper for Maven Central repository',
-            docs: 'https://maven.apache.org/',
+            description: 'xRegistry projection of Maven Central package namespaces and artifacts',
+            documentation: 'https://central.sonatype.com/',
             createdat: this.entityState.getCreatedAt(registryPath),
             modifiedat: this.entityState.getModifiedAt(registryPath),
-            [`${GROUP_CONFIG.TYPE}url`]: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
-            [`${GROUP_CONFIG.TYPE}count`]: 1,
-            javaregistriesurl: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
-            javaregistries: 1
+            javanamespacesurl: `${baseUrl}/${GROUP_CONFIG.TYPE}`,
+            javanamespacescount: namespaceCount
         };
-
-        // Apply xRegistry flags (inline expansion)
-        const result: any = registry;
 
         if (req.xregistryFlags?.inline?.includes(GROUP_CONFIG.TYPE)) {
-            result[GROUP_CONFIG.TYPE] = await this.getGroupsInline(req);
+            registry[GROUP_CONFIG.TYPE] = await this.getGroupsInline(req);
         }
 
-        // Support inline=true (includes meta)
         const inlineParam = req.query['inline'];
-        if (inlineParam === 'true' || inlineParam === '*' ||
-            (req.xregistryFlags?.inline?.includes('*'))) {
-            result.meta = {
-                type: 'registry',
-                backend: 'maven-central',
-                version: '1.0.0'
-            };
+        if (inlineParam === 'model' || req.xregistryFlags?.inline?.includes('model')) {
+            registry.model = this.model;
         }
 
-        // Support inline=model (includes model definition)
-        if (inlineParam === 'model' ||
-            (req.xregistryFlags?.inline?.includes('model'))) {
-            result.model = await this.getModelInline();
-        }
-
-        res.json(result);
+        res.json(registry);
     }
 
-    /**
-     * Get all groups
-     */
     async getGroups(req: Request, res: Response): Promise<void> {
         const baseUrl = getBaseUrl(req);
-        const pagesize = parseInt(req.query['pagesize'] as string) || 100;
-        const page = parseInt(req.query['page'] as string) || 1;
-
-        const groupPath = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
-        const packagesCount = await this.getPackagesCount();
-
-        // Per xRegistry core spec §"Registry Collections", GET /{groupType}
-        // returns the collection map keyed directly by <singular>id. The
-        // earlier shape wrapped the map under an outer {javaregistries: ...}
-        // key, which the viewer interprets as a group whose id IS the
-        // plural type name -- causing it to navigate to
-        // /javaregistries/javaregistries/packages instead of
-        // /javaregistries/maven-central/packages.
-        const groups: Record<string, any> = {
-            [GROUP_CONFIG.ID]: {
-                xid: groupPath,
-                self: `${baseUrl}${groupPath}`,
-                javaregistryid: GROUP_CONFIG.ID,
-                name: 'Maven Central',
-                description: 'Maven Central Repository',
-                docs: 'https://maven.apache.org/',
-                epoch: this.entityState.getEpoch(groupPath),
-                createdat: this.entityState.getCreatedAt(groupPath),
-                modifiedat: this.entityState.getModifiedAt(groupPath),
-                [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
-            }
-        };
-
-        // Apply pagination if pagesize is set
-        const allGroupKeys = Object.keys(groups);
-        if (pagesize) {
-            const startIndex = (page - 1) * pagesize;
-            const endIndex = startIndex + pagesize;
-            const paginatedKeys = allGroupKeys.slice(startIndex, endIndex);
-
-            const paginatedGroups: Record<string, any> = {};
-            paginatedKeys.forEach(key => {
-                paginatedGroups[key] = groups[key];
-            });
-
-            // Add Link header for pagination
-            const linkHeaders: string[] = [];
-            const totalCount = allGroupKeys.length;
-            const totalPages = Math.ceil(totalCount / pagesize);
-
-            // First link
-            if (page > 1) {
-                linkHeaders.push(`<${baseUrl}/${GROUP_CONFIG.TYPE}?page=1&pagesize=${pagesize}>; rel="first"`);
-            }
-
-            // Previous link
-            if (page > 1) {
-                const prevPage = page - 1;
-                linkHeaders.push(`<${baseUrl}/${GROUP_CONFIG.TYPE}?page=${prevPage}&pagesize=${pagesize}>; rel="prev"`);
-            }
-
-            // Always add self link when pagination is requested
-            linkHeaders.push(`<${baseUrl}/${GROUP_CONFIG.TYPE}?page=${page}&pagesize=${pagesize}>; rel="self"`);
-
-            // Next link
-            if (endIndex < totalCount) {
-                const nextPage = page + 1;
-                linkHeaders.push(`<${baseUrl}/${GROUP_CONFIG.TYPE}?page=${nextPage}&pagesize=${pagesize}>; rel="next"`);
-            }
-
-            // Last link
-            if (page < totalPages) {
-                linkHeaders.push(`<${baseUrl}/${GROUP_CONFIG.TYPE}?page=${totalPages}&pagesize=${pagesize}>; rel="last"`);
-            }
-
-            // Add count and per-page metadata
-            linkHeaders.push(`count="${totalCount}"`);
-            linkHeaders.push(`per-page="${pagesize}"`);
-
-            res.setHeader('Link', linkHeaders.join(', '));
-
-            res.json(paginatedGroups);
-        } else {
-            res.json(groups);
+        const limit = parseInt(req.query['limit'] as string) || 50;
+        const offset = parseInt(req.query['offset'] as string) || 0;
+        const query = this.parseGroupQuery(req.query['q'] as string | undefined, req.query['filter'] as string | undefined);
+        const searchOptions: { query?: string; limit: number; offset: number } = { limit, offset };
+        if (query) {
+            searchOptions.query = query;
         }
+        const result = await this.searchService.listNamespaces(searchOptions);
+        const groups = await this.buildGroupsMap(result.results, baseUrl);
+
+        res.setHeader('X-Total-Count', String(result.totalCount));
+        this.setCollectionLinks(res, `${baseUrl}/${GROUP_CONFIG.TYPE}`, limit, offset, result.totalCount, req.query as Record<string, string | undefined>);
+        res.json(groups);
     }
 
-    /**
-     * Get specific group
-     */
     async getGroup(req: Request, res: Response): Promise<void> {
-        const { groupId } = req.params;
+        const namespaceId = req.params['groupId'];
         const baseUrl = getBaseUrl(req);
-
-        if (!groupId || (groupId !== GROUP_CONFIG.ID && groupId !== 'central.maven.org')) {
-            throwEntityNotFound(
-                `/${GROUP_CONFIG.TYPE}/${groupId || 'unknown'}`,
-                GROUP_CONFIG.TYPE_SINGULAR,
-                groupId || 'unknown'
-            );
+        if (!namespaceId) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/unknown`, GROUP_CONFIG.TYPE_SINGULAR, 'unknown');
         }
 
-        const groupPath = `/${GROUP_CONFIG.TYPE}/${groupId}`;
-        const packagesCount = await this.getPackagesCount();
+        const namespace = await this.searchService.getNamespaceById(namespaceId);
+        if (!namespace) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}`, GROUP_CONFIG.TYPE_SINGULAR, namespaceId);
+        }
 
-        const group = {
+        const groupPath = `/${GROUP_CONFIG.TYPE}/${namespace.namespaceId}`;
+
+        res.json({
             xid: groupPath,
             self: `${baseUrl}${groupPath}`,
-            javaregistryid: groupId,
-            name: 'Maven Central',
-            description: 'Maven Central Repository',
-            docs: 'https://maven.apache.org/',
+            javanamespaceid: namespace.namespaceId,
             epoch: this.entityState.getEpoch(groupPath),
             createdat: this.entityState.getCreatedAt(groupPath),
             modifiedat: this.entityState.getModifiedAt(groupPath),
+            group_id: namespace.groupId,
+            sourceurl: MAVEN_REGISTRY.REPO_URL,
             [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-            [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
-        };
-
-        res.json(group);
+            [`${RESOURCE_CONFIG.TYPE}count`]: namespace.packageCount
+        });
     }
 
-    /**
-     * Get capabilities
-     */
     async getCapabilities(_req: Request, res: Response): Promise<void> {
-        // Per core spec §"Design: JSON Serialization". `mutable` is an array
-        // listing what is mutable (empty for read-only proxies); flag names
-        // belong inside `flags`, not as top-level booleans.
         res.json({
             apis: ['/capabilities', '/model', '/export'],
             flags: ['doc', 'epoch', 'filter', 'inline', 'sort', 'specversion'],
@@ -243,56 +118,86 @@ export class RegistryService {
         });
     }
 
-    /**
-     * Get model
-     */
     async getModel(_req: Request, res: Response): Promise<void> {
-        // Return the full model.json content
         res.json(this.model);
     }
 
-    private getModelInline(): any {
-        // Return model.model for inline expansion
-        return this.model.model || this.model;
-    }
-
-    /**
-     * Get groups inline (for inline expansion)
-     */
-    private async getGroupsInline(req: Request): Promise<any> {
+    private async getGroupsInline(req: Request): Promise<Record<string, unknown>> {
         const baseUrl = getBaseUrl(req);
-        const groupPath = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
-        const packagesCount = await this.getPackagesCount();
-
-        return {
-            [GROUP_CONFIG.ID]: {
-                xid: groupPath,
-                self: `${baseUrl}${groupPath}`,
-                javaregistryid: GROUP_CONFIG.ID,
-                name: 'Maven Central',
-                description: 'Maven Central Repository',
-                docs: 'https://maven.apache.org/',
-                epoch: this.entityState.getEpoch(groupPath),
-                createdat: this.entityState.getCreatedAt(groupPath),
-                modifiedat: this.entityState.getModifiedAt(groupPath),
-                [`${RESOURCE_CONFIG.TYPE}url`]: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
-                [`${RESOURCE_CONFIG.TYPE}count`]: packagesCount
-            }
-        };
+        const result = await this.searchService.listNamespaces({ limit: 50, offset: 0 });
+        return this.buildGroupsMap(result.results, baseUrl);
     }
 
-    /**
-     * Create error response (legacy - prefer throwing errors)
-     */
-    createErrorResponse(type: string, message: string, status: number, path: string, details?: string): any {
-        return {
-            error: {
-                type,
-                message,
-                status,
-                path,
-                details
+    private async buildGroupsMap(namespaces: Array<{ groupId: string; namespaceId: string; packageCount: number }>, baseUrl: string): Promise<Record<string, unknown>> {
+        const entries = namespaces.map((namespace) => {
+            const groupPath = `/${GROUP_CONFIG.TYPE}/${namespace.namespaceId}`;
+            return [
+                namespace.namespaceId,
+                {
+                    xid: groupPath,
+                    self: `${baseUrl}${groupPath}`,
+                    javanamespaceid: namespace.namespaceId,
+                    epoch: this.entityState.getEpoch(groupPath),
+                    createdat: this.entityState.getCreatedAt(groupPath),
+                    modifiedat: this.entityState.getModifiedAt(groupPath),
+                    group_id: namespace.groupId,
+                    sourceurl: MAVEN_REGISTRY.REPO_URL,
+                    packagesurl: `${baseUrl}${groupPath}/${RESOURCE_CONFIG.TYPE}`,
+                    packagescount: namespace.packageCount
+                }
+            ] as const;
+        });
+
+        const groups: Record<string, unknown> = {};
+        for (const [namespaceId, group] of entries) {
+            groups[namespaceId] = group;
+        }
+        return groups;
+    }
+
+    private parseGroupQuery(query: string | undefined, filter: string | undefined): string | undefined {
+        if (query) {
+            return query;
+        }
+        if (!filter) {
+            return undefined;
+        }
+        const match = filter.match(/(?:javanamespaceid|group_id)\s*=\s*'?([^']+)'?/i);
+        return match?.[1]?.trim();
+    }
+
+    private setCollectionLinks(res: Response, basePath: string, limit: number, offset: number, totalCount: number, query: Record<string, string | undefined>): void {
+        if (totalCount <= 0) {
+            return;
+        }
+
+        const headers: string[] = [];
+        const queryParams = new URLSearchParams();
+        for (const [key, value] of Object.entries(query)) {
+            if (value !== undefined) {
+                queryParams.set(key, value);
             }
-        };
+        }
+
+        if (offset > 0) {
+            queryParams.set('offset', '0');
+            queryParams.set('limit', String(limit));
+            headers.push(`<${basePath}?${queryParams.toString()}>; rel="first"`);
+            queryParams.set('offset', String(Math.max(0, offset - limit)));
+            headers.push(`<${basePath}?${queryParams.toString()}>; rel="prev"`);
+        }
+
+        if (offset + limit < totalCount) {
+            queryParams.set('offset', String(offset + limit));
+            queryParams.set('limit', String(limit));
+            headers.push(`<${basePath}?${queryParams.toString()}>; rel="next"`);
+            const lastOffset = Math.floor((totalCount - 1) / limit) * limit;
+            queryParams.set('offset', String(lastOffset));
+            headers.push(`<${basePath}?${queryParams.toString()}>; rel="last"`);
+        }
+
+        if (headers.length > 0) {
+            res.setHeader('Link', headers.join(', '));
+        }
     }
 }

@@ -1,39 +1,15 @@
-import { isUpstreamError } from '@xregistry/registry-core';
 import { Request, Response } from 'express';
 import modelData from '../../model.json';
-import { CACHE_CONFIG, getBaseUrl, GROUP_CONFIG, PAGINATION, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
+import { getBaseUrl, GROUP_CONFIG, REGISTRY_CONFIG, RESOURCE_CONFIG } from '../config/constants';
 import { throwEntityNotFound, throwInvalidData, throwServiceUnavailable, isProblemDetailsError } from '../middleware/xregistry-error-handler';
 import { includesInline, parseRequestFlags, XRegistryRequestFlags } from '../middleware/xregistry-flags';
-import { RubyGemDependencies, RubyGemMetadata, RubyGemVersion, XRegistryPackage, XRegistryVersion } from '../types/xregistry';
-import { buildGemUri, buildVersionId, encodeGemName, parseVersionId } from '../utils/package-utils';
+import { RubyGemAttestation, RubyGemDependencies, RubyGemMetadata, RubyGemOwner, RubyGemVersion, XRegistryPackage, XRegistryPackageSummary, XRegistryVersion } from '../types/xregistry';
+import { buildFullName, buildGemUri, buildVersionId, encodeGemName, parseVersionId } from '../utils/package-utils';
 import { RubyGemsService } from './rubygems-service';
 
-const DEFAULT_PACKAGE_NAMES = [
-    'bundler',
-    'rake',
-    'rack',
-    'rails',
-    'sinatra',
-    'nokogiri',
-    'rspec',
-    'rubocop',
-    'devise',
-    'sidekiq',
-    'pg',
-    'puma',
-    'ffi',
-    'thor',
-    'pry',
-    'faraday',
-    'sass',
-    'tzinfo',
-    'concurrent-ruby',
-    'bootsnap',
-] as const;
-
 interface PackageCollection {
-    items: Record<string, XRegistryPackage>;
-    total?: number;
+    items: Record<string, XRegistryPackageSummary>;
+    total: number;
     hasMore: boolean;
 }
 
@@ -101,16 +77,7 @@ export class RegistryService {
 
         try {
             const collection = await this.loadPackages(baseUrl, flags);
-            const maxOffset = flags.search || flags.filter ? PAGINATION.MAX_SEARCH_OFFSET : undefined;
-            this.applyPaginationHeaders(
-                req,
-                res,
-                collection.total,
-                collection.hasMore,
-                flags.offset,
-                flags.limit,
-                maxOffset,
-            );
+            this.applyPaginationHeaders(req, res, collection.total, collection.hasMore, flags.offset, flags.limit);
             res.json(collection.items);
         } catch (error) {
             if (isProblemDetailsError(error)) {
@@ -152,9 +119,11 @@ export class RegistryService {
         }
 
         try {
-            const [gem, versions] = await Promise.all([
+            const [gem, versions, owners, reverseDependencies] = await Promise.all([
                 this.rubygemsService.getGem(name),
                 this.rubygemsService.getVersions(name),
+                this.rubygemsService.getOwners(name),
+                this.rubygemsService.getReverseDependencies(name),
             ]);
             if (!gem || gem.name !== name) {
                 throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
@@ -175,13 +144,10 @@ export class RegistryService {
                 defaultversionid: snapshot.defaultVersion.versionid,
                 defaultversionurl: `${resourceSelf}/versions/${encodeURIComponent(snapshot.defaultVersion.versionid)}`,
                 defaultversionsticky: false,
-                ...(gem?.homepage_uri ? { homepage_uri: gem.homepage_uri } : {}),
-                ...(gem?.source_code_uri ? { source_code_uri: gem.source_code_uri } : {}),
-                ...(gem?.changelog_uri ? { changelog_uri: gem.changelog_uri } : {}),
-                ...(gem?.documentation_uri ? { documentation_uri: gem.documentation_uri } : {}),
-                ...(gem?.bug_tracker_uri ? { bug_tracker_uri: gem.bug_tracker_uri } : {}),
-                ...(gem?.project_uri ? { project_uri: gem.project_uri } : {}),
-                ...(gem ? { downloads: gem.downloads ?? 0 } : {}),
+                ...(owners.length > 0 ? { owners: owners.map(owner => this.toOwnerEntity(owner)) } : {}),
+                ...(this.isNonEmptyString(gem.project_uri) ? { project_uri: gem.project_uri } : {}),
+                ...(typeof gem.downloads === 'number' ? { downloads: gem.downloads } : {}),
+                ...(reverseDependencies.length > 0 ? { reverse_dependencies: reverseDependencies } : {}),
             });
         } catch (error) {
             if (isProblemDetailsError(error)) throw error;
@@ -227,7 +193,7 @@ export class RegistryService {
             if (!gem || gem.name !== name) {
                 throwEntityNotFound(req.originalUrl, RESOURCE_CONFIG.TYPE_SINGULAR, name);
             }
-            const sourceVersions = versions.length > 0 ? versions : this.syntheticVersions(gem!);
+            const sourceVersions = versions.length > 0 ? versions : this.syntheticVersions(gem);
             parseVersionId(versionId, sourceVersions.map((version) => ({ number: version.number, platform: version.platform })));
             const snapshot = this.buildVersionSnapshot(name, versions, getBaseUrl(req), gem);
             const target = snapshot.versions[versionId];
@@ -243,6 +209,10 @@ export class RegistryService {
         return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
     }
 
+    private packagesPath(): string {
+        return `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}`;
+    }
+
     private buildGroupEntity(baseUrl: string): Record<string, unknown> {
         const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}`;
         return {
@@ -253,141 +223,89 @@ export class RegistryService {
             createdat: this.serviceCreatedAt,
             modifiedat: this.serviceCreatedAt,
             name: GROUP_CONFIG.ID,
-            description: 'Public RubyGems package registry.',
+            description: 'RubyGems package projection.',
+            sourceurl: GROUP_CONFIG.SOURCE_URL,
             [`${RESOURCE_CONFIG.TYPE}url`]: `${self}/${RESOURCE_CONFIG.TYPE}`,
         };
     }
 
+    /**
+     * Resolves the requested page of the package collection directly from the
+     * full RubyGems names catalogue (see RubyGemsService#getAllNames):
+     * `filter=name=<exact>`, `filter=name=<prefix>*`, and free-text `search`
+     * are all evaluated against the local, already-sorted name list rather
+     * than crawling the upstream search API, which is what let a hard
+     * per-search offset cap leak into ordinary catalogue browsing before.
+     * Because matching is a bounded in-memory scan over the snapshot, the
+     * exact total and limit/offset paging fall out directly with no upstream
+     * fan-out and no offset ceiling.
+     */
     private async loadPackages(baseUrl: string, flags: XRegistryRequestFlags): Promise<PackageCollection> {
+        const names = await this.rubygemsService.getAllNames();
+        const matches = this.matchNames(names, flags);
+        const total = matches.length;
+        const page = matches.slice(flags.offset, flags.offset + flags.limit);
+
+        const items: Record<string, XRegistryPackageSummary> = {};
+        for (const name of page) {
+            items[name] = this.buildPackageSkeleton(name, baseUrl);
+        }
+        return { items, total, hasMore: flags.offset + flags.limit < total };
+    }
+
+    private matchNames(names: readonly string[], flags: XRegistryRequestFlags): readonly string[] {
         if (flags.filter) {
             const match = flags.filter.match(/^name=(.+?)(\*)?$/);
             if (!match?.[1]) {
-                throwInvalidData('/rubyregistries/rubygems.org/packages', 'filter', 'Only filter=name=<gem> or filter=name=<prefix>* is supported.');
+                throwInvalidData(this.packagesPath(), 'filter', 'Only filter=name=<gem> or filter=name=<prefix>* is supported.');
             }
             if (match[2]) {
-                const prefix = match[1];
-                return this.loadSearchPackages(
-                    prefix,
-                    baseUrl,
-                    flags,
-                    (gem) => gem.name.toLowerCase().startsWith(prefix.toLowerCase()),
-                );
+                const prefix = match[1].toLowerCase();
+                return names.filter(name => name.toLowerCase().startsWith(prefix));
             }
-            const gem = await this.rubygemsService.getGem(match[1]);
-            if (!gem) {
-                return { items: {}, total: 0, hasMore: false };
-            }
-            const entity = await this.toPackageEntity(gem, baseUrl, flags);
-            return { items: { [gem.name]: entity }, total: 1, hasMore: false };
+            const exact = match[1];
+            return names.includes(exact) ? [exact] : [];
         }
 
         if (flags.search) {
-            return this.loadSearchPackages(flags.search, baseUrl, flags);
+            const needle = flags.search.toLowerCase();
+            return names.filter(name => name.toLowerCase().includes(needle));
         }
 
-        const selectedNames = DEFAULT_PACKAGE_NAMES.slice(flags.offset, flags.offset + flags.limit);
-        const packages = await Promise.all(selectedNames.map(async (name) => this.rubygemsService.getGem(name)));
-        const metadata = packages.filter((item): item is RubyGemMetadata => item !== null);
-        const items = await this.packagesFromMetadata(metadata, baseUrl, flags);
-        return { items, total: DEFAULT_PACKAGE_NAMES.length, hasMore: flags.offset + flags.limit < DEFAULT_PACKAGE_NAMES.length };
+        return names;
     }
 
-    private async loadSearchPackages(
-        query: string,
-        baseUrl: string,
-        flags: XRegistryRequestFlags,
-        predicate: (gem: RubyGemMetadata) => boolean = () => true,
-    ): Promise<PackageCollection> {
-        if (flags.offset > PAGINATION.MAX_SEARCH_OFFSET) {
-            throwInvalidData(
-                '/rubyregistries/rubygems.org/packages',
-                'offset',
-                `Search offsets greater than ${PAGINATION.MAX_SEARCH_OFFSET} are not supported.`,
-            );
-        }
-
-        const targetCount = flags.offset + flags.limit + 1;
-        const deduped = new Map<string, RubyGemMetadata>();
-        const seenUpstreamNames = new Set<string>();
-        let page = 1;
-        let exhausted = false;
-
-        while (deduped.size < targetCount) {
-            if (page > CACHE_CONFIG.MAX_SEARCH_PAGES) {
-                throwInvalidData(
-                    '/rubyregistries/rubygems.org/packages',
-                    'offset',
-                    `Search requires more than the safe limit of ${CACHE_CONFIG.MAX_SEARCH_PAGES} upstream pages.`,
-                );
-            }
-
-            const pageResults = await this.rubygemsService.searchGems(query, page);
-            const seenBefore = seenUpstreamNames.size;
-            for (const result of pageResults) {
-                seenUpstreamNames.add(result.name);
-                if (predicate(result) && !deduped.has(result.name)) {
-                    deduped.set(result.name, result);
-                }
-            }
-            if (seenUpstreamNames.size === seenBefore) {
-                exhausted = true;
-                break;
-            }
-            if (pageResults.length < CACHE_CONFIG.SEARCH_PER_PAGE) {
-                exhausted = true;
-                break;
-            }
-            page += 1;
-        }
-
-        const results = Array.from(deduped.values());
-        const paged = results.slice(flags.offset, flags.offset + flags.limit);
+    /**
+     * Builds a minimal, valid xRegistry Resource identity for a catalogue
+     * entry: only `name` is required by the model, so a package collection
+     * entry does not need version/gemspec detail to be a well-formed
+     * collection member. `createdat`/`modifiedat` reflect when this skeleton
+     * was materialized (upstream publish/modification times are only known
+     * once the Resource, `/meta`, or `/versions` route fetches the real gem).
+     */
+    private buildPackageSkeleton(name: string, baseUrl: string): XRegistryPackageSummary {
+        const encodedName = encodeGemName(name);
+        const xid = `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}`;
+        const self = `${baseUrl}${xid}`;
         return {
-            items: await this.packagesFromMetadata(paged, baseUrl, flags),
-            ...(exhausted ? { total: results.length } : {}),
-            hasMore: results.length > flags.offset + flags.limit || !exhausted,
+            packageid: name,
+            name,
+            xid,
+            self,
+            epoch: 1,
+            createdat: this.serviceCreatedAt,
+            modifiedat: this.serviceCreatedAt,
+            metaurl: `${self}/meta`,
+            versionsurl: `${self}/versions`,
         };
     }
 
-    private async packagesFromMetadata(metadata: RubyGemMetadata[], baseUrl: string, flags: XRegistryRequestFlags): Promise<Record<string, XRegistryPackage>> {
-        const settled = await Promise.allSettled(metadata.map(gem => this.toPackageEntity(gem, baseUrl, flags)));
-        const result: Record<string, XRegistryPackage> = {};
-        for (let index = 0; index < settled.length; index += 1) {
-            const item = settled[index]!;
-            if (item.status === 'fulfilled') {
-                result[item.value.packageid] = item.value;
-                continue;
-            }
-            const gem = metadata[index]!;
-            if (isUpstreamError(item.reason) && item.reason.code === 'rate_limited') {
-                // Preserve the collection page using the search/gem summary as
-                // a one-Version snapshot; one 429 never fans out more work or
-                // collapses unrelated hydrated Resources.
-                const fallback = await this.toPackageEntity(gem, baseUrl, flags, []);
-                result[fallback.packageid] = fallback;
-                continue;
-            }
-            throw item.reason;
-        }
-        return result;
-    }
-
-    private async toPackageEntity(
-        gem: RubyGemMetadata,
-        baseUrl: string,
-        flags: XRegistryRequestFlags,
-        versionsOverride?: RubyGemVersion[],
-    ): Promise<XRegistryPackage> {
+    private async toPackageEntity(gem: RubyGemMetadata, baseUrl: string, flags: XRegistryRequestFlags, versionsOverride?: RubyGemVersion[]): Promise<XRegistryPackage> {
         const encodedName = encodeGemName(gem.name);
         const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}`;
-        const snapshot = this.buildVersionSnapshot(
-            gem.name,
-            versionsOverride ?? await this.rubygemsService.getVersions(gem.name),
-            baseUrl,
-            gem,
-        );
+        const snapshot = this.buildVersionSnapshot(gem.name, versionsOverride ?? await this.rubygemsService.getVersions(gem.name), baseUrl, gem);
         const current = snapshot.defaultVersion;
-        const entity = {
+        return {
             ...current,
             packageid: gem.name,
             xid: `/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}`,
@@ -395,43 +313,43 @@ export class RegistryService {
             metaurl: `${self}/meta`,
             versionsurl: `${self}/versions`,
             versionscount: snapshot.ordered.length,
+            ...(this.isNonEmptyString(gem.version) ? { version: gem.version } : {}),
+            ...(typeof gem.version_downloads === 'number' ? { version_downloads: gem.version_downloads } : {}),
             ...(includesInline(flags, 'versions') ? { versions: snapshot.versions } : {}),
-        } as XRegistryPackage;
-        return entity;
+        };
     }
 
     private syntheticVersions(gem: RubyGemMetadata): RubyGemVersion[] {
         return [{
-            authors: gem.authors ?? '',
             created_at: this.resolveTimestamp(gem.version_created_at),
             downloads_count: gem.version_downloads ?? 0,
             number: gem.version,
             platform: gem.platform || 'ruby',
-            prerelease: false,
-            licenses: gem.licenses ?? [],
-            sha: gem.sha ?? '',
+            prerelease: gem.prerelease ?? false,
+            ...(this.isNonEmptyString(gem.authors) ? { authors: gem.authors } : {}),
+            ...(this.isNonEmptyString(gem.built_at) ? { built_at: gem.built_at } : {}),
+            ...(this.isNonEmptyString(gem.description) ? { description: gem.description } : {}),
+            ...(gem.metadata ? { metadata: gem.metadata } : {}),
+            ...(Array.isArray(gem.licenses) ? { licenses: gem.licenses } : {}),
+            ...(Array.isArray(gem.requirements) ? { requirements: gem.requirements } : {}),
+            ...(this.isNonEmptyString(gem.ruby_version) ? { ruby_version: gem.ruby_version } : {}),
+            ...(this.isNonEmptyString(gem.rubygems_version) ? { rubygems_version: gem.rubygems_version } : {}),
+            ...(this.isNonEmptyString(gem.sha) ? { sha: gem.sha } : {}),
+            ...(this.isNonEmptyString(gem.spec_sha) ? { spec_sha: gem.spec_sha } : {}),
+            ...(this.isNonEmptyString(gem.full_name) ? { full_name: gem.full_name } : {}),
+            ...(typeof gem.yanked === 'boolean' ? { yanked: gem.yanked } : {}),
+            ...(gem.dependencies ? { dependencies: gem.dependencies } : {}),
+            ...(Array.isArray(gem.attestations) ? { attestations: gem.attestations } : {}),
+            ...(this.isNonEmptyString(gem.info) ? { summary: gem.info } : {}),
         }];
     }
 
-    private buildVersionSnapshot(
-        name: string,
-        versions: RubyGemVersion[],
-        baseUrl: string,
-        latestGem: RubyGemMetadata | null,
-    ): CanonicalVersionSnapshot {
-        const source = versions.length > 0
-            ? versions
-            : latestGem
-                ? this.syntheticVersions(latestGem)
-                : [];
+    private buildVersionSnapshot(name: string, versions: RubyGemVersion[], baseUrl: string, latestGem: RubyGemMetadata | null): CanonicalVersionSnapshot {
+        const source = versions.length > 0 ? versions : latestGem ? this.syntheticVersions(latestGem) : [];
         const ordered = source
             .map(version => this.toVersionEntity(name, version, baseUrl, latestGem))
-            .sort((a, b) =>
-                a.createdat.localeCompare(b.createdat) ||
-                a.versionid.localeCompare(b.versionid, undefined, { sensitivity: 'base' }) ||
-                a.versionid.localeCompare(b.versionid),
-            );
-        const defaultVersion = ordered.at(-1);
+            .sort((a, b) => a.createdat.localeCompare(b.createdat) || a.versionid.localeCompare(b.versionid, undefined, { sensitivity: 'base' }) || a.versionid.localeCompare(b.versionid));
+        const defaultVersion = [...ordered].reverse().find(version => version['yanked'] !== true) ?? ordered.at(-1);
         if (!defaultVersion) {
             throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${name}`, 'package', name);
         }
@@ -441,10 +359,7 @@ export class RegistryService {
         });
         return {
             versions: Object.fromEntries([...ordered]
-                .sort((a, b) =>
-                    a.versionid.localeCompare(b.versionid, undefined, { sensitivity: 'base' }) ||
-                    a.versionid.localeCompare(b.versionid),
-                )
+                .sort((a, b) => a.versionid.localeCompare(b.versionid, undefined, { sensitivity: 'base' }) || a.versionid.localeCompare(b.versionid))
                 .map(entity => [entity.versionid, entity])),
             ordered,
             defaultVersion,
@@ -454,20 +369,23 @@ export class RegistryService {
     }
 
     private toVersionEntity(name: string, version: RubyGemVersion, baseUrl: string, latestGem: RubyGemMetadata | null): XRegistryVersion {
-        const versionId = buildVersionId(version.number, version.platform);
+        const platform = version.platform || 'ruby';
+        const versionId = buildVersionId(version.number, platform);
         const encodedName = encodeGemName(name);
         const encodedVersionId = encodeURIComponent(versionId);
         const self = `${baseUrl}/${GROUP_CONFIG.TYPE}/${GROUP_CONFIG.ID}/${RESOURCE_CONFIG.TYPE}/${encodedName}/versions/${encodedVersionId}`;
         const createdAt = this.resolveTimestamp(version.created_at);
-        const latestVersionId = latestGem ? buildVersionId(latestGem.version, latestGem.platform) : undefined;
-        const dependencies = latestGem && latestVersionId === versionId
-            ? this.normalizeDependencies(latestGem.dependencies)
-            : this.normalizeDependencies(undefined);
-        const gemUri = latestGem && latestVersionId === versionId && latestGem.gem_uri
-            ? latestGem.gem_uri
-            : buildGemUri(name, version.number, version.platform);
-        const yanked = latestGem && latestVersionId === versionId ? Boolean(latestGem.yanked) : false;
-
+        const latestVersionId = latestGem ? buildVersionId(latestGem.version, latestGem.platform || 'ruby') : undefined;
+        const isLatestGemTuple = latestVersionId === versionId;
+        const metadata = this.normalizeMetadata(version.metadata ?? (isLatestGemTuple ? latestGem?.metadata : undefined));
+        const dependencies = this.normalizeDependencies(version.dependencies ?? (isLatestGemTuple ? latestGem?.dependencies : undefined));
+        const licenses = this.normalizeStringArray(version.licenses);
+        const requirements = this.normalizeStringArray(version.requirements);
+        const declaredUris = this.resolveDeclaredUriAttributes(metadata, isLatestGemTuple ? latestGem : null);
+        const yanked = typeof version.yanked === 'boolean' ? version.yanked : isLatestGemTuple && typeof latestGem?.yanked === 'boolean' ? latestGem.yanked : undefined;
+        const fullName = this.resolveString(version.full_name) ?? (isLatestGemTuple ? this.resolveString(latestGem?.full_name) : undefined) ?? buildFullName(name, version.number, platform);
+        const gemUri = isLatestGemTuple && this.isNonEmptyString(latestGem?.gem_uri) ? latestGem.gem_uri : buildGemUri(name, version.number, platform);
+        const attestations = this.normalizeAttestations(version.attestations ?? (isLatestGemTuple ? latestGem?.attestations : undefined));
         return {
             versionid: versionId,
             packageid: name,
@@ -479,28 +397,92 @@ export class RegistryService {
             createdat: createdAt,
             modifiedat: createdAt,
             name,
-            info: version.description ?? version.summary ?? (latestGem && latestVersionId === versionId ? latestGem.info : ''),
-            version: version.number,
-            authors: version.authors ?? '',
-            licenses: version.licenses ?? [],
             number: version.number,
-            platform: version.platform || 'ruby',
+            platform,
             prerelease: Boolean(version.prerelease),
             created_at: createdAt,
             downloads_count: version.downloads_count ?? 0,
-            version_downloads: version.downloads_count ?? 0,
             gem_uri: gemUri,
-            sha: version.sha ?? '',
-            dependencies,
-            yanked,
+            full_name: fullName,
+            ...(this.isNonEmptyString(version.summary) ? { info: version.summary } : {}),
+            ...(this.isNonEmptyString(version.description) ? { description: version.description } : {}),
+            ...(this.isNonEmptyString(latestGem?.version) ? { version: latestGem.version } : {}),
+            ...(typeof latestGem?.version_downloads === 'number' ? { version_downloads: latestGem.version_downloads } : {}),
+            ...(this.isNonEmptyString(version.authors) ? { authors: version.authors } : {}),
+            ...(licenses ? { licenses } : {}),
+            ...(this.isNonEmptyString(version.sha) ? { sha: version.sha } : {}),
+            ...(this.isNonEmptyString(version.spec_sha) ? { spec_sha: version.spec_sha } : {}),
+            ...(this.isNonEmptyString(version.ruby_version) ? { ruby_version: version.ruby_version } : {}),
+            ...(this.isNonEmptyString(version.rubygems_version) ? { rubygems_version: version.rubygems_version } : {}),
+            ...(requirements ? { requirements } : {}),
+            ...(this.isNonEmptyString(version.built_at) ? { built_at: this.resolveTimestamp(version.built_at) } : {}),
+            ...(metadata ? { metadata } : {}),
+            ...(attestations ? { attestations } : {}),
+            ...(dependencies ? { dependencies } : {}),
+            ...(typeof yanked === 'boolean' ? { yanked } : {}),
+            ...declaredUris,
         };
     }
 
-    private normalizeDependencies(dependencies: RubyGemDependencies | undefined): RubyGemDependencies {
+    private toOwnerEntity(owner: RubyGemOwner): Record<string, string> {
         return {
-            development: dependencies?.development ?? [],
-            runtime: dependencies?.runtime ?? [],
+            handle: owner.handle,
+            ...(this.isNonEmptyString(owner.role) ? { role: owner.role } : {}),
         };
+    }
+
+    private normalizeDependencies(dependencies: RubyGemDependencies | undefined): RubyGemDependencies | undefined {
+        if (!dependencies) {
+            return undefined;
+        }
+        return {
+            development: dependencies.development ?? [],
+            runtime: dependencies.runtime ?? [],
+        };
+    }
+
+    private normalizeStringArray(values: string[] | null | undefined): string[] | undefined {
+        if (!Array.isArray(values)) {
+            return undefined;
+        }
+        const normalized = values.filter((value): value is string => typeof value === 'string' && value.length > 0);
+        return normalized.length > 0 ? normalized : undefined;
+    }
+
+    private normalizeMetadata(metadata: Record<string, string | null> | null | undefined): Record<string, string> | undefined {
+        if (!metadata || typeof metadata !== 'object') {
+            return undefined;
+        }
+        const normalized = Object.fromEntries(Object.entries(metadata).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+        return Object.keys(normalized).length > 0 ? normalized : undefined;
+    }
+
+    private normalizeAttestations(attestations: RubyGemAttestation[] | null | undefined): RubyGemAttestation[] | undefined {
+        if (!Array.isArray(attestations)) {
+            return undefined;
+        }
+        const normalized = attestations.filter((attestation): attestation is RubyGemAttestation => typeof attestation?.media_type === 'string' && !!attestation.media_type && !!attestation.bundle && typeof attestation.bundle === 'object');
+        return normalized.length > 0 ? normalized : undefined;
+    }
+
+    private resolveDeclaredUriAttributes(metadata: Record<string, string> | undefined, latestGem: RubyGemMetadata | null): Record<string, string> {
+        const keys = ['homepage_uri', 'source_code_uri', 'changelog_uri', 'documentation_uri', 'bug_tracker_uri'] as const;
+        const result: Record<string, string> = {};
+        for (const key of keys) {
+            const value = this.resolveString(metadata?.[key]) ?? this.resolveString(latestGem?.[key]);
+            if (value) {
+                result[key] = value;
+            }
+        }
+        return result;
+    }
+
+    private resolveString(value: unknown): string | undefined {
+        return typeof value === 'string' && value.length > 0 ? value : undefined;
+    }
+
+    private isNonEmptyString(value: unknown): value is string {
+        return typeof value === 'string' && value.length > 0;
     }
 
     private resolveTimestamp(candidate?: string): string {
@@ -511,15 +493,8 @@ export class RegistryService {
         return Number.isNaN(parsed) ? this.serviceCreatedAt : new Date(parsed).toISOString();
     }
 
-    private applyPaginationHeaders(
-        req: Request,
-        res: Response,
-        total: number | undefined,
-        hasMore: boolean,
-        offset: number,
-        limit: number,
-        maxOffset?: number,
-    ): void {
+    private applyPaginationHeaders(req: Request, res: Response, total: number, hasMore: boolean, offset: number, limit: number): void {
+        res.set('X-Total-Count', String(total));
         const baseUrl = getBaseUrl(req);
         const buildQueryString = (nextOffset: number): string => {
             const params = new URLSearchParams();
@@ -542,13 +517,14 @@ export class RegistryService {
         const links: string[] = [];
         if (offset > 0) {
             const prevOffset = Math.max(0, offset - limit);
+            links.push(`<${baseUrl}${req.path}?${buildQueryString(0)}>; rel="first"`);
             links.push(`<${baseUrl}${req.path}?${buildQueryString(prevOffset)}>; rel="prev"`);
         }
-        if (hasMore || (total !== undefined && offset + limit < total)) {
+        if (hasMore) {
             const nextOffset = offset + limit;
-            if (maxOffset === undefined || nextOffset <= maxOffset) {
-                links.push(`<${baseUrl}${req.path}?${buildQueryString(nextOffset)}>; rel="next"`);
-            }
+            links.push(`<${baseUrl}${req.path}?${buildQueryString(nextOffset)}>; rel="next"`);
+            const lastOffset = Math.floor((total - 1) / limit) * limit;
+            links.push(`<${baseUrl}${req.path}?${buildQueryString(lastOffset)}>; rel="last"`);
         }
 
         if (links.length > 0) {

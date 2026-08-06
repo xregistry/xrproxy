@@ -1,24 +1,28 @@
 import type { Express, Request, Response, NextFunction } from 'express';
 import { UpstreamError, isUpstreamError, TtlCache, FileSystemCacheStore, createCacheKey } from '@xregistry/registry-core';
+import { type CratesGetResult, type CratesIoCrate } from './adapter';
 import { CratesIoAdapter } from './adapter';
 import { FixtureAdapter } from './fixtures';
 import {
+  buildBaseUrl,
+  deriveVersionId,
   mapCrate,
+  mapCrateMeta,
   mapGroup,
   mapRegistryRoot,
   mapVersion,
-  buildBaseUrl,
   resolveDefaultVersion
 } from './mapper';
 import {
   DEFAULT_PAGE_SIZE,
+  DEFAULT_SOURCE_URL,
   GROUP_TYPE,
   MAX_PAGE_SIZE,
   REGISTRY_ID,
   RESOURCE_TYPE
 } from './model';
 
-type Adapter = CratesIoAdapter | FixtureAdapter;
+type Adapter = Pick<CratesIoAdapter, 'listCrates' | 'getCrate' | 'getCrateVersions'> | FixtureAdapter;
 const MAX_FILTER_RESULTS = 1000;
 const MAX_FILTER_UPSTREAM_PAGES = MAX_FILTER_RESULTS / MAX_PAGE_SIZE;
 
@@ -97,11 +101,20 @@ function notFound(id: string, kind: string): UpstreamError {
   return new UpstreamError({ code: 'not_found', message: `${kind} not found: ${id}` });
 }
 
+async function loadCrate(cache: TtlCache, adapter: Adapter, crateId: string) {
+  const cacheKey = createCacheKey('crate', crateId);
+  return cache.get(cacheKey, async context => adapter.getCrate(crateId, {
+    ...(context.etag !== undefined ? { etag: context.etag } : {}),
+    ...(context.lastModified !== undefined ? { lastModified: context.lastModified } : {})
+  }));
+}
+
 export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
   readonly ttlMs: number;
   readonly negativeTtlMs: number;
   readonly staleIfErrorMs: number;
   readonly cacheDir: string;
+  readonly sourceUrl?: string;
 }): void {
   const store = new FileSystemCacheStore(cacheConfig.cacheDir);
   const cache = new TtlCache(store, {
@@ -109,21 +122,19 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
     negativeTtlMs: cacheConfig.negativeTtlMs,
     staleIfErrorMs: cacheConfig.staleIfErrorMs
   });
+  const sourceUrl = cacheConfig.sourceUrl ?? DEFAULT_SOURCE_URL;
 
-  /** GET / — registry root */
-  app.get('/', (_req: Request, res: Response) => {
-    const baseUrl = buildBaseUrl(_req);
+  app.get('/', (req: Request, res: Response) => {
+    const baseUrl = buildBaseUrl(req);
     res.json(mapRegistryRoot(baseUrl, `${baseUrl}/${GROUP_TYPE}`));
   });
 
-  /** GET /rustregistries — collection of groups */
   app.get(`/${GROUP_TYPE}`, (req: Request, res: Response) => {
     const baseUrl = buildBaseUrl(req);
-    const group = mapGroup(baseUrl);
+    const group = mapGroup(baseUrl, sourceUrl);
     res.json({ [REGISTRY_ID]: group });
   });
 
-  /** GET /rustregistries/:registryId — single group */
   app.get(`/${GROUP_TYPE}/:registryId`, (req: Request, res: Response, next: NextFunction): void => {
     const registryId = String(req.params['registryId'] ?? '');
     if (registryId !== REGISTRY_ID) {
@@ -131,10 +142,9 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
       return;
     }
     const baseUrl = buildBaseUrl(req);
-    res.json(mapGroup(baseUrl));
+    res.json(mapGroup(baseUrl, sourceUrl));
   });
 
-  /** GET /rustregistries/:registryId/crates — list crates (bounded pagination) */
   app.get(`/${GROUP_TYPE}/:registryId/${RESOURCE_TYPE}`, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const registryId = String(req.params['registryId'] ?? '');
     if (registryId !== REGISTRY_ID) {
@@ -165,26 +175,17 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
       const baseUrl = buildBaseUrl(req);
 
       const result = await cache.get(cacheKey, async context => {
-        const loadPage = (targetPage: number) => {
-          if (adapter instanceof FixtureAdapter) {
-            return adapter.listCrates({
-              page: targetPage,
-              perPage: namePrefix === undefined ? limit : MAX_PAGE_SIZE,
-              ...(query !== undefined ? { query } : {})
-            });
-          }
-          return (adapter as CratesIoAdapter).listCrates({
-            page: targetPage,
-            perPage: namePrefix === undefined ? limit : MAX_PAGE_SIZE,
-            ...(query !== undefined ? { query } : {}),
-            ...(sort !== undefined ? { sort } : {}),
-            ...(namePrefix === undefined && context.etag !== undefined ? { etag: context.etag } : {}),
-            ...(namePrefix === undefined && context.lastModified !== undefined ? { lastModified: context.lastModified } : {})
-          });
-        };
+        const loadPage = (targetPage: number) => adapter.listCrates({
+          page: targetPage,
+          perPage: namePrefix === undefined ? limit : MAX_PAGE_SIZE,
+          ...(query !== undefined ? { query } : {}),
+          ...(sort !== undefined ? { sort } : {}),
+          ...(namePrefix === undefined && context.etag !== undefined ? { etag: context.etag } : {}),
+          ...(namePrefix === undefined && context.lastModified !== undefined ? { lastModified: context.lastModified } : {})
+        });
 
         if (namePrefix !== undefined) {
-          const matches = [];
+          const matches: CratesIoCrate[] = [];
           const normalizedPrefix = namePrefix.toLowerCase();
           for (let upstreamPage = 1; upstreamPage <= MAX_FILTER_UPSTREAM_PAGES; upstreamPage += 1) {
             const upstream = await loadPage(upstreamPage);
@@ -238,8 +239,12 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
         : offset > 0 && (result.value?.meta.total ?? 0) > 0;
       const crates = resultCrates.slice(0, limit);
       const mapped: Record<string, unknown> = {};
-      for (const crate of crates) {
-        mapped[crate.name] = mapCrate(crate, baseUrl);
+      const hydrated = await Promise.all(crates.map(crate => loadCrate(cache, adapter, crate.name)));
+      for (const crateResult of hydrated) {
+        if (crateResult.kind !== 'value' || crateResult.value === undefined) {
+          continue;
+        }
+        mapped[crateResult.value.crate.name] = mapCrate(crateResult.value as CratesGetResult, baseUrl);
       }
 
       setPaginationLinks(req, res, offset, limit, hasPrevious, hasNext);
@@ -249,7 +254,6 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
     }
   });
 
-  /** GET /rustregistries/:registryId/crates/:crateId — single crate */
   app.get(`/${GROUP_TYPE}/:registryId/${RESOURCE_TYPE}/:crateId`, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const registryId = String(req.params['registryId'] ?? '');
     const crateId = String(req.params['crateId'] ?? '');
@@ -258,31 +262,39 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
       return;
     }
     try {
-      const cacheKey = createCacheKey('crate', crateId);
+      const result = await loadCrate(cache, adapter, crateId);
       const baseUrl = buildBaseUrl(req);
-
-      const result = await cache.get(cacheKey, async context => {
-        if (adapter instanceof FixtureAdapter) {
-          return adapter.getCrate(crateId);
-        }
-        return (adapter as CratesIoAdapter).getCrate(crateId, {
-          ...(context.etag !== undefined ? { etag: context.etag } : {}),
-          ...(context.lastModified !== undefined ? { lastModified: context.lastModified } : {})
-        });
-      });
-
-      if (result.kind === 'not-found') {
+      if (result.kind !== 'value' || result.value === undefined) {
         next(notFound(crateId, 'Crate'));
         return;
       }
 
-      res.json(mapCrate(result.value!.crate, baseUrl));
+      res.json(mapCrate(result.value as CratesGetResult, baseUrl));
     } catch (error) {
       next(error);
     }
   });
 
-  /** GET /rustregistries/:registryId/crates/:crateId/versions — list versions (immutable) */
+  app.get(`/${GROUP_TYPE}/:registryId/${RESOURCE_TYPE}/:crateId/meta`, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const registryId = String(req.params['registryId'] ?? '');
+    const crateId = String(req.params['crateId'] ?? '');
+    if (registryId !== REGISTRY_ID) {
+      next(notFound(registryId, 'Registry'));
+      return;
+    }
+    try {
+      const result = await loadCrate(cache, adapter, crateId);
+      const baseUrl = buildBaseUrl(req);
+      if (result.kind !== 'value' || result.value === undefined) {
+        next(notFound(crateId, 'Crate'));
+        return;
+      }
+      res.json(mapCrateMeta(result.value as CratesGetResult, baseUrl));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get(`/${GROUP_TYPE}/:registryId/${RESOURCE_TYPE}/:crateId/versions`, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const registryId = String(req.params['registryId'] ?? '');
     const crateId = String(req.params['crateId'] ?? '');
@@ -297,29 +309,19 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
       const offset = requestedOffset ?? (page - 1) * limit;
 
       const baseUrl = buildBaseUrl(req);
-      const crateCacheKey = createCacheKey('crate', crateId);
-
-      const crateResult = await cache.get(crateCacheKey, async context => {
-        if (adapter instanceof FixtureAdapter) {
-          return adapter.getCrate(crateId);
-        }
-        return (adapter as CratesIoAdapter).getCrate(crateId, {
-          ...(context.etag !== undefined ? { etag: context.etag } : {}),
-          ...(context.lastModified !== undefined ? { lastModified: context.lastModified } : {})
-        });
-      });
-
-      if (crateResult.kind === 'not-found') {
+      const crateResult = await loadCrate(cache, adapter, crateId);
+      if (crateResult.kind !== 'value' || crateResult.value === undefined) {
         next(notFound(crateId, 'Crate'));
         return;
       }
 
-      const defaultVersion = resolveDefaultVersion(crateResult.value!.crate);
-      const allVersions = crateResult.value?.versions ?? [];
+      const crateData = crateResult.value as CratesGetResult;
+      const defaultVersion = resolveDefaultVersion(crateData.crate, crateData.versions);
+      const allVersions = crateData.versions;
       const versions = allVersions.slice(offset, offset + limit);
       const mapped: Record<string, unknown> = {};
       for (const version of versions) {
-        mapped[version.num] = mapVersion(version, defaultVersion, baseUrl);
+        mapped[deriveVersionId(version.num)] = mapVersion(version, defaultVersion, baseUrl);
       }
 
       setPaginationLinks(req, res, offset, limit, offset > 0 && allVersions.length > 0, offset + limit < allVersions.length);
@@ -329,7 +331,6 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
     }
   });
 
-  /** GET /rustregistries/:registryId/crates/:crateId/versions/:versionId — single version (immutable) */
   app.get(`/${GROUP_TYPE}/:registryId/${RESOURCE_TYPE}/:crateId/versions/:versionId`, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const registryId = String(req.params['registryId'] ?? '');
     const crateId = String(req.params['crateId'] ?? '');
@@ -339,37 +340,25 @@ export function registerRoutes(app: Express, adapter: Adapter, cacheConfig: {
       return;
     }
     try {
-      const cacheKey = createCacheKey('crate', crateId);
+      const result = await loadCrate(cache, adapter, crateId);
       const baseUrl = buildBaseUrl(req);
-
-      const result = await cache.get(cacheKey, async context => {
-        if (adapter instanceof FixtureAdapter) {
-          return adapter.getCrate(crateId);
-        }
-        return (adapter as CratesIoAdapter).getCrate(crateId, {
-          ...(context.etag !== undefined ? { etag: context.etag } : {}),
-          ...(context.lastModified !== undefined ? { lastModified: context.lastModified } : {})
-        });
-      });
-
-      if (result.kind === 'not-found') {
+      if (result.kind !== 'value' || result.value === undefined) {
         next(notFound(crateId, 'Crate'));
         return;
       }
 
-      const crateData = result.value!;
-      const version = crateData.versions.find(v => v.num === versionId);
+      const crateData = result.value as CratesGetResult;
+      const version = crateData.versions.find(v => deriveVersionId(v.num) === versionId);
       if (!version) {
         next(notFound(versionId, 'Version'));
         return;
       }
 
-      res.json(mapVersion(version, resolveDefaultVersion(crateData.crate), baseUrl));
+      res.json(mapVersion(version, resolveDefaultVersion(crateData.crate, crateData.versions), baseUrl));
     } catch (error) {
       next(error);
     }
   });
 
-  // Error handler must come last
   app.use(handleError);
 }

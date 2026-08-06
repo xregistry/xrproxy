@@ -8,9 +8,8 @@
         "servers": {
           "plural": "servers",
           "singular": "server",
-          "maxversions": 100,
+          "maxversions": 0,
           "setversionid": true,
-          "setdefaultversionsticky": true,
           "hasdocument": false,
           "singleversionroot": false,
           "labels": {},
@@ -23,32 +22,30 @@
             "name": {
               "name": "name",
               "type": "string",
-              "description": "Server name in reverse-DNS format. Must contain exactly one forward slash separating namespace from server name."
-            },
-            "title": {
-              "name": "title",
-              "type": "string",
-              "description": "Human-readable title or display name for the MCP server."
+              "required": true,
+              "description": "Reverse-DNS MCP server name containing exactly one `/`, carried verbatim from the upstream `name` field. Upstream constrains this to at most 200 characters. REQUIRED upstream."
             },
             "description": {
               "name": "description",
               "type": "string",
-              "description": "Repository or server overview."
+              "required": true,
+              "description": "Human-readable explanation of the server's purpose. Upstream constrains this to at most 100 characters. REQUIRED upstream."
             },
-            "icon": {
-              "name": "icon",
-              "type": "url",
-              "description": "URL to a graphical icon for the server."
+            "title": {
+              "name": "title",
+              "type": "string",
+              "description": "Human-readable title or display name for the MCP server. Upstream constrains this to at most 100 characters."
             },
-            "websiteUrl": {
-              "name": "websiteUrl",
+            "website_url": {
+              "name": "website_url",
               "type": "url",
-              "description": "Optional URL to the server's homepage or documentation."
+              "description": "Optional URL to the server's homepage or documentation. Projects the upstream `websiteUrl` field; renamed because xRegistry attribute names MUST match `[a-z0-9_]`."
             },
             "version": {
               "name": "version",
               "type": "string",
-              "description": "Semantic version number of the server."
+              "required": true,
+              "description": "Semantic version number of the server release. Upstream constrains this to at most 255 characters. REQUIRED upstream."
             },
             "packages": {
               "name": "packages",
@@ -57,10 +54,11 @@
               "item": {
                 "type": "object",
                 "attributes": {
-                  "registryType": {
-                    "name": "registryType",
+                  "registry_type": {
+                    "name": "registry_type",
                     "type": "string",
-                    "description": "Type of registry (npm, pypi, oci, nuget, mcpb).",
+                    "required": true,
+                    "description": "Type of registry (npm, pypi, oci, nuget, mcpb). Projects the upstream `registryType` field. REQUIRED upstream.",
                     "enum": [
                       "npm",
                       "pypi",
@@ -75,7 +73,7 @@
                             "name": "packagexid",
                             "type": "xid",
                             "description": "xRegistry ID referencing the NPM package.",
-                            "target": "/noderegistries/packages"
+                            "target": "/nodescopes/packages"
                           }
                         }
                       },
@@ -114,38 +112,37 @@
                           "packagexid": {
                             "name": "packagexid",
                             "type": "uri",
-                            "description": "xRegistry ID referencing the MCP bundle.",
-                            "target": "/mcpbundles"
+                            "description": "URI referencing the MCP bundle. MCP bundles are distributed as files rather than as xRegistry Resources, so this is a plain URI and not an xid."
                           }
                         }
                       }
                     }
                   },
-                  "registryBaseUrl": {
-                    "name": "registryBaseUrl",
+                  "registry_base_url": {
+                    "name": "registry_base_url",
                     "type": "url",
-                    "description": "Base URL of the package registry."
+                    "description": "Base URL of the package registry. Projects the upstream `registryBaseUrl` field."
                   },
                   "identifier": {
                     "name": "identifier",
                     "type": "string",
-                    "description": "Package identifier - either package name (for registries) or URL (for direct downloads)."
+                    "required": true,
+                    "description": "Package identifier - either package name (for registries) or URL (for direct downloads). REQUIRED upstream."
                   },
                   "version": {
                     "name": "version",
                     "type": "string",
-                    "description": "Package version. Must be a specific version."
+                    "description": "Package version. MUST be one exact version. Upstream forbids the literal value `latest` and rejects version ranges; xRegistry has no vocabulary for either constraint, so implementations MUST enforce them when projecting."
                   },
-                  "fileSha256": {
-                    "name": "fileSha256",
+                  "file_sha256": {
+                    "name": "file_sha256",
                     "type": "string",
-                    "description": "SHA-256 hash of the package file for integrity verification.",
-                    "pattern": "^[a-f0-9]{64}$"
+                    "description": "SHA-256 hash of the package file for integrity verification, as 64 lowercase hexadecimal characters. Projects the upstream `fileSha256` field."
                   },
-                  "runtimeHint": {
-                    "name": "runtimeHint",
+                  "runtime_hint": {
+                    "name": "runtime_hint",
                     "type": "string",
-                    "description": "Hint for the appropriate runtime (npx, uvx, docker, dnx).",
+                    "description": "Hint for the appropriate runtime (npx, uvx, docker, dnx). Projects the upstream `runtimeHint` field.",
                     "enum": [
                       "npx",
                       "uvx",
@@ -156,12 +153,14 @@
                   "transport": {
                     "name": "transport",
                     "type": "object",
-                    "description": "Transport protocol configuration (stdio, streamable-http, sse).",
+                    "required": true,
+                    "description": "Transport protocol configuration (stdio, streamable-http, sse). REQUIRED upstream: a Package that does not say how it is reached cannot be launched.",
                     "attributes": {
                       "type": {
                         "name": "type",
                         "type": "string",
-                        "description": "Transport type.",
+                        "required": true,
+                        "description": "Transport type. REQUIRED upstream.",
                         "enum": [
                           "stdio",
                           "streamable-http",
@@ -195,15 +194,15 @@
                               "type": "string",
                               "description": "Default value."
                             },
-                            "isRequired": {
-                              "name": "isRequired",
+                            "is_required": {
+                              "name": "is_required",
                               "type": "boolean",
-                              "description": "Whether required."
+                              "description": "Whether required. Projects the upstream `isRequired` field."
                             },
-                            "isSecret": {
-                              "name": "isSecret",
+                            "is_secret": {
+                              "name": "is_secret",
                               "type": "boolean",
-                              "description": "Whether secret."
+                              "description": "Whether secret. Projects the upstream `isSecret` field."
                             },
                             "format": {
                               "name": "format",
@@ -236,18 +235,67 @@
                             },
                             "variables": {
                               "name": "variables",
-                              "type": "object",
-                              "description": "Map of variable names to their input definitions."
+                              "type": "map",
+                              "description": "Substitution variables referenced by `value`, keyed by variable name. Upstream this is an open map whose values are Input objects.",
+                              "item": {
+                                "type": "object",
+                                "attributes": {
+                                  "description": {
+                                    "name": "description",
+                                    "type": "string",
+                                    "description": "Description of the variable."
+                                  },
+                                  "is_required": {
+                                    "name": "is_required",
+                                    "type": "boolean",
+                                    "description": "Whether a value MUST be supplied. Projects the upstream `isRequired` field."
+                                  },
+                                  "is_secret": {
+                                    "name": "is_secret",
+                                    "type": "boolean",
+                                    "description": "Whether the value is sensitive. Projects the upstream `isSecret` field."
+                                  },
+                                  "format": {
+                                    "name": "format",
+                                    "type": "string",
+                                    "description": "Input format.",
+                                    "enum": [
+                                      "string",
+                                      "number",
+                                      "boolean",
+                                      "filepath"
+                                    ]
+                                  },
+                                  "value": {
+                                    "name": "value",
+                                    "type": "string",
+                                    "description": "The value, with variable substitution support."
+                                  },
+                                  "default": {
+                                    "name": "default",
+                                    "type": "string",
+                                    "description": "Default value."
+                                  },
+                                  "choices": {
+                                    "name": "choices",
+                                    "type": "array",
+                                    "description": "List of permitted values.",
+                                    "item": {
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              }
                             }
                           }
                         }
                       }
                     }
                   },
-                  "runtimeArguments": {
-                    "name": "runtimeArguments",
+                  "runtime_arguments": {
+                    "name": "runtime_arguments",
                     "type": "array",
-                    "description": "Arguments passed to the package runtime command (docker, npx, etc.).",
+                    "description": "Arguments passed to the package runtime command (docker, npx, etc.). Projects the upstream `runtimeArguments` field.",
                     "item": {
                       "type": "object",
                       "attributes": {
@@ -265,25 +313,25 @@
                           "type": "string",
                           "description": "Flag name for named arguments."
                         },
-                        "valueHint": {
-                          "name": "valueHint",
+                        "value_hint": {
+                          "name": "value_hint",
                           "type": "string",
-                          "description": "Identifier for positional arguments."
+                          "description": "Identifier for positional arguments. Projects the upstream `valueHint` field."
                         },
                         "description": {
                           "name": "description",
                           "type": "string",
                           "description": "Description of the argument."
                         },
-                        "isRequired": {
-                          "name": "isRequired",
+                        "is_required": {
+                          "name": "is_required",
                           "type": "boolean",
-                          "description": "Whether the argument is required."
+                          "description": "Whether the argument is required. Projects the upstream `isRequired` field."
                         },
-                        "isRepeated": {
-                          "name": "isRepeated",
+                        "is_repeated": {
+                          "name": "is_repeated",
                           "type": "boolean",
-                          "description": "Whether the argument can be repeated."
+                          "description": "Whether the argument can be repeated. Projects the upstream `isRepeated` field."
                         },
                         "default": {
                           "name": "default",
@@ -321,16 +369,65 @@
                         },
                         "variables": {
                           "name": "variables",
-                          "type": "object",
-                          "description": "Map of variable names to their input definitions."
+                          "type": "map",
+                          "description": "Substitution variables referenced by `value`, keyed by variable name. Upstream this is an open map whose values are Input objects.",
+                          "item": {
+                            "type": "object",
+                            "attributes": {
+                              "description": {
+                                "name": "description",
+                                "type": "string",
+                                "description": "Description of the variable."
+                              },
+                              "is_required": {
+                                "name": "is_required",
+                                "type": "boolean",
+                                "description": "Whether a value MUST be supplied. Projects the upstream `isRequired` field."
+                              },
+                              "is_secret": {
+                                "name": "is_secret",
+                                "type": "boolean",
+                                "description": "Whether the value is sensitive. Projects the upstream `isSecret` field."
+                              },
+                              "format": {
+                                "name": "format",
+                                "type": "string",
+                                "description": "Input format.",
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "filepath"
+                                ]
+                              },
+                              "value": {
+                                "name": "value",
+                                "type": "string",
+                                "description": "The value, with variable substitution support."
+                              },
+                              "default": {
+                                "name": "default",
+                                "type": "string",
+                                "description": "Default value."
+                              },
+                              "choices": {
+                                "name": "choices",
+                                "type": "array",
+                                "description": "List of permitted values.",
+                                "item": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
                         }
                       }
                     }
                   },
-                  "packageArguments": {
-                    "name": "packageArguments",
+                  "package_arguments": {
+                    "name": "package_arguments",
                     "type": "array",
-                    "description": "Arguments passed to the package's binary.",
+                    "description": "Arguments passed to the package's binary. Projects the upstream `packageArguments` field.",
                     "item": {
                       "type": "object",
                       "attributes": {
@@ -348,25 +445,25 @@
                           "type": "string",
                           "description": "Flag name for named arguments."
                         },
-                        "valueHint": {
-                          "name": "valueHint",
+                        "value_hint": {
+                          "name": "value_hint",
                           "type": "string",
-                          "description": "Identifier for positional arguments."
+                          "description": "Identifier for positional arguments. Projects the upstream `valueHint` field."
                         },
                         "description": {
                           "name": "description",
                           "type": "string",
                           "description": "Description of the argument."
                         },
-                        "isRequired": {
-                          "name": "isRequired",
+                        "is_required": {
+                          "name": "is_required",
                           "type": "boolean",
-                          "description": "Whether the argument is required."
+                          "description": "Whether the argument is required. Projects the upstream `isRequired` field."
                         },
-                        "isRepeated": {
-                          "name": "isRepeated",
+                        "is_repeated": {
+                          "name": "is_repeated",
                           "type": "boolean",
-                          "description": "Whether the argument can be repeated."
+                          "description": "Whether the argument can be repeated. Projects the upstream `isRepeated` field."
                         },
                         "default": {
                           "name": "default",
@@ -404,16 +501,65 @@
                         },
                         "variables": {
                           "name": "variables",
-                          "type": "object",
-                          "description": "Map of variable names to their input definitions."
+                          "type": "map",
+                          "description": "Substitution variables referenced by `value`, keyed by variable name. Upstream this is an open map whose values are Input objects.",
+                          "item": {
+                            "type": "object",
+                            "attributes": {
+                              "description": {
+                                "name": "description",
+                                "type": "string",
+                                "description": "Description of the variable."
+                              },
+                              "is_required": {
+                                "name": "is_required",
+                                "type": "boolean",
+                                "description": "Whether a value MUST be supplied. Projects the upstream `isRequired` field."
+                              },
+                              "is_secret": {
+                                "name": "is_secret",
+                                "type": "boolean",
+                                "description": "Whether the value is sensitive. Projects the upstream `isSecret` field."
+                              },
+                              "format": {
+                                "name": "format",
+                                "type": "string",
+                                "description": "Input format.",
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "filepath"
+                                ]
+                              },
+                              "value": {
+                                "name": "value",
+                                "type": "string",
+                                "description": "The value, with variable substitution support."
+                              },
+                              "default": {
+                                "name": "default",
+                                "type": "string",
+                                "description": "Default value."
+                              },
+                              "choices": {
+                                "name": "choices",
+                                "type": "array",
+                                "description": "List of permitted values.",
+                                "item": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
                         }
                       }
                     }
                   },
-                  "environmentVariables": {
-                    "name": "environmentVariables",
+                  "environment_variables": {
+                    "name": "environment_variables",
                     "type": "array",
-                    "description": "Environment variables to be set when running the package.",
+                    "description": "Environment variables to be set when running the package. Projects the upstream `environmentVariables` field.",
                     "item": {
                       "type": "object",
                       "attributes": {
@@ -427,15 +573,15 @@
                           "type": "string",
                           "description": "Description of the variable."
                         },
-                        "isRequired": {
-                          "name": "isRequired",
+                        "is_required": {
+                          "name": "is_required",
                           "type": "boolean",
-                          "description": "Whether required."
+                          "description": "Whether required. Projects the upstream `isRequired` field."
                         },
-                        "isSecret": {
-                          "name": "isSecret",
+                        "is_secret": {
+                          "name": "is_secret",
                           "type": "boolean",
-                          "description": "Whether secret value."
+                          "description": "Whether secret value. Projects the upstream `isSecret` field."
                         },
                         "default": {
                           "name": "default",
@@ -473,8 +619,57 @@
                         },
                         "variables": {
                           "name": "variables",
-                          "type": "object",
-                          "description": "Map of variable names to their input definitions."
+                          "type": "map",
+                          "description": "Substitution variables referenced by `value`, keyed by variable name. Upstream this is an open map whose values are Input objects.",
+                          "item": {
+                            "type": "object",
+                            "attributes": {
+                              "description": {
+                                "name": "description",
+                                "type": "string",
+                                "description": "Description of the variable."
+                              },
+                              "is_required": {
+                                "name": "is_required",
+                                "type": "boolean",
+                                "description": "Whether a value MUST be supplied. Projects the upstream `isRequired` field."
+                              },
+                              "is_secret": {
+                                "name": "is_secret",
+                                "type": "boolean",
+                                "description": "Whether the value is sensitive. Projects the upstream `isSecret` field."
+                              },
+                              "format": {
+                                "name": "format",
+                                "type": "string",
+                                "description": "Input format.",
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "filepath"
+                                ]
+                              },
+                              "value": {
+                                "name": "value",
+                                "type": "string",
+                                "description": "The value, with variable substitution support."
+                              },
+                              "default": {
+                                "name": "default",
+                                "type": "string",
+                                "description": "Default value."
+                              },
+                              "choices": {
+                                "name": "choices",
+                                "type": "array",
+                                "description": "List of permitted values.",
+                                "item": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
                         }
                       }
                     }
@@ -525,15 +720,15 @@
                           "type": "string",
                           "description": "Default value."
                         },
-                        "isRequired": {
-                          "name": "isRequired",
+                        "is_required": {
+                          "name": "is_required",
                           "type": "boolean",
-                          "description": "Whether required."
+                          "description": "Whether required. Projects the upstream `isRequired` field."
                         },
-                        "isSecret": {
-                          "name": "isSecret",
+                        "is_secret": {
+                          "name": "is_secret",
                           "type": "boolean",
-                          "description": "Whether secret."
+                          "description": "Whether secret. Projects the upstream `isSecret` field."
                         },
                         "format": {
                           "name": "format",
@@ -566,8 +761,111 @@
                         },
                         "variables": {
                           "name": "variables",
-                          "type": "object",
-                          "description": "Map of variable names to their input definitions."
+                          "type": "map",
+                          "description": "Substitution variables referenced by `value`, keyed by variable name. Upstream this is an open map whose values are Input objects.",
+                          "item": {
+                            "type": "object",
+                            "attributes": {
+                              "description": {
+                                "name": "description",
+                                "type": "string",
+                                "description": "Description of the variable."
+                              },
+                              "is_required": {
+                                "name": "is_required",
+                                "type": "boolean",
+                                "description": "Whether a value MUST be supplied. Projects the upstream `isRequired` field."
+                              },
+                              "is_secret": {
+                                "name": "is_secret",
+                                "type": "boolean",
+                                "description": "Whether the value is sensitive. Projects the upstream `isSecret` field."
+                              },
+                              "format": {
+                                "name": "format",
+                                "type": "string",
+                                "description": "Input format.",
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "filepath"
+                                ]
+                              },
+                              "value": {
+                                "name": "value",
+                                "type": "string",
+                                "description": "The value, with variable substitution support."
+                              },
+                              "default": {
+                                "name": "default",
+                                "type": "string",
+                                "description": "Default value."
+                              },
+                              "choices": {
+                                "name": "choices",
+                                "type": "array",
+                                "description": "List of permitted values.",
+                                "item": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "variables": {
+                    "name": "variables",
+                    "type": "map",
+                    "description": "Substitution variables for the templated `url`, keyed by the template variable name. Projects the upstream RemoteTransport `variables` map, whose values are Input objects. Without it a multi-tenant endpoint such as `https://{tenant_id}.example.com/mcp` cannot be resolved.",
+                    "item": {
+                      "type": "object",
+                      "attributes": {
+                        "description": {
+                          "name": "description",
+                          "type": "string",
+                          "description": "Description of the variable."
+                        },
+                        "is_required": {
+                          "name": "is_required",
+                          "type": "boolean",
+                          "description": "Whether a value MUST be supplied. Projects the upstream `isRequired` field."
+                        },
+                        "is_secret": {
+                          "name": "is_secret",
+                          "type": "boolean",
+                          "description": "Whether the value is sensitive. Projects the upstream `isSecret` field."
+                        },
+                        "format": {
+                          "name": "format",
+                          "type": "string",
+                          "description": "Input format.",
+                          "enum": [
+                            "string",
+                            "number",
+                            "boolean",
+                            "filepath"
+                          ]
+                        },
+                        "value": {
+                          "name": "value",
+                          "type": "string",
+                          "description": "The value, with variable substitution support."
+                        },
+                        "default": {
+                          "name": "default",
+                          "type": "string",
+                          "description": "Default value."
+                        },
+                        "choices": {
+                          "name": "choices",
+                          "type": "array",
+                          "description": "List of permitted values.",
+                          "item": {
+                            "type": "string"
+                          }
                         }
                       }
                     }
@@ -585,12 +883,14 @@
                   "src": {
                     "name": "src",
                     "type": "url",
-                    "description": "A standard URI pointing to an icon resource. Must be an HTTPS URL."
+                    "required": true,
+                    "description": "A standard URI pointing to an icon resource. MUST be an HTTPS URL of at most 255 characters. REQUIRED upstream."
                   },
-                  "mimeType": {
-                    "name": "mimeType",
+                  "mime_type": {
+                    "name": "mime_type",
                     "type": "string",
-                    "description": "Optional MIME type override.",
+                    "description": "Optional MIME type override. Projects the upstream `mimeType` field.",
+                    "strict": false,
                     "enum": [
                       "image/png",
                       "image/jpeg",
@@ -602,10 +902,9 @@
                   "sizes": {
                     "name": "sizes",
                     "type": "array",
-                    "description": "Array of sizes (e.g., '48x48', '96x96', 'any').",
+                    "description": "Array of sizes, each either '<width>x<height>' in decimal digits or the literal 'any'. Examples: '48x48', '96x96', 'any'.",
                     "item": {
-                      "type": "string",
-                      "pattern": "^(\\d+x\\d+|any)$"
+                      "type": "string"
                     }
                   },
                   "theme": {
@@ -628,12 +927,14 @@
                 "url": {
                   "name": "url",
                   "type": "url",
-                  "description": "Repository URL for browsing source code."
+                  "required": true,
+                  "description": "Repository URL for browsing source code. REQUIRED upstream when `repository` is present."
                 },
                 "source": {
                   "name": "source",
                   "type": "string",
-                  "description": "Repository hosting service identifier (e.g., github, gitlab)."
+                  "required": true,
+                  "description": "Repository hosting service identifier (e.g., github, gitlab). REQUIRED upstream when `repository` is present."
                 },
                 "id": {
                   "name": "id",
@@ -647,92 +948,44 @@
                 }
               }
             },
-            "prompts": {
-              "name": "prompts",
-              "type": "array",
-              "description": "Static prompt templates bundled with this server.",
+            "publisher_meta": {
+              "name": "publisher_meta",
+              "type": "map",
+              "description": "Publisher-provided metadata carried in the server object's `_meta` under the reserved key `io.modelcontextprotocol.registry/publisher-provided`. This is Version data: the publisher supplies it as part of the server release, and upstream limits it to 4 KB. All other `_meta` keys inside the server object are silently discarded on publish, so only this one is projected. Named `publisher_meta` rather than `_meta` because `_` is not a legal leading character for an xRegistry attribute name.",
               "item": {
-                "type": "object",
-                "attributes": {
-                  "name": {
-                    "name": "name",
-                    "type": "string"
-                  },
-                  "description": {
-                    "name": "description",
-                    "type": "string"
-                  },
-                  "arguments": {
-                    "name": "arguments",
-                    "type": "array",
-                    "item": {
-                      "type": "object",
-                      "attributes": {
-                        "name": {
-                          "name": "name",
-                          "type": "string"
-                        },
-                        "description": {
-                          "name": "description",
-                          "type": "string"
-                        },
-                        "required": {
-                          "name": "required",
-                          "type": "boolean"
-                        }
-                      }
-                    }
-                  }
-                }
+                "type": "any"
               }
+            }
+          },
+          "metaattributes": {
+            "status": {
+              "type": "string",
+              "description": "Registry lifecycle status of the server, projected from the response-level `_meta[\"io.modelcontextprotocol.registry/official\"].status`. Registry-managed, never publisher-supplied, which is why it lives on `meta` and not on the Version.",
+              "enum": [
+                "active",
+                "deprecated",
+                "deleted"
+              ]
             },
-            "tools": {
-              "name": "tools",
-              "type": "array",
-              "description": "Tool definitions invocable via the MCP runtime.",
-              "item": {
-                "type": "object",
-                "attributes": {
-                  "name": {
-                    "name": "name",
-                    "type": "string"
-                  },
-                  "description": {
-                    "name": "description",
-                    "type": "string"
-                  },
-                  "inputSchema": {
-                    "name": "inputSchema",
-                    "type": "any"
-                  }
-                }
-              }
+            "status_message": {
+              "type": "string",
+              "description": "Human-readable explanation of the current `status`, of at most 500 characters upstream. Projects `statusMessage`."
             },
-            "resources": {
-              "name": "resources",
-              "type": "array",
-              "description": "Data resources the server can expose or subscribe to.",
-              "item": {
-                "type": "object",
-                "attributes": {
-                  "uriTemplate": {
-                    "name": "uriTemplate",
-                    "type": "uritemplate"
-                  },
-                  "name": {
-                    "name": "name",
-                    "type": "string"
-                  },
-                  "description": {
-                    "name": "description",
-                    "type": "string"
-                  },
-                  "mimeType": {
-                    "name": "mimeType",
-                    "type": "string"
-                  }
-                }
-              }
+            "status_changed_at": {
+              "type": "timestamp",
+              "description": "When `status` last changed. Projects `statusChangedAt`."
+            },
+            "published_at": {
+              "type": "timestamp",
+              "description": "When the registry first published the default Version of this server. Projects `publishedAt`."
+            },
+            "updated_at": {
+              "type": "timestamp",
+              "description": "When the registry last updated the default Version of this server. Projects `updatedAt`."
+            },
+            "is_latest": {
+              "type": "boolean",
+              "description": "Whether the default Version is the one the registry considers latest. Projects `isLatest`."
             }
           }
         }

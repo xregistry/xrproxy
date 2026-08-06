@@ -71,9 +71,9 @@ describe('MCP xRegistry API Integration Tests', () => {
       const response = await client.get('/model');
 
       expect(response.status).toBe(200);
-      expect(response.data).toHaveProperty('attributes');
       expect(response.data).toHaveProperty('groups');
-      expect(response.data).toHaveProperty('resources');
+      expect(response.data.groups).toHaveProperty('mcpproviders');
+      expect(response.data.groups.mcpproviders.resources).toHaveProperty('servers');
     });
   });
 

@@ -1,6 +1,6 @@
 /**
  * TypeScript definitions for xRegistry protocol
- * Based on xRegistry specification 1.0-rc1
+ * Based on xRegistry specification 1.0-rc2
  * 
  * Ensures compliance with xRegistry core specification:
  * - All entities MUST have xid, self, epoch, createdat, modifiedat
@@ -31,10 +31,7 @@ export interface Registry extends XRegistryEntity {
     capabilitiesurl: string;
     model: string;
     modelurl: string;
-    groups: string;
-    noderegistriesurl: string;
-    noderegistriescount: number;
-    noderegistries: string;
+    groups?: Record<string, unknown>;
 }
 
 export interface Group extends XRegistryEntity {

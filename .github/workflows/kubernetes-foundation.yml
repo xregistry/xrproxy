@@ -79,6 +79,8 @@ jobs:
             --set gateway.create=true \
             --set gateway.className=example \
             --set gateway.listener.hostname=packages.example.com \
+            --set gateway.infrastructure.annotations.example\\.com/service-tag=Example.Backend \
+            --set gateway.frontDoor.profileId=00000000-0000-0000-0000-000000000000 \
             --set-json 'gateway.httpRoute.hostnames=["packages.example.com"]' \
             > rendered-gateway.yaml
           grep -q "kind: Gateway" rendered-gateway.yaml
@@ -87,6 +89,9 @@ jobs:
           grep -q "name: API_PATH_PREFIX" rendered-gateway.yaml
           grep -q "name: xrproxy-xrproxy-gateway-ingress" rendered-gateway.yaml
           grep -q "gateway.networking.k8s.io/gateway-name: xrproxy-xrproxy" rendered-gateway.yaml
+          grep -q "example.com/service-tag: Example.Backend" rendered-gateway.yaml
+          grep -q "name: X-Azure-FDID" rendered-gateway.yaml
+          grep -q 'value: "00000000-0000-0000-0000-000000000000"' rendered-gateway.yaml
 
       # Provider-overlay validation: render each overlay values file found under
       # charts/xrproxy/ci/.  No-op when the directory or files are absent.

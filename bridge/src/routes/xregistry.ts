@@ -235,13 +235,31 @@ export function createXRegistryRoutes(
         }
     });
 
-    // Health endpoint
+    // Health endpoint - constant-time, cached-state only. Safe for
+    // Kubernetes liveness/readiness and any high-frequency caller: never
+    // performs a live downstream fan-out on the request path.
     router.get('/health', async (_req: Request, res: Response) => {
         try {
             const health = await healthService.getHealth();
             res.status(health.status === 'healthy' ? 200 : 503).json(health);
         } catch (error) {
             logger.error('Error in health endpoint', {
+                error: error instanceof Error ? error.message : String(error)
+            });
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    });
+
+    // Detailed health endpoint - diagnostic/operator use only. Performs a
+    // bounded, cached, active probe of every downstream (see
+    // HealthService.getDetailedHealth). Do NOT use this for Kubernetes
+    // liveness/readiness probes; use /health instead.
+    router.get('/health/detailed', async (_req: Request, res: Response) => {
+        try {
+            const health = await healthService.getDetailedHealth();
+            res.status(health.status === 'healthy' ? 200 : 503).json(health);
+        } catch (error) {
+            logger.error('Error in detailed health endpoint', {
                 error: error instanceof Error ? error.message : String(error)
             });
             res.status(500).json({ error: 'Internal Server Error' });

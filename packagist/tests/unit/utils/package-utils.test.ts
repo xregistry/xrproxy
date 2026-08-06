@@ -48,26 +48,25 @@ describe('isDevVersion', () => {
     it('returns false for 2.0.0-beta.1', () => expect(isDevVersion('2.0.0-beta.1')).toBe(false));
 });
 
-describe('buildVersionId – dev-* collision safety', () => {
+describe('buildVersionId – spec identity mapping', () => {
     it('generates source-reference-qualified ID for dev-main', () => {
         const id = buildVersionId('dev-main', 'dev-main', 'deadbeef1234567890abcdef');
-        expect(id).toMatch(/^xv~d~/);
+        expect(id).toBe('dev-main:deadbeef1234567890abcdef');
     });
 
-    it('reversibly represents an absent source reference without a sentinel collision', () => {
+    it('represents an absent source reference as an empty suffix after the separator', () => {
         const id = buildVersionId('dev-main', 'dev-main');
-        expect(id).toMatch(/^xv~d~/);
-        expect(id.endsWith('~')).toBe(true);
+        expect(id).toBe('dev-main:');
     });
 
-    it('generates stable ID for stable version (uses normalized)', () => {
+    it('uses the raw stable version when it is already a valid entity ID', () => {
         const id = buildVersionId('v7.1.0', '7.1.0.0', 'abc123');
-        expect(id).toBe('7.1.0.0');
+        expect(id).toBe('v7.1.0');
     });
 
-    it('falls back to display version when normalized is absent', () => {
-        const id = buildVersionId('1.0.0', '', 'abc');
-        expect(id).toBe('1.0.0');
+    it('replaces plus signs with tildes for stable build metadata', () => {
+        const id = buildVersionId('1.0.0+20130313144700', '1.0.0.0', 'abc');
+        expect(id).toBe('1.0.0~20130313144700');
     });
 
     it('two dev-main at different commits produce different IDs', () => {
@@ -82,26 +81,32 @@ describe('buildVersionId – dev-* collision safety', () => {
         expect(id1).not.toBe(id2);
     });
 
-    it('does not collapse distinct aliases through underscore sanitization', () => {
+    it('replaces slashes in branch aliases with tildes', () => {
+        const ref = 'deadbeef1234567890';
+        expect(buildVersionId('dev-feature/foo', 'dev-feature/foo', ref)).toBe('dev-feature~foo:deadbeef1234567890');
+    });
+
+    it('does not collapse distinct aliases through slash substitution', () => {
         const ref = 'deadbeef1234567890';
         expect(buildVersionId('dev-feature/foo', 'dev-feature/foo', ref))
             .not.toBe(buildVersionId('dev-feature_foo', 'dev-feature_foo', ref));
     });
 
-    it('compacts long branch aliases within the xRegistry ID limit without collapsing them', () => {
-        const a = buildVersionId(
-            'dev-dependabot/github_actions/dot-github/workflows/shivammathur/setup-php-2.37.1',
-            'dev-long',
-            '7fb9a3221db596c65ed0cf1069d9806e5d1c2e68',
-        );
-        const b = buildVersionId(
-            'dev-dependabot/github_actions/dot-github/workflows/shivammathur/setup-php-2.37.2',
-            'dev-long',
-            '7fb9a3221db596c65ed0cf1069d9806e5d1c2e68',
-        );
-        expect(a).toMatch(/^xv~d~h~/);
+        it('hashes long branch aliases within the xRegistry ID limit without collapsing them', () => {
+        const longAliasA = `dev-${'dependabot/'.repeat(16)}setup-php-2.37.1`;
+        const longAliasB = `dev-${'dependabot/'.repeat(16)}setup-php-2.37.2`;
+        const a = buildVersionId(longAliasA, 'dev-long', '7fb9a3221db596c65ed0cf1069d9806e5d1c2e68');
+        const b = buildVersionId(longAliasB, 'dev-long', '7fb9a3221db596c65ed0cf1069d9806e5d1c2e68');
+        expect(a).toMatch(/^xh~/);
         expect(a.length).toBeLessThanOrEqual(128);
         expect(a).not.toBe(b);
+    });
+
+    it('hashes long stable versions and reserves the xh~ prefix', () => {
+        const longVersion = `xh~${'a'.repeat(140)}`;
+        const id = buildVersionId(longVersion, longVersion, 'abc');
+        expect(id).toMatch(/^xh~/);
+        expect(id).not.toBe(longVersion);
     });
 
     it('same dev-main at same commit produces identical ID (deterministic)', () => {
@@ -112,7 +117,7 @@ describe('buildVersionId – dev-* collision safety', () => {
     });
 
     it('IDs contain only xRegistry-safe characters', () => {
-        const xregistrySafe = /^[a-zA-Z0-9\-._~]+$/;
+        const xregistrySafe = /^[a-zA-Z0-9._~:@-]+$/;
         const stable = buildVersionId('v7.1.0', '7.1.0.0', 'abc');
         const dev = buildVersionId('dev-main', 'dev-main', 'deadbeef1234');
         expect(xregistrySafe.test(stable)).toBe(true);
@@ -128,7 +133,6 @@ describe('dev-* ID mutation and collision properties', () => {
     });
 
     it('no stable release ID can collide with a dev-* ID', () => {
-        // Stable and dev IDs occupy disjoint encodings.
         const stable = buildVersionId('1.0.0', '1.0.0.0', 'abc123');
         const devIds = [
             buildVersionId('dev-main', 'dev-main', 'abc1230000000000000000'),
@@ -158,7 +162,6 @@ describe('isValidPackageName', () => {
     });
 
     it('rejects names with uppercase (Composer convention)', () => {
-        // Our regex is case-insensitive, consistent with real Packagist
         expect(isValidPackageName('Symfony/Console')).toBe(true);
     });
 

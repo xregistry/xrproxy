@@ -4,6 +4,10 @@ provider "azurerm" {
 
 provider "azapi" {}
 
+locals {
+  front_door_origin_host = "20.31.198.77"
+}
+
 module "aks" {
   source = "../../aks"
 
@@ -155,4 +159,177 @@ resource "azurerm_monitor_data_collection_rule_association" "prometheus" {
   target_resource_id      = module.aks.cluster_id
   data_collection_rule_id = azurerm_monitor_data_collection_rule.prometheus.id
   description             = "Collect AKS Prometheus metrics in the production Azure Monitor workspace."
+}
+
+data "azurerm_network_security_group" "node_subnet" {
+  name                = "NRMS-i6ldxgql2rnbuvnet-xrproxy-prod-snet-nodes-xrproxy-prod"
+  resource_group_name = module.aks.resource_group_name
+}
+
+resource "azurerm_network_security_rule" "front_door_to_gateway" {
+  name                        = "AllowAzureFrontDoorBackendToXrproxyGateway"
+  priority                    = 100
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "80"
+  source_address_prefix       = "AzureFrontDoor.Backend"
+  destination_address_prefix  = "*"
+  resource_group_name         = module.aks.resource_group_name
+  network_security_group_name = data.azurerm_network_security_group.node_subnet.name
+}
+
+resource "azurerm_cdn_frontdoor_profile" "xrproxy" {
+  name                     = "afd-xrproxy-prod"
+  resource_group_name      = module.aks.resource_group_name
+  sku_name                 = "Standard_AzureFrontDoor"
+  response_timeout_seconds = 60
+
+  tags = {
+    environment = "prod"
+    workload    = "xrproxy"
+    owner       = "xregistry"
+  }
+}
+
+resource "azurerm_cdn_frontdoor_endpoint" "xrproxy" {
+  name                     = "xrproxy-prod"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.xrproxy.id
+  enabled                  = true
+
+  tags = {
+    environment = "prod"
+    workload    = "xrproxy"
+    owner       = "xregistry"
+  }
+}
+
+resource "azurerm_cdn_frontdoor_origin_group" "aks" {
+  name                                                      = "aks-xrproxy-prod"
+  cdn_frontdoor_profile_id                                  = azurerm_cdn_frontdoor_profile.xrproxy.id
+  session_affinity_enabled                                  = false
+  restore_traffic_time_to_healed_or_new_endpoint_in_minutes = 0
+
+  health_probe {
+    interval_in_seconds = 30
+    path                = "/health"
+    protocol            = "Http"
+    request_type        = "GET"
+  }
+
+  load_balancing {
+    additional_latency_in_milliseconds = 0
+    sample_size                        = 4
+    successful_samples_required        = 3
+  }
+}
+
+resource "azurerm_cdn_frontdoor_origin" "aks_gateway" {
+  name                          = "aks-gateway"
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.aks.id
+  enabled                       = true
+
+  host_name                      = local.front_door_origin_host
+  origin_host_header             = local.front_door_origin_host
+  http_port                      = 80
+  https_port                     = 443
+  certificate_name_check_enabled = false
+  priority                       = 1
+  weight                         = 1000
+}
+
+resource "azurerm_cdn_frontdoor_rule_set" "registry_cache" {
+  name                     = "registrycache"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.xrproxy.id
+}
+
+resource "azurerm_cdn_frontdoor_rule" "registry_get_cache" {
+  name                      = "CacheRegistryGets"
+  cdn_frontdoor_rule_set_id = azurerm_cdn_frontdoor_rule_set.registry_cache.id
+  order                     = 1
+  behavior_on_match         = "Continue"
+
+  depends_on = [
+    azurerm_cdn_frontdoor_origin_group.aks,
+    azurerm_cdn_frontdoor_origin.aks_gateway,
+  ]
+
+  conditions {
+    request_method_condition {
+      operator     = "Equal"
+      match_values = ["GET"]
+    }
+
+    url_path_condition {
+      operator     = "BeginsWith"
+      match_values = ["/registry"]
+      transforms   = ["Lowercase"]
+    }
+  }
+
+  actions {
+    route_configuration_override_action {
+      cache_behavior                = "OverrideAlways"
+      cache_duration                = "00:01:00"
+      compression_enabled           = true
+      query_string_caching_behavior = "UseQueryString"
+    }
+  }
+}
+
+resource "azurerm_cdn_frontdoor_route" "default" {
+  name                          = "default"
+  cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.xrproxy.id
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.aks.id
+  cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.aks_gateway.id]
+  cdn_frontdoor_rule_set_ids    = [azurerm_cdn_frontdoor_rule_set.registry_cache.id]
+
+  enabled                = true
+  forwarding_protocol    = "HttpOnly"
+  https_redirect_enabled = true
+  link_to_default_domain = true
+  patterns_to_match      = ["/*"]
+  supported_protocols    = ["Http", "Https"]
+
+  cache {
+    compression_enabled = true
+    content_types_to_compress = [
+      "application/javascript",
+      "application/json",
+      "application/xml",
+      "image/svg+xml",
+      "text/css",
+      "text/html",
+      "text/javascript",
+      "text/plain",
+      "text/xml",
+    ]
+    query_string_caching_behavior = "UseQueryString"
+  }
+}
+
+import {
+  to = azurerm_cdn_frontdoor_profile.xrproxy
+  id = "/subscriptions/041abda7-3870-4275-ae24-6bf4c5300523/resourceGroups/rg-xrproxy-prod/providers/Microsoft.Cdn/profiles/afd-xrproxy-prod"
+}
+
+import {
+  to = azurerm_cdn_frontdoor_endpoint.xrproxy
+  id = "/subscriptions/041abda7-3870-4275-ae24-6bf4c5300523/resourceGroups/rg-xrproxy-prod/providers/Microsoft.Cdn/profiles/afd-xrproxy-prod/afdEndpoints/xrproxy-prod"
+}
+
+import {
+  to = azurerm_cdn_frontdoor_origin_group.aks
+  id = "/subscriptions/041abda7-3870-4275-ae24-6bf4c5300523/resourceGroups/rg-xrproxy-prod/providers/Microsoft.Cdn/profiles/afd-xrproxy-prod/originGroups/aks-xrproxy-prod"
+}
+
+import {
+  to = azurerm_cdn_frontdoor_origin.aks_gateway
+  id = "/subscriptions/041abda7-3870-4275-ae24-6bf4c5300523/resourceGroups/rg-xrproxy-prod/providers/Microsoft.Cdn/profiles/afd-xrproxy-prod/originGroups/aks-xrproxy-prod/origins/aks-gateway"
+}
+
+import {
+  to = azurerm_cdn_frontdoor_route.default
+  id = "/subscriptions/041abda7-3870-4275-ae24-6bf4c5300523/resourceGroups/rg-xrproxy-prod/providers/Microsoft.Cdn/profiles/afd-xrproxy-prod/afdEndpoints/xrproxy-prod/routes/default"
 }

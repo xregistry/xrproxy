@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     ? new FixtureAdapter()
     : new CratesIoAdapter({
         baseUrl: config.UPSTREAM_URL,
+        indexBaseUrl: config.UPSTREAM_INDEX_URL,
         timeoutMs: config.UPSTREAM_TIMEOUT_MS,
         operationTimeoutMs: config.UPSTREAM_OPERATION_TIMEOUT_MS,
         maxAttempts: config.UPSTREAM_MAX_ATTEMPTS,
@@ -48,7 +49,8 @@ async function main(): Promise<void> {
         ttlMs: config.CACHE_TTL_MS,
         negativeTtlMs: config.CACHE_NEGATIVE_TTL_MS,
         staleIfErrorMs: config.CACHE_STALE_IF_ERROR_MS,
-        cacheDir: config.CACHE_DIR
+        cacheDir: config.CACHE_DIR,
+        sourceUrl: config.UPSTREAM_INDEX_URL
       });
     },
     errorResponse: mapError
@@ -62,7 +64,8 @@ async function main(): Promise<void> {
   const address = running.server.address();
   const port = address && typeof address !== 'string' ? address.port : config.PORT;
   console.log(`[crates] Listening on ${config.HOST}:${port}`);
-  console.log(`[crates] Upstream: ${config.UPSTREAM_URL}`);
+  console.log(`[crates] Upstream API: ${config.UPSTREAM_URL}`);
+  console.log(`[crates] Upstream index: ${config.UPSTREAM_INDEX_URL}`);
   console.log(`[crates] Fixture mode: ${config.FIXTURE_MODE}`);
 }
 

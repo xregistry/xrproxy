@@ -14,24 +14,73 @@ import { repoIdToIdentity, UNNAMESPACED_GROUP_ID } from './repo-utils';
 
 export type ResourceType = 'models' | 'datasets' | 'spaces';
 
+export interface HfLfsInfo {
+  readonly size?: number;
+  readonly sha256?: string;
+  readonly pointerSize?: number;
+}
+
+export interface HfSibling {
+  readonly rfilename: string;
+  readonly size?: number;
+  readonly blobId?: string;
+  readonly lfs?: HfLfsInfo;
+}
+
+export interface HfSpaceRuntime {
+  readonly stage?: string;
+  readonly hardware?: {
+    readonly current?: string;
+    readonly requested?: string;
+  };
+  readonly resources?: {
+    readonly cpu?: string;
+    readonly memory?: string;
+    readonly gpu?: string;
+    readonly gpu_memory?: string;
+  };
+}
+
 export interface HfRepoListEntry {
   readonly id: string;
   readonly author?: string;
   readonly sha?: string;
+  readonly createdAt?: string;
   readonly lastModified?: string;
   readonly private?: boolean;
   readonly gated?: boolean | string;
+  readonly disabled?: boolean;
+  readonly usedStorage?: number;
   readonly downloads?: number;
   readonly likes?: number;
   readonly pipeline_tag?: string;
   readonly library_name?: string;
   readonly sdk?: string;
   readonly tags?: readonly string[];
+  readonly siblings?: readonly HfSibling[];
 }
 
 export interface HfRepoInfo extends HfRepoListEntry {
   readonly modelId?: string;
+  readonly description?: string;
   readonly cardData?: Record<string, unknown>;
+  readonly config?: Record<string, unknown>;
+  readonly transformersInfo?: {
+    readonly auto_model?: string;
+    readonly pipeline_tag?: string;
+    readonly processor?: string;
+  };
+  readonly safetensors?: {
+    readonly parameters?: Readonly<Record<string, number>>;
+    readonly total?: number;
+  };
+  readonly ['model-index']?: readonly unknown[];
+  readonly inference?: unknown;
+  readonly widgetData?: readonly unknown[];
+  readonly paperswithcode_id?: string;
+  readonly runtime?: HfSpaceRuntime;
+  readonly subdomain?: string;
+  readonly host?: string;
   /** Default branch name from HF API (e.g. "main", "master"). */
   readonly gitalyDefaultBranch?: string;
 }
@@ -258,6 +307,7 @@ export class HuggingFaceClient {
     const limit = opts.limit ?? 20;
     const skip = opts.skip ?? 0;
     const needed = skip + limit + 1;
+
     const matches: HfRepoListEntry[] = [];
     const seenRepoIds = new Set<string>();
     let upstreamSkip = 0;
@@ -274,9 +324,8 @@ export class HuggingFaceClient {
       requests += 1;
       let newRepoCount = 0;
       for (const repo of page) {
-        const normalizedId = repo.id.toLowerCase();
-        if (seenRepoIds.has(normalizedId)) continue;
-        seenRepoIds.add(normalizedId);
+        if (seenRepoIds.has(repo.id)) continue;
+        seenRepoIds.add(repo.id);
         newRepoCount += 1;
         if (predicate(repo)) matches.push(repo);
       }
@@ -358,9 +407,8 @@ export class HuggingFaceClient {
         });
         let added = 0;
         for (const repo of page) {
-          const canonicalKey = repo.id.toLowerCase();
-          if (seen.has(canonicalKey)) continue;
-          seen.add(canonicalKey);
+          if (seen.has(repo.id)) continue;
+          seen.add(repo.id);
           added += 1;
           try {
             const { groupId } = repoIdToIdentity(repo.id);

@@ -238,20 +238,20 @@ describe("PyPI Docker Integration Tests", function () {
       expect(response.data).to.be.an("object");
     });
 
-    it("should respond to a specific PyPI registry (pypi.org)", async () => {
+    it("should respond to the PyPI registry", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/pythonregistries/pypi.org`
+        `${baseUrl}/pythonregistries/pypi`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
-      expect(response.data).to.have.property("name", "pypi.org");
+      expect(response.data).to.have.property("name", "pypi");
     });
   });
 
   describe("Package Endpoints", () => {
-    it("should respond to packages endpoint for pypi.org", async () => {
+    it("should respond to packages endpoint for PyPI", async () => {
       const response = await loggedAxiosGet(
-        `${baseUrl}/pythonregistries/pypi.org/packages`
+        `${baseUrl}/pythonregistries/pypi/packages`
       );
       expect(response.status).to.equal(200);
       expect(response.data).to.be.an("object");
@@ -260,7 +260,7 @@ describe("PyPI Docker Integration Tests", function () {
     it("should respond to a specific package (requests)", async () => {
       try {
         const response = await loggedAxiosGet(
-          `${baseUrl}/pythonregistries/pypi.org/packages/requests`
+          `${baseUrl}/pythonregistries/pypi/packages/requests`
         );
         expect(response.status).to.equal(200);
         expect(response.data).to.be.an("object");
@@ -301,7 +301,7 @@ describe("PyPI Docker Integration Tests", function () {
     it("should return 404 for non-existent package", async () => {
       try {
         await loggedAxiosGet(
-          `${baseUrl}/pythonregistries/pypi.org/packages/non-existent-package-123456789`
+          `${baseUrl}/pythonregistries/pypi/packages/non-existent-package-123456789`
         );
         expect.fail("Should have thrown an error");
       } catch (error) {

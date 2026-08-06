@@ -2,8 +2,9 @@
  * Configuration for the Go Module xRegistry proxy.
  *
  * Uses schema-based config parsing from @xregistry/registry-core. The gomod
- * proxy needs two upstream URLs (GOPROXY and the Go index), so it defines its
- * own schema alongside the standard proxy schema.
+ * proxy needs upstream URLs for the GOPROXY protocol, the Go index, and the
+ * checksum database, so it defines its own schema alongside the standard proxy
+ * schema.
  */
 
 import { parseConfig, type ConfigSchema } from '@xregistry/registry-core';
@@ -26,6 +27,7 @@ export const gomodConfigSchema = {
   PORT:             { type: 'integer', default: 3900, min: 1, max: 65535 },
   GOPROXY_URL:      { type: 'url',     default: 'https://proxy.golang.org', protocols: ['http:', 'https:'] },
   GO_INDEX_URL:     { type: 'url',     default: 'https://index.golang.org', protocols: ['http:', 'https:'] },
+  SUMDB_URL:        { type: 'url',     default: 'https://sum.golang.org', protocols: ['http:', 'https:'] },
   CACHE_DIR:        { type: 'string',  default: './cache', minLength: 1 },
   INDEX_REFRESH_MS: { type: 'integer', default: 6 * 60 * 60 * 1000, min: 60_000 },
   INDEX_PAGE_LIMIT: { type: 'integer', default: 2000, min: 1 },

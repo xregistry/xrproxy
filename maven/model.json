@@ -1,31 +1,27 @@
 {
   "groups": {
-    "javaregistries": {
-      "plural": "javaregistries",
-      "singular": "javaregistry",
-      "description": "Groups of Java package registries",
+    "javanamespaces": {
+      "plural": "javanamespaces",
+      "singular": "javanamespace",
+      "description": "Maven namespaces. A namespace is a verified Maven groupId: publishing rights to a groupId are granted only after the publisher proves control of the corresponding DNS domain or code-hosting account, so the namespace identifies the publishing organization uniquely across Maven Central.",
+      "attributes": {
+        "group_id": {
+          "type": "string",
+          "description": "The Maven groupId this namespace represents, e.g. 'org.apache.commons'. It is the verified publisher namespace and is identical to the Group's identifier.",
+          "required": true
+        },
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the Maven repository from which this namespace was projected, e.g. 'https://repo.maven.apache.org/maven2'. This records provenance only; a groupId denotes the same publisher whichever mirror serves it."
+        }
+      },
       "resources": {
         "packages": {
           "singular": "package",
+          "plural": "packages",
           "description": "Maven packages (artifacts)",
           "hasdocument": false,
           "attributes": {
-            "name": {
-              "type": "string",
-              "description": "The display name of the package"
-            },
-            "description": {
-              "type": "string",
-              "description": "The description of the package"
-            },
-            "groupId": {
-              "type": "string",
-              "description": "Maven group ID"
-            },
-            "artifactId": {
-              "type": "string",
-              "description": "Maven artifact ID"
-            },
             "version": {
               "type": "string",
               "description": "The version of the package"
@@ -34,15 +30,195 @@
               "type": "string",
               "description": "Package type (jar, war, etc.)"
             },
+            "classifiers": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The Maven classifiers published alongside the main artifact for this version (e.g., sources, javadoc). Together with 'packaging' these identify the individual files of the version."
+            },
+            "classifier": {
+              "type": "string",
+              "description": "The classifier of the primary artifact of this version, when the project itself is published under a classifier. Absent for the ordinary case in which the primary artifact is unclassified; the additional classified files published beside it are listed in 'classifiers'."
+            },
+            "snapshot": {
+              "type": "boolean",
+              "description": "True when the version string carries the '-SNAPSHOT' suffix. Snapshot versions are mutable: the repository republishes the underlying files under the same coordinate, so this version is not immutable and its checksums, signatures and metadata MAY change."
+            },
+            "pom_resolution": {
+              "type": "string",
+              "enum": [
+                "raw",
+                "effective"
+              ],
+              "strict": true,
+              "description": "Whether the projected attribute values were taken from the raw POM of this version exactly as published ('raw'), or from the effective POM computed by applying parent inheritance, dependencyManagement, property interpolation and the super-POM defaults ('effective'). An implementation MUST populate this attribute whenever it populates any attribute derived from the POM."
+            },
+            "parent": {
+              "type": "object",
+              "description": "The POM 'project/parent' element. A POM that declares a parent inherits attributes from it, so the raw POM of this version alone is generally not a complete description of the project.",
+              "attributes": {
+                "group_id": {
+                  "type": "string",
+                  "description": "The groupId of the parent POM."
+                },
+                "artifact_id": {
+                  "type": "string",
+                  "description": "The artifactId of the parent POM."
+                },
+                "version": {
+                  "type": "string",
+                  "description": "The version of the parent POM. Maven does not permit a version range here."
+                },
+                "relative_path": {
+                  "type": "string",
+                  "description": "The POM 'relativePath' element, a filesystem hint used only during a local build. It has no meaning for an artifact resolved from a repository and is recorded verbatim for fidelity."
+                },
+                "package": {
+                  "type": "xid",
+                  "target": "/javanamespaces/packages",
+                  "description": "An xRegistry link to the parent POM's package, when that package is present in this Registry."
+                }
+              }
+            },
+            "modules": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The POM 'project/modules' element: the relative directory names of the child modules of an aggregator project. These are build-time paths, not coordinates, and MUST NOT be interpreted as artifactIds."
+            },
+            "properties": {
+              "type": "map",
+              "item": {
+                "type": "string"
+              },
+              "description": "The POM 'project/properties' element as a name-to-value map. Property values are recorded verbatim and MAY themselves contain unresolved '${...}' placeholders."
+            },
+            "profiles": {
+              "type": "array",
+              "description": "The POM 'project/profiles' element. A profile is a conditionally applied fragment of the POM; its content is NOT reflected in the other attributes of this Version unless the implementation states that the profile was active when the effective POM was computed.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "id": {
+                    "type": "string",
+                    "description": "The profile identifier."
+                  },
+                  "active_by_default": {
+                    "type": "boolean",
+                    "description": "The profile's 'activation/activeByDefault' flag."
+                  },
+                  "activation_jdk": {
+                    "type": "string",
+                    "description": "The profile's 'activation/jdk' expression, if any."
+                  },
+                  "activation_os": {
+                    "type": "string",
+                    "description": "A rendering of the profile's 'activation/os' condition, if any."
+                  },
+                  "activation_property": {
+                    "type": "string",
+                    "description": "A rendering of the profile's 'activation/property' condition, if any, in 'name=value' form."
+                  },
+                  "activation_file": {
+                    "type": "string",
+                    "description": "A rendering of the profile's 'activation/file' condition, if any."
+                  },
+                  "applied": {
+                    "type": "boolean",
+                    "description": "True when the implementation applied this profile while computing the effective POM projected into the other attributes of this Version."
+                  }
+                }
+              }
+            },
+            "checksums": {
+              "type": "array",
+              "description": "The checksum sidecar files published beside each file of this version. Maven Central requires a '.sha1' and a '.md5' sidecar for every published file and MAY additionally carry '.sha256' and '.sha512'. Values are lowercase hexadecimal and are recorded exactly as the sidecar file contains them.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "filename": {
+                    "type": "string",
+                    "description": "The name of the file these checksums cover, e.g. 'commons-lang3-3.14.0.jar' or 'commons-lang3-3.14.0.pom'."
+                  },
+                  "classifier": {
+                    "type": "string",
+                    "description": "The classifier of the covered file, if any."
+                  },
+                  "extension": {
+                    "type": "string",
+                    "description": "The extension of the covered file, e.g. 'jar', 'pom', 'module'."
+                  },
+                  "url": {
+                    "type": "url",
+                    "description": "The absolute URL of the covered file in the repository."
+                  },
+                  "size": {
+                    "type": "uinteger",
+                    "description": "The size of the covered file in bytes."
+                  },
+                  "sha1": {
+                    "type": "string",
+                    "description": "The SHA-1 digest from the '.sha1' sidecar, lowercase hexadecimal."
+                  },
+                  "md5": {
+                    "type": "string",
+                    "description": "The MD5 digest from the '.md5' sidecar, lowercase hexadecimal."
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "description": "The SHA-256 digest from the '.sha256' sidecar, lowercase hexadecimal, when published."
+                  },
+                  "sha512": {
+                    "type": "string",
+                    "description": "The SHA-512 digest from the '.sha512' sidecar, lowercase hexadecimal, when published."
+                  }
+                }
+              }
+            },
+            "signatures": {
+              "type": "array",
+              "description": "The detached OpenPGP signatures published beside the files of this version. Maven Central requires one '.asc' sidecar per published file, including the POM. The signature covers the file bytes, not this metadata projection.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "filename": {
+                    "type": "string",
+                    "description": "The name of the signed file."
+                  },
+                  "url": {
+                    "type": "url",
+                    "description": "The absolute URL of the '.asc' detached signature file."
+                  },
+                  "format": {
+                    "type": "string",
+                    "description": "The signature format. Maven Central publishes ASCII-armored OpenPGP signatures, denoted 'pgp'. Other values MAY be used by repositories publishing other formats.",
+                    "enum": [
+                      "pgp"
+                    ],
+                    "strict": false
+                  },
+                  "key_id": {
+                    "type": "string",
+                    "description": "The OpenPGP key identifier or fingerprint of the signing key, when the implementation has read it from the signature packet."
+                  },
+                  "verified": {
+                    "type": "boolean",
+                    "description": "True only when the implementation itself verified the signature against the file bytes and a trusted key. Absence means 'not verified', never 'invalid'."
+                  }
+                }
+              }
+            },
             "organization": {
               "type": "object",
-              "properties": {
+              "attributes": {
                 "name": {
                   "type": "string",
                   "description": "Organization name"
                 },
                 "url": {
-                  "type": "string",
+                  "type": "url",
                   "description": "Organization website URL"
                 }
               },
@@ -52,7 +228,7 @@
               "type": "array",
               "item": {
                 "type": "object",
-                "properties": {
+                "attributes": {
                   "id": {
                     "type": "string",
                     "description": "Developer ID"
@@ -66,7 +242,7 @@
                     "description": "Developer email"
                   },
                   "url": {
-                    "type": "string",
+                    "type": "url",
                     "description": "Developer website"
                   }
                 }
@@ -77,14 +253,27 @@
               "type": "array",
               "item": {
                 "type": "object",
-                "properties": {
+                "attributes": {
                   "name": {
                     "type": "string",
                     "description": "License name"
                   },
                   "url": {
-                    "type": "string",
+                    "type": "url",
                     "description": "License URL"
+                  },
+                  "distribution": {
+                    "type": "string",
+                    "description": "The POM 'license/distribution' element, describing how the artifact may be legally distributed. Maven defines the values 'repo' (may be downloaded from a Maven repository) and 'manual' (the user must obtain the artifact manually); the element is not constrained to those two, so other values MUST be preserved verbatim.",
+                    "enum": [
+                      "repo",
+                      "manual"
+                    ],
+                    "strict": false
+                  },
+                  "comments": {
+                    "type": "string",
+                    "description": "The POM 'license/comments' element: free-text remarks about the license."
                   }
                 }
               },
@@ -92,18 +281,18 @@
             },
             "scm": {
               "type": "object",
-              "properties": {
+              "attributes": {
                 "url": {
-                  "type": "string",
+                  "type": "url",
                   "description": "Source code repository URL"
                 },
                 "connection": {
                   "type": "string",
                   "description": "Source control connection"
                 },
-                "developerConnection": {
+                "developer_connection": {
                   "type": "string",
-                  "description": "Developer connection to source control"
+                  "description": "Developer connection to source control, from the POM 'developerConnection' element"
                 }
               },
               "description": "Source control information"
@@ -113,12 +302,12 @@
               "description": "A list of package dependencies, processed from the POM.",
               "item": {
                 "type": "object",
-                "properties": {
-                  "groupId": {
+                "attributes": {
+                  "group_id": {
                     "type": "string",
                     "description": "The groupId of the dependent Maven artifact."
                   },
-                  "artifactId": {
+                  "artifact_id": {
                     "type": "string",
                     "description": "The artifactId of the dependent Maven artifact."
                   },
@@ -126,46 +315,151 @@
                     "type": "string",
                     "description": "The version or version range specified in the POM for the dependency."
                   },
+                  "classifier": {
+                    "type": "string",
+                    "description": "The classifier of the dependent artifact, if any."
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "The dependency type as declared in the POM; defaults to 'jar'."
+                  },
                   "scope": {
                     "type": "string",
                     "description": "The scope of the dependency (e.g., compile, test, provided)."
                   },
                   "optional": {
                     "type": "boolean",
-                    "description": "Whether this dependency is optional.",
-                    "optional": true
+                    "description": "Whether this dependency is optional, from the POM 'optional' element."
+                  },
+                  "system_path": {
+                    "type": "string",
+                    "description": "The POM 'systemPath' element, valid only when 'scope' is 'system'. It is an absolute filesystem path on the publisher's build machine and is meaningless to any other consumer; it is recorded verbatim for fidelity and MUST NOT be dereferenced."
+                  },
+                  "exclusions": {
+                    "type": "array",
+                    "description": "The POM 'dependency/exclusions' element: transitive dependencies that Maven removes from the graph rooted at this dependency. A wildcard '*' is permitted in either field to exclude all transitive dependencies.",
+                    "item": {
+                      "type": "object",
+                      "attributes": {
+                        "group_id": {
+                          "type": "string",
+                          "description": "The groupId to exclude, or '*'."
+                        },
+                        "artifact_id": {
+                          "type": "string",
+                          "description": "The artifactId to exclude, or '*'."
+                        }
+                      }
+                    }
                   },
                   "package": {
                     "type": "xid",
                     "description": "An xRegistry link to the dependent package. This may point to a specific version if resolved, or to the base package.",
-                    "target": "/javaregistries/package",
-                    "optional": true
+                    "target": "/javanamespaces/packages"
                   },
                   "resolved_version": {
                     "type": "string",
-                    "description": "The specific version string if the dependency was resolved to an exact, existing version.",
-                    "optional": true
+                    "description": "The specific version string if the dependency was resolved to an exact, existing version."
+                  },
+                  "managed": {
+                    "type": "boolean",
+                    "description": "True when the effective value of 'version', 'scope' or 'exclusions' for this dependency came from a dependencyManagement declaration rather than from the dependency element itself."
+                  }
+                }
+              }
+            },
+            "dependency_management": {
+              "type": "array",
+              "description": "The POM 'project/dependencyManagement/dependencies' element. These entries do not add dependencies to the project; they supply default version, scope and exclusion values for matching declarations in this POM and in POMs that inherit from it. An entry with scope 'import' and type 'pom' imports another POM's dependencyManagement wholesale.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "group_id": {
+                    "type": "string",
+                    "description": "The groupId of the managed Maven artifact."
+                  },
+                  "artifact_id": {
+                    "type": "string",
+                    "description": "The artifactId of the managed Maven artifact."
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "The version or version range this declaration imposes."
+                  },
+                  "classifier": {
+                    "type": "string",
+                    "description": "The classifier this declaration applies to, if any."
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "The dependency type this declaration applies to; defaults to 'jar'. A value of 'pom' together with scope 'import' denotes a BOM import."
+                  },
+                  "scope": {
+                    "type": "string",
+                    "description": "The scope this declaration imposes (e.g., compile, test, provided, import)."
+                  },
+                  "optional": {
+                    "type": "boolean",
+                    "description": "The optional flag this declaration imposes."
+                  },
+                  "system_path": {
+                    "type": "string",
+                    "description": "The systemPath this declaration imposes, valid only with scope 'system'."
+                  },
+                  "exclusions": {
+                    "type": "array",
+                    "description": "The exclusions this declaration imposes. A wildcard '*' is permitted in either field.",
+                    "item": {
+                      "type": "object",
+                      "attributes": {
+                        "group_id": {
+                          "type": "string",
+                          "description": "The groupId to exclude, or '*'."
+                        },
+                        "artifact_id": {
+                          "type": "string",
+                          "description": "The artifactId to exclude, or '*'."
+                        }
+                      }
+                    }
+                  },
+                  "package": {
+                    "type": "xid",
+                    "description": "An xRegistry link to the managed package, when it is present in this Registry.",
+                    "target": "/javanamespaces/packages"
                   }
                 }
               }
             },
             "homepage": {
-              "type": "string",
+              "type": "url",
               "description": "Project homepage URL"
             },
-            "issueManagement": {
+            "issue_management": {
               "type": "object",
-              "properties": {
+              "attributes": {
                 "system": {
                   "type": "string",
                   "description": "Issue tracking system"
                 },
                 "url": {
-                  "type": "string",
+                  "type": "url",
                   "description": "Issue tracker URL"
                 }
               },
               "description": "Issue management information"
+            }
+          },
+          "metaattributes": {
+            "group_id": {
+              "type": "string",
+              "required": true,
+              "description": "Maven groupId, verbatim and unaltered. This is the authoritative group of the package. It is normally identical to the javanamespaceid, but not when that identifier has been hashed to resolve a case-insensitive collision, so a consumer addressing Maven Central MUST read this attribute rather than the enclosing Group identifier."
+            },
+            "artifact_id": {
+              "type": "string",
+              "required": true,
+              "description": "Maven artifactId, verbatim and unaltered. This is the Resource's identity within its namespace and is therefore constant across all Versions. It is the authoritative artifact name; the packageid MAY be a hash where two artifactIds collide case-insensitively."
             }
           }
         }

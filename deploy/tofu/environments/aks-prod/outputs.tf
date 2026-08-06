@@ -21,3 +21,15 @@ output "oidc_issuer_url" {
 output "workload_identity_client_id" {
   value = module.aks.workload_identity_client_id
 }
+
+output "front_door_profile_id" {
+  value = azurerm_cdn_frontdoor_profile.xrproxy.resource_guid
+}
+
+output "front_door_endpoint_hostname" {
+  value = azurerm_cdn_frontdoor_endpoint.xrproxy.host_name
+}
+
+output "front_door_endpoint_url" {
+  value = "https://${azurerm_cdn_frontdoor_endpoint.xrproxy.host_name}"
+}

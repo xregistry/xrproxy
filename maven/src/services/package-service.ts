@@ -4,343 +4,246 @@
  */
 
 import { GROUP_CONFIG, RESOURCE_CONFIG } from '../config/constants';
-import { throwEntityNotFound, throwInternalError } from '../middleware/xregistry-error-handler';
-import type { MavenArtifactDoc, MavenVersionMetadata } from '../types/maven';
+import { throwEntityNotFound } from '../middleware/xregistry-error-handler';
+import { Resource } from '../types/xregistry';
+import { toVersionId } from '../utils/maven-identity';
 import { MavenService } from './maven-service';
+import { SearchResult, SearchService } from './search-service';
 import { EntityStateManager } from '../../../shared/entity-state-manager';
 
 export interface PackageServiceOptions {
     mavenService: MavenService;
+    searchService: SearchService;
     entityState?: EntityStateManager;
 }
 
 export interface PackageQueryOptions {
-    limit?: number;
-    offset?: number;
-    filter?: string;
-    sort?: string;
-    inline?: string[];
+    limit?: number | undefined;
+    offset?: number | undefined;
+    filter?: string | undefined;
+    sort?: string | undefined;
+    query?: string | undefined;
 }
 
-export interface PackageMetadata {
-    xid: string;
-    self: string;
-    name: string;
-    description?: string;
-    docs?: string;
-    epoch: number;
-    createdat: string;
-    modifiedat: string;
-    versionsurl: string;
-    versionscount: number;
-    [key: string]: any;
-}
-
-export interface VersionMetadata {
-    xid: string;
-    self: string;
-    versionid: string;
-    name: string;
-    description?: string;
-    epoch: number;
-    createdat: string;
-    modifiedat: string;
-    [key: string]: any;
+function compact<T extends Record<string, unknown>>(value: T): T {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (item === undefined) {
+            continue;
+        }
+        if (Array.isArray(item) && item.length === 0) {
+            continue;
+        }
+        if (item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).length === 0) {
+            continue;
+        }
+        result[key] = item;
+    }
+    return result as T;
 }
 
 export class PackageService {
     private readonly mavenService: MavenService;
+    private readonly searchService: SearchService;
     private readonly entityState: EntityStateManager;
 
     constructor(options: PackageServiceOptions) {
         this.mavenService = options.mavenService;
+        this.searchService = options.searchService;
         this.entityState = options.entityState || new EntityStateManager();
     }
 
-    /**
-     * Get all packages (with pagination)
-     */
-    async getAllPackages(
-        groupId: string,
-        baseUrl: string,
-        options: PackageQueryOptions = {}
-    ): Promise<{ packages: Record<string, PackageMetadata>; totalCount: number }> {
-        const limit = options.limit || 50;
-        const offset = options.offset || 0;
-
-        // For Maven, we need to search with a broad query
-        // This is a limitation - Maven Central doesn't provide a "list all" endpoint
-        const searchResult = await this.mavenService.searchArtifacts('*', offset, limit);
-
-        const packages: Record<string, PackageMetadata> = {};
-
-        for (const doc of searchResult.response.docs) {
-            const packageId = `${doc.g}:${doc.a}`;
-            packages[packageId] = this.buildPackageMetadata(doc, groupId, baseUrl);
+    async getAllPackages(namespaceId: string, baseUrl: string, options: PackageQueryOptions = {}): Promise<{ packages: Record<string, Resource>; totalCount: number }> {
+        const namespace = await this.searchService.getNamespaceById(namespaceId);
+        if (!namespace) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}`, GROUP_CONFIG.TYPE_SINGULAR, namespaceId);
         }
 
-        return {
-            packages,
-            totalCount: searchResult.response.numFound
-        };
+        const searchOptions: { limit?: number; offset?: number; query?: string } = {};
+        if (options.limit !== undefined) searchOptions.limit = options.limit;
+        if (options.offset !== undefined) searchOptions.offset = options.offset;
+        if (options.query) searchOptions.query = options.query;
+
+        const result = await this.searchService.searchPackagesInNamespace(namespace.groupId, searchOptions);
+        let resources = await Promise.all(result.results.map((doc) => this.buildPackageSummary(doc, namespace.namespaceId, baseUrl)));
+        resources = this.sortResources(resources, options.sort);
+
+        const packages: Record<string, Resource> = {};
+        for (const resource of resources) {
+            packages[resource.packageid] = resource;
+        }
+
+        return { packages, totalCount: result.totalCount };
     }
 
-    /**
-     * Get a specific package
-     */
-    async getPackage(
-        groupId: string,
-        packageId: string,
-        baseUrl: string
-    ): Promise<PackageMetadata> {
-        const [mavenGroupId, artifactId] = this.parsePackageId(packageId);
-
-        // Check if package exists
-        const exists = await this.mavenService.packageExists(mavenGroupId, artifactId);
-        if (!exists) {
-            throwEntityNotFound(
-                `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}`,
-                RESOURCE_CONFIG.TYPE_SINGULAR,
-                packageId
-            );
+    async getPackage(namespaceId: string, packageId: string, baseUrl: string): Promise<Resource> {
+        const resolved = await this.resolvePackageCoordinates(namespaceId, packageId);
+        const versions = await this.mavenService.fetchArtifactVersions(resolved.groupId, resolved.artifactId);
+        const latestVersion = versions[versions.length - 1];
+        if (!latestVersion) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}`, RESOURCE_CONFIG.TYPE_SINGULAR, packageId);
         }
 
-        // Get package details
-        const searchResult = await this.mavenService.searchByCoordinates(mavenGroupId, artifactId);
+        const projectedVersion = await this.getProjectedVersion(resolved.namespaceId, resolved.groupId, resolved.artifactId, latestVersion, packageId, baseUrl, versions);
+        const packagePath = `/${GROUP_CONFIG.TYPE}/${resolved.namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}`;
+        const packageUrl = `${baseUrl}${packagePath}`;
 
-        const firstDoc = searchResult.response.docs[0];
-        if (!firstDoc) {
-            throwEntityNotFound(
-                `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}`,
-                RESOURCE_CONFIG.TYPE_SINGULAR,
-                packageId
-            );
-        }
-
-        // Solr's `latestVersion` / `versionCount` fields lag behind the
-        // maven-metadata.xml that drives `fetchArtifactVersions`. Use the
-        // authoritative list so the Resource agrees with /versions on the
-        // chosen default and the total count. Falls back to Solr fields
-        // if the live fetch is empty.
-        let liveVersions: string[] = [];
-        try {
-            liveVersions = await this.mavenService.fetchArtifactVersions(mavenGroupId, artifactId);
-        } catch {
-            // ignore — fall back to Solr-only metadata
-        }
-
-        const enrichedDoc = liveVersions.length > 0
-            ? { ...firstDoc, latestVersion: liveVersions[liveVersions.length - 1] ?? firstDoc.latestVersion, versionCount: liveVersions.length }
-            : firstDoc;
-
-        return this.buildPackageMetadata(enrichedDoc, groupId, baseUrl);
+        return compact({
+            ...projectedVersion,
+            xid: packagePath,
+            self: packageUrl,
+            packageid: packageId,
+            versionid: toVersionId(latestVersion),
+            metaurl: `${packageUrl}/meta`,
+            versionsurl: `${packageUrl}/versions`,
+            versionscount: versions.length
+        }) as unknown as Resource;
     }
 
-    /**
-     * Get all versions of a package
-     */
-    async getPackageVersions(
-        groupId: string,
-        packageId: string,
-        baseUrl: string,
-        options: PackageQueryOptions = {}
-    ): Promise<{ versions: Record<string, VersionMetadata>; totalCount: number }> {
-        const [mavenGroupId, artifactId] = this.parsePackageId(packageId);
-
-        // Check if package exists
-        const exists = await this.mavenService.packageExists(mavenGroupId, artifactId);
-        if (!exists) {
-            throwEntityNotFound(
-                `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}`,
-                RESOURCE_CONFIG.TYPE_SINGULAR,
-                packageId
-            );
-        }
-
-        // Get all versions
-        const versionList = await this.mavenService.fetchArtifactVersions(mavenGroupId, artifactId);
-        const latestVersion: string = versionList[versionList.length - 1] ?? '';
-
-        const versions: Record<string, VersionMetadata> = {};
-
-        // Apply pagination
+    async getPackageVersions(namespaceId: string, packageId: string, baseUrl: string, options: PackageQueryOptions = {}): Promise<{ versions: Record<string, Resource>; totalCount: number }> {
+        const resolved = await this.resolvePackageCoordinates(namespaceId, packageId);
+        const allVersions = await this.mavenService.fetchArtifactVersions(resolved.groupId, resolved.artifactId);
         const limit = options.limit || 50;
         const offset = options.offset || 0;
-        const paginatedVersions = versionList.slice(offset, offset + limit);
+        const paginatedVersions = allVersions.slice(offset, offset + limit);
 
-        for (const version of paginatedVersions) {
-            versions[version] = this.buildVersionMetadata(
-                mavenGroupId,
-                artifactId,
+        const projected = await Promise.all(
+            paginatedVersions.map((version) => this.getProjectedVersion(
+                resolved.namespaceId,
+                resolved.groupId,
+                resolved.artifactId,
                 version,
-                groupId,
                 packageId,
                 baseUrl,
-                versionList,
-                latestVersion
-            );
+                allVersions
+            ))
+        );
+
+        const versions: Record<string, Resource> = {};
+        for (const version of this.sortResources(projected, options.sort)) {
+            versions[version.versionid as string] = version;
         }
 
-        return {
-            versions,
-            totalCount: versionList.length
-        };
+        return { versions, totalCount: allVersions.length };
     }
 
-    /**
-     * Get a specific version
-     */
-    async getVersion(
-        groupId: string,
-        packageId: string,
-        version: string,
-        baseUrl: string
-    ): Promise<VersionMetadata> {
-        const [mavenGroupId, artifactId] = this.parsePackageId(packageId);
+    async getVersion(namespaceId: string, packageId: string, versionId: string, baseUrl: string): Promise<Resource> {
+        const resolved = await this.resolvePackageCoordinates(namespaceId, packageId);
+        const versions = await this.mavenService.fetchArtifactVersions(resolved.groupId, resolved.artifactId);
+        const version = versions.includes(versionId)
+            ? versionId
+            : await this.mavenService.resolveVersion(versionId, versions);
 
-        // Fetch POM metadata
-        const pomMetadata = await this.mavenService.fetchPomMetadata(mavenGroupId, artifactId, version);
-
-        if (!pomMetadata) {
-            throwEntityNotFound(
-                `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${version}`,
-                'version',
-                version
-            );
+        if (!version) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${versionId}`, 'version', versionId);
         }
 
-        return this.buildVersionMetadataFromPom(pomMetadata, groupId, packageId, baseUrl);
+        return this.getProjectedVersion(resolved.namespaceId, resolved.groupId, resolved.artifactId, version, packageId, baseUrl, versions);
     }
 
-    /**
-     * Build package metadata from Maven artifact doc
-     */
-    private buildPackageMetadata(
-        doc: MavenArtifactDoc,
-        groupId: string,
-        baseUrl: string
-    ): PackageMetadata {
-        const packageId = `${doc.g}:${doc.a}`;
-        const basePath = `${baseUrl}/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}`;
-        const resourcePath = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}`;
+    private async resolvePackageCoordinates(namespaceId: string, packageId: string): Promise<{ namespaceId: string; groupId: string; artifactId: string }> {
+        const namespace = await this.searchService.getNamespaceById(namespaceId);
+        if (!namespace) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}`, GROUP_CONFIG.TYPE_SINGULAR, namespaceId);
+        }
 
-        return {
+        const artifactId = await this.mavenService.resolveArtifactId(namespace.groupId, packageId);
+        if (!artifactId) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}`, RESOURCE_CONFIG.TYPE_SINGULAR, packageId);
+        }
+
+        return { namespaceId: namespace.namespaceId, groupId: namespace.groupId, artifactId };
+    }
+
+    private async buildPackageSummary(doc: SearchResult, namespaceId: string, baseUrl: string): Promise<Resource> {
+        const packageId = await this.mavenService.resolvePackageId(doc.groupId, doc.artifactId);
+        const packagePath = `/${GROUP_CONFIG.TYPE}/${namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}`;
+        const packageUrl = `${baseUrl}${packagePath}`;
+
+        return compact({
+            xid: packagePath,
+            self: packageUrl,
             packageid: packageId,
-            xid: resourcePath,
-            self: basePath,
-            name: doc.a,
-            // Maven Solr default-core does not expose a description field.
-            // Omitting rather than mirroring the artifactId (which is what
-            // the earlier code did and was actively misleading).
-            epoch: this.entityState.getEpoch(resourcePath),
-            createdat: this.entityState.getCreatedAt(resourcePath),
-            modifiedat: this.entityState.getModifiedAt(resourcePath),
-            // xRegistry required attributes
-            versionid: doc.latestVersion,
-            isdefault: true,
-            metaurl: `${basePath}/meta`,
-            versionsurl: `${basePath}/versions`,
-            versionscount: typeof doc.versionCount === 'number' ? doc.versionCount : 1,
-            // Maven-specific attributes
-            groupId: doc.g,
-            artifactId: doc.a,
-            latestVersion: doc.latestVersion,
-            repositoryId: doc.repositoryId || 'central'
-        };
+            versionid: toVersionId(doc.latestVersion),
+            version: doc.latestVersion,
+            name: doc.artifactId,
+            epoch: this.entityState.getEpoch(packagePath),
+            createdat: new Date(doc.timestamp).toISOString(),
+            modifiedat: new Date(doc.timestamp).toISOString(),
+            metaurl: `${packageUrl}/meta`,
+            versionsurl: `${packageUrl}/versions`,
+            versionscount: doc.versionCount,
+            group_id: doc.groupId,
+            artifact_id: doc.artifactId,
+            snapshot: doc.latestVersion.endsWith('-SNAPSHOT') ? true : undefined
+        }) as unknown as Resource;
     }
 
-    /**
-     * Build version metadata (minimal)
-     */
-    private buildVersionMetadata(
-        mavenGroupId: string,
-        artifactId: string,
-        version: string,
-        groupId: string,
-        packageId: string,
-        baseUrl: string,
-        allVersions: string[],
-        latestVersion: string
-    ): VersionMetadata {
-        const basePath = `${baseUrl}/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${version}`;
-        const versionPath = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${version}`;
+    private async getProjectedVersion(namespaceId: string, groupId: string, artifactId: string, version: string, packageId: string, baseUrl: string, allVersions: string[]): Promise<Resource> {
+        const projected = await this.mavenService.fetchResolvedVersion(groupId, artifactId, version);
+        if (!projected) {
+            throwEntityNotFound(`/${GROUP_CONFIG.TYPE}/${namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${version}`, 'version', version);
+        }
 
-        // Determine ancestor (previous version in lineage)
+        const versionId = projected.versionId;
+        const versionPath = `/${GROUP_CONFIG.TYPE}/${namespaceId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${versionId}`;
+        const versionUrl = `${baseUrl}${versionPath}`;
         const versionIndex = allVersions.indexOf(version);
-        const ancestor = versionIndex > 0 ? allVersions[versionIndex - 1] : version;
+        const ancestor = versionIndex > 0 ? toVersionId(allVersions[versionIndex - 1] as string) : versionId;
 
-        return {
+        return compact({
             xid: versionPath,
-            self: basePath,
-            versionid: version,
-            name: `${artifactId} ${version}`,
-            epoch: this.entityState.getEpoch(versionPath),
-            createdat: this.entityState.getCreatedAt(versionPath),
-            modifiedat: this.entityState.getModifiedAt(versionPath),
-            // xRegistry required attributes
+            self: versionUrl,
             packageid: packageId,
-            isdefault: version === latestVersion,
-            ancestor: ancestor,
-            contenttype: 'application/java-archive',
-            // Maven-specific attributes
-            groupId: mavenGroupId,
-            artifactId,
-            jarUrl: this.mavenService.buildJarUrl(mavenGroupId, artifactId, version)
-        };
-    }
-
-    /**
-     * Build version metadata from POM
-     */
-    private buildVersionMetadataFromPom(
-        pom: MavenVersionMetadata,
-        groupId: string,
-        packageId: string,
-        baseUrl: string
-    ): VersionMetadata {
-        const basePath = `${baseUrl}/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${pom.version}`;
-        const versionPath = `/${GROUP_CONFIG.TYPE}/${groupId}/${RESOURCE_CONFIG.TYPE}/${packageId}/versions/${pom.version}`;
-
-        const metadata: VersionMetadata = {
-            xid: versionPath,
-            self: basePath,
-            versionid: pom.version,
-            name: pom.name || `${pom.artifactId} ${pom.version}`,
+            versionid: versionId,
+            version: projected.version,
+            name: projected.name || `${artifactId} ${version}`,
+            description: projected.description,
             epoch: this.entityState.getEpoch(versionPath),
-            createdat: this.entityState.getCreatedAt(versionPath),
-            modifiedat: this.entityState.getModifiedAt(versionPath)
-        };
-
-        // Add optional fields
-        if (pom.description) {
-            metadata.description = pom.description;
-        }
-
-        // Add Maven-specific fields
-        (metadata as any).groupId = pom.groupId;
-        (metadata as any).artifactId = pom.artifactId;
-        (metadata as any).packaging = pom.packaging;
-        (metadata as any).url = pom.url;
-        (metadata as any).licenses = pom.licenses;
-        (metadata as any).developers = pom.developers;
-        (metadata as any).scm = pom.scm;
-        (metadata as any).dependencies = pom.dependencies;
-        (metadata as any).jarUrl = this.mavenService.buildJarUrl(pom.groupId, pom.artifactId, pom.version);
-
-        return metadata;
+            createdat: projected.createdAt,
+            modifiedat: projected.modifiedAt,
+            ancestor,
+            group_id: groupId,
+            artifact_id: artifactId,
+            packaging: projected.packaging,
+            classifier: projected.classifier,
+            classifiers: projected.classifiers,
+            snapshot: projected.snapshot,
+            pom_resolution: projected.pom_resolution,
+            homepage: projected.homepage,
+            parent: projected.parent,
+            modules: projected.modules,
+            properties: projected.properties,
+            profiles: projected.profiles,
+            checksums: projected.checksums,
+            signatures: projected.signatures,
+            organization: projected.organization,
+            developers: projected.developers,
+            licenses: projected.licenses,
+            scm: projected.scm,
+            issue_management: projected.issue_management,
+            dependencies: projected.dependencies,
+            dependency_management: projected.dependency_management
+        }) as unknown as Resource;
     }
 
-    /**
-     * Parse package ID into groupId and artifactId
-     */
-    private parsePackageId(packageId: string): [string, string] {
-        const parts = packageId.split(':');
-        if (parts.length !== 2 || !parts[0] || !parts[1]) {
-            throwInternalError(
-                'Invalid package ID format',
-                `Package ID must be in format "groupId:artifactId", got: ${packageId}`
-            );
+    private sortResources(resources: Resource[], sort: string | undefined): Resource[] {
+        if (!sort) {
+            return resources;
         }
-        return [parts[0], parts[1]];
+
+        const parts = sort.split('=');
+        const attribute = parts[0];
+        const direction = parts[1]?.toLowerCase() == 'desc' ? 'desc' : 'asc';
+        if (!attribute) {
+            return resources;
+        }
+
+        return [...resources].sort((left, right) => {
+            const leftValue = (left as Record<string, unknown>)[attribute];
+            const rightValue = (right as Record<string, unknown>)[attribute];
+            const comparison = String(leftValue ?? '').localeCompare(String(rightValue ?? ''), undefined, { sensitivity: 'base' });
+            return direction == 'desc' ? -comparison : comparison;
+        });
     }
 }

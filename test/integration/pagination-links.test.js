@@ -14,19 +14,19 @@ describe("Pagination Links Integration", function () {
     {
       name: "NPM",
       baseUrl: "http://localhost:3001",
-      collectionPath: "/noderegistries/npmjs.org/packages",
+      collectionPath: "/nodescopes/_/packages",
       testParams: "?limit=2&offset=0",
     },
     {
       name: "PyPI",
       baseUrl: "http://localhost:3002",
-      collectionPath: "/pythonregistries/pypi.org/packages",
+      collectionPath: "/pythonregistries/pypi/packages",
       testParams: "?limit=2&offset=0",
     },
     {
       name: "NuGet",
       baseUrl: "http://localhost:3003",
-      collectionPath: "/nugetregistries/nuget.org/packages",
+      collectionPath: "/dotnetregistries/nuget/packages",
       testParams: "?limit=2&offset=0",
     },
     {

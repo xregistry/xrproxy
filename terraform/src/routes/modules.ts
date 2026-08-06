@@ -14,7 +14,7 @@ const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => P
 export function createModuleRoutes(
     moduleService: ModuleService,
     searchService: SearchService,
-    _entityState: EntityStateManager
+    _entityState: EntityStateManager,
 ): Router {
     const router = Router();
     const { GROUP_TYPE, MODULE_RESOURCE_TYPE } = REGISTRY_METADATA;
@@ -95,7 +95,7 @@ export function createModuleRoutes(
         const all = await moduleService.getModuleVersions(
             String(entity['namespace']), String(entity['moduleid']), getBaseUrl(req),
         );
-        const entries = Object.entries(all).sort(([a], [b]) => a.localeCompare(b));
+        const entries = Object.entries(all);
         const { offset, limit } = parsePagination(req);
         const body = Object.fromEntries(entries.slice(offset, offset + limit));
         setPaginationHeaders(req, res, offset, limit, entries.length);

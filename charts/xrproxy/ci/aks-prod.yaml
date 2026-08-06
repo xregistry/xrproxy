@@ -2,10 +2,67 @@ viewer:
   enabled: true
   apiPathPrefix: /registry
 
+probes:
+  startup:
+    timeoutSeconds: 15
+  readiness:
+    timeoutSeconds: 15
+  liveness:
+    timeoutSeconds: 15
+
+cache:
+  persistence:
+    storageClassName: managed-csi
+    accessMode: ReadWriteOnce
+    size: 4Gi
+
+services:
+  npm:
+    cache:
+      persistence:
+        enabled: true
+  maven:
+    environment:
+      MAVEN_INDEX_REFRESH_ENABLED: "true"
+    cache:
+      persistence:
+        enabled: true
+        size: 16Gi
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  rubygems:
+    cache:
+      persistence:
+        enabled: true
+  bridge:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  gomod:
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
 gateway:
   enabled: true
   create: true
   className: approuting-istio
+  infrastructure:
+    annotations:
+      service.beta.kubernetes.io/azure-allowed-service-tags: AzureFrontDoor.Backend
   listener:
     name: http
     protocol: HTTP
@@ -14,3 +71,5 @@ gateway:
     tls:
       enabled: false
       certificateSecretName: ""
+  frontDoor:
+    profileId: 5cc3d296-b34f-40d6-a215-c5ddf2369272

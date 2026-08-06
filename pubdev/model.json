@@ -5,6 +5,12 @@
       "description": "A group representing a Dart/Flutter package registry provider (e.g., pub.dev). Contains all available Dart package registries.",
       "plural": "dartregistries",
       "singular": "dartregistry",
+      "attributes": {
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the pub server from which these packages were projected, e.g. 'https://pub.dev'. This records provenance only; a package name denotes the same package whichever server serves it."
+        }
+      },
       "resources": {
         "packages": {
           "description": "A resource representing a Dart/Flutter package in the registry, including its metadata and available versions.",
@@ -14,11 +20,8 @@
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The canonical name of the Dart package."
-            },
-            "description": {
-              "type": "string",
-              "description": "A short description of the package."
+              "required": true,
+              "description": "The package name exactly as declared by the pubspec 'name' field. This is the authoritative name of the package; the packageid is only an addressing key derived from it."
             },
             "homepage": {
               "type": "string",
@@ -28,75 +31,247 @@
               "type": "string",
               "description": "The source repository URL for the package."
             },
+            "environment": {
+              "type": "map",
+              "item": {
+                "type": "string"
+              },
+              "description": "The complete pubspec 'environment' map, verbatim. Keys are SDK names ('sdk', 'flutter', and any future or vendor-defined SDK name) and values are the corresponding version constraint strings. This is the lossless projection of the environment section; 'sdk_constraint' and 'flutter_constraint' are conveniences that restate the two well-known keys."
+            },
             "sdk_constraint": {
               "type": "string",
-              "description": "The Dart SDK version constraint for the latest version."
+              "description": "Convenience restatement of the 'sdk' entry of the 'environment' map: the Dart SDK version constraint. When present it MUST equal environment['sdk']."
             },
             "flutter_constraint": {
               "type": "string",
-              "description": "The Flutter SDK version constraint, if applicable."
+              "description": "Convenience restatement of the 'flutter' entry of the 'environment' map: the Flutter SDK version constraint, present only for Flutter packages. When present it MUST equal environment['flutter']."
             },
-            "keywords": {
+            "topics": {
               "type": "array",
               "item": {
                 "type": "string"
               },
-              "description": "Keywords from pubspec.yaml topics."
+              "description": "The pubspec 'topics' list: a canonicalized controlled vocabulary, not free-form keywords. At most 5 entries, each 2-32 characters, lowercase ASCII alphanumerics and hyphens, beginning with a letter and ending with an alphanumeric. The registry MAY merge alternative spellings onto a canonical topic, so the projected value MAY differ from the literal pubspec text."
             },
-            "license": {
-              "type": "string",
-              "description": "The SPDX license identifier for the package."
-            },
-            "platforms": {
-              "type": "array",
+            "declared_platforms": {
+              "type": "map",
               "item": {
-                "type": "string"
+                "type": "any"
               },
-              "description": "Supported platforms."
+              "description": "The pubspec 'platforms' section as declared by the publisher: a map whose keys are platform names (android, ios, linux, macos, web, windows) and whose values are conventionally null. It is a declaration of intent and is distinct from the platforms the registry detects; see the 'detected_platforms' meta attribute."
             },
             "retracted": {
               "type": "boolean",
-              "description": "Whether this package has been discontinued."
+              "description": "Whether THIS VERSION has been retracted. A retracted version remains downloadable so that existing lock files keep resolving, but MUST NOT be selected by new resolutions. This is a per-version flag and is unrelated to whether the package as a whole is discontinued; see the 'is_discontinued' meta attribute."
             },
             "dependencies": {
-              "type": "array",
-              "description": "Runtime dependencies for the package.",
+              "type": "map",
+              "description": "The pubspec 'dependencies' section: runtime dependencies keyed by dependency package name. Each pubspec value is either a bare version constraint string or a source descriptor object; both forms are projected onto the single object shape below, discriminated by 'source'.",
               "item": {
                 "type": "object",
                 "attributes": {
-                  "name": {
+                  "source": {
+                    "name": "source",
                     "type": "string",
-                    "description": "The name of the dependency package."
+                    "required": true,
+                    "enum": [ "hosted", "sdk", "git", "path" ],
+                    "description": "The dependency source kind. 'hosted' is used both for the bare constraint-string shorthand and for an explicit 'hosted:' descriptor.",
+                    "ifvalues": {
+                      "hosted": {
+                        "siblingattributes": {
+                          "hosted_url": {
+                            "type": "url",
+                            "description": "The base URL of the pub repository serving this dependency, from 'hosted.url'. ABSENT when the dependency resolves against the same registry as the depending package. When present the dependency is cross-registry and 'package' MUST be omitted unless the projection also covers that registry."
+                          },
+                          "hosted_name": {
+                            "type": "string",
+                            "description": "The package name on the hosted repository, from 'hosted.name', when it differs from the map key."
+                          }
+                        }
+                      },
+                      "sdk": {
+                        "siblingattributes": {
+                          "sdk": {
+                            "type": "string",
+                            "description": "The SDK that vends this dependency, from 'sdk:', e.g. 'flutter'. The dependency is supplied by the toolchain and has no registry package."
+                          }
+                        }
+                      },
+                      "git": {
+                        "siblingattributes": {
+                          "git_url": {
+                            "type": "string",
+                            "description": "The Git repository URL, from 'git.url' or from the string shorthand of 'git:'."
+                          },
+                          "git_ref": {
+                            "type": "string",
+                            "description": "The Git ref (branch, tag or commit) from 'git.ref'."
+                          },
+                          "git_path": {
+                            "type": "string",
+                            "description": "The path within the Git repository from 'git.path'."
+                          }
+                        }
+                      },
+                      "path": {
+                        "siblingattributes": {
+                          "path": {
+                            "type": "string",
+                            "description": "The filesystem path from 'path:'. Path dependencies are not resolvable by a registry consumer and are retained only for fidelity."
+                          }
+                        }
+                      }
+                    }
                   },
                   "constraint": {
                     "type": "string",
-                    "description": "The version constraint."
+                    "description": "The version constraint exactly as declared, e.g. '^1.2.0'. It is a range, not a resolved version. Present for 'hosted' and OPTIONALLY for 'sdk'; absent for 'git' and 'path'."
                   },
                   "package": {
                     "type": "xid",
-                    "description": "Cross-reference to the dependency package.",
+                    "description": "Cross-reference to the dependency package Resource. Applicable only when 'source' is 'hosted' and the dependency is served by a registry covered by this projection.",
                     "target": "/dartregistries/packages"
                   }
                 }
               }
             },
             "dev_dependencies": {
-              "type": "array",
-              "description": "Development dependencies for the package.",
+              "type": "map",
+              "description": "The pubspec 'dev_dependencies' section, keyed by dependency package name and using the same item shape as 'dependencies'. These are required only to develop and test the package itself and MUST NOT be treated as transitive requirements of consumers.",
               "item": {
                 "type": "object",
                 "attributes": {
-                  "name": {
+                  "source": {
+                    "name": "source",
                     "type": "string",
-                    "description": "The name of the development dependency package."
+                    "required": true,
+                    "enum": [ "hosted", "sdk", "git", "path" ],
+                    "description": "The dependency source kind. 'hosted' is used both for the bare constraint-string shorthand and for an explicit 'hosted:' descriptor.",
+                    "ifvalues": {
+                      "hosted": {
+                        "siblingattributes": {
+                          "hosted_url": {
+                            "type": "url",
+                            "description": "The base URL of the pub repository serving this dependency, from 'hosted.url'."
+                          },
+                          "hosted_name": {
+                            "type": "string",
+                            "description": "The package name on the hosted repository, from 'hosted.name', when it differs from the map key."
+                          }
+                        }
+                      },
+                      "sdk": {
+                        "siblingattributes": {
+                          "sdk": {
+                            "type": "string",
+                            "description": "The SDK that vends this dependency, from 'sdk:', e.g. 'flutter'."
+                          }
+                        }
+                      },
+                      "git": {
+                        "siblingattributes": {
+                          "git_url": {
+                            "type": "string",
+                            "description": "The Git repository URL, from 'git.url' or from the string shorthand of 'git:'."
+                          },
+                          "git_ref": {
+                            "type": "string",
+                            "description": "The Git ref (branch, tag or commit) from 'git.ref'."
+                          },
+                          "git_path": {
+                            "type": "string",
+                            "description": "The path within the Git repository from 'git.path'."
+                          }
+                        }
+                      },
+                      "path": {
+                        "siblingattributes": {
+                          "path": {
+                            "type": "string",
+                            "description": "The filesystem path from 'path:'."
+                          }
+                        }
+                      }
+                    }
                   },
                   "constraint": {
                     "type": "string",
-                    "description": "The version constraint."
+                    "description": "The version constraint exactly as declared. It is a range, not a resolved version."
                   },
                   "package": {
                     "type": "xid",
-                    "description": "Cross-reference to the dev dependency package.",
+                    "description": "Cross-reference to the dev dependency package Resource, when 'source' is 'hosted' and the dependency is served by a registry covered by this projection.",
+                    "target": "/dartregistries/packages"
+                  }
+                }
+              }
+            },
+            "dependency_overrides": {
+              "type": "map",
+              "description": "The pubspec 'dependency_overrides' section, keyed by dependency package name and using the same item shape as 'dependencies'. Overrides apply only when this package is the root of a resolution and are IGNORED when it is consumed as a dependency; consumers MUST NOT treat them as requirements.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "source": {
+                    "name": "source",
+                    "type": "string",
+                    "required": true,
+                    "enum": [ "hosted", "sdk", "git", "path" ],
+                    "description": "The dependency source kind. 'hosted' is used both for the bare constraint-string shorthand and for an explicit 'hosted:' descriptor.",
+                    "ifvalues": {
+                      "hosted": {
+                        "siblingattributes": {
+                          "hosted_url": {
+                            "type": "url",
+                            "description": "The base URL of the pub repository serving this dependency, from 'hosted.url'."
+                          },
+                          "hosted_name": {
+                            "type": "string",
+                            "description": "The package name on the hosted repository, from 'hosted.name', when it differs from the map key."
+                          }
+                        }
+                      },
+                      "sdk": {
+                        "siblingattributes": {
+                          "sdk": {
+                            "type": "string",
+                            "description": "The SDK that vends this dependency, from 'sdk:', e.g. 'flutter'."
+                          }
+                        }
+                      },
+                      "git": {
+                        "siblingattributes": {
+                          "git_url": {
+                            "type": "string",
+                            "description": "The Git repository URL, from 'git.url' or from the string shorthand of 'git:'."
+                          },
+                          "git_ref": {
+                            "type": "string",
+                            "description": "The Git ref (branch, tag or commit) from 'git.ref'."
+                          },
+                          "git_path": {
+                            "type": "string",
+                            "description": "The path within the Git repository from 'git.path'."
+                          }
+                        }
+                      },
+                      "path": {
+                        "siblingattributes": {
+                          "path": {
+                            "type": "string",
+                            "description": "The filesystem path from 'path:'."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "constraint": {
+                    "type": "string",
+                    "description": "The version constraint exactly as declared, when the override pins a hosted range."
+                  },
+                  "package": {
+                    "type": "xid",
+                    "description": "Cross-reference to the overriding package Resource, when 'source' is 'hosted'.",
                     "target": "/dartregistries/packages"
                   }
                 }
@@ -109,11 +284,11 @@
             },
             "published": {
               "type": "timestamp",
-              "description": "The UTC timestamp when this version was published."
+              "description": "The UTC timestamp when this version was published. NOT part of the Pub repository specification v2: this is a pub.dev extension to the version object and is OPTIONAL for registries that implement only the base protocol."
             },
             "archive_url": {
               "type": "string",
-              "description": "The download URL for the package archive (.tar.gz)."
+              "description": "The download URL for the package archive (.tar.gz). This URL MAY be temporary, and on some registries it is a time-limited signed URL. Consumers MUST treat it as a hint that is only valid at the moment it was retrieved, and MUST re-fetch the version metadata rather than reusing a cached value that may have expired."
             },
             "archive_sha256": {
               "type": "string",
@@ -136,23 +311,66 @@
           "setversionid": true,
           "versionmode": "manual",
           "singleversionroot": true,
-          "setdefaultversionsticky": false,
           "metaattributes": {
+            "defaultversionsticky": {
+              "type": "boolean",
+              "description": "Sticky default Versions are not supported: the default Version is always the newest published version.",
+              "enum": [ false ],
+              "required": true,
+              "default": false
+            },
             "publisher": {
               "type": "string",
-              "description": "The verified publisher of the package (e.g., dart.dev)."
+              "description": "The verified publisher of the package (e.g., dart.dev), as returned by GET /api/packages/<package>/publisher. A publisher is a DNS domain whose ownership was verified when the publisher was created. This attribute is ABSENT for packages published under individual uploader accounts rather than a publisher, and it MAY change if the package is transferred to another publisher; it is therefore package metadata and not part of the package's identity. NOT part of the Pub repository specification v2: pub.dev extension, OPTIONAL."
+            },
+            "is_discontinued": {
+              "type": "boolean",
+              "description": "Whether the PACKAGE AS A WHOLE has been discontinued by its maintainers, from the 'isDiscontinued' field of the package inspect response. A discontinued package keeps all of its versions resolvable; the flag is advisory. This is package-wide and MUST NOT be confused with the per-version 'retracted' attribute."
+            },
+            "replaced_by": {
+              "type": "string",
+              "description": "The name of the package that supersedes this one, from the 'replacedBy' field of the package inspect response. Only meaningful when 'is_discontinued' is true, and OPTIONAL even then."
+            },
+            "advisories_updated": {
+              "type": "timestamp",
+              "description": "The timestamp at which the set of security advisories affecting this package last changed, from the 'advisoriesUpdated' field of the package inspect response. It is a cache-invalidation signal for the advisories endpoint and does not itself assert that any advisory exists."
             },
             "likes": {
               "type": "integer",
-              "description": "The number of likes (pub.dev scoring)."
+              "description": "The number of users who have liked the package, from 'likeCount' of GET /api/packages/<package>/score. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
             },
             "pub_points": {
               "type": "integer",
-              "description": "The pub points score (pub.dev scoring)."
+              "description": "The points awarded to the package by the registry's static analysis, from 'grantedPoints' of GET /api/packages/<package>/score. It is meaningless without 'max_points', against which it MUST be interpreted. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
             },
-            "popularity": {
-              "type": "decimal",
-              "description": "The popularity score between 0 and 1."
+            "max_points": {
+              "type": "integer",
+              "description": "The maximum points obtainable under the scoring model in force when the score was computed, from 'maxPoints' of GET /api/packages/<package>/score. The denominator of 'pub_points'; it changes as the scoring model evolves, so scores computed at different times are not directly comparable. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
+            },
+            "download_count_30_days": {
+              "type": "integer",
+              "description": "The number of downloads of the package over the trailing 30 days, from 'downloadCount30Days' of GET /api/packages/<package>/score. This replaces the former relative 'popularity' score, which the registry no longer computes. It is an absolute count over a rolling window and is not comparable across registries. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
+            },
+            "tags": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The raw analysis tags from 'tags' of GET /api/packages/<package>/score, e.g. 'sdk:dart', 'platform:android', 'license:mit', 'is:null-safe'. This is the sole upstream source of licence and detected-platform information; 'license' and 'detected_platforms' are derived projections of it. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
+            },
+            "license": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The licences the registry detected in the package, derived from the 'license:<id>' entries of 'tags'. Dart pubspecs have no licence field and the Pub repository specification v2 conveys none, so this is a registry detection result, not a publisher declaration. It is an ARRAY because detection is regularly multi-valued for dual- and multi-licensed packages, and a single SPDX string would silently drop all but one. Values are the tag suffixes lowercased, which are SPDX identifiers but are NOT guaranteed to be. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
+            },
+            "detected_platforms": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The platforms the registry's analysis determined the package actually supports, derived from the 'platform:<name>' entries of 'tags'. This is a computed result for the analyzed version of the package and is distinct from the publisher's 'declared_platforms' pubspec section. NOT part of the Pub repository specification v2: pub.dev-proprietary Additional API, OPTIONAL."
             }
           }
         }

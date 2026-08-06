@@ -59,6 +59,12 @@ probes:
 cache:
   enabled: true
   sizeLimit: 2Gi
+  persistence:
+    enabled: false
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+    size: 2Gi
+    annotations: {}
 
 pdb:
   enabled: false
@@ -72,6 +78,8 @@ gateway:
   create: false
   className: ""
   annotations: {}
+  infrastructure:
+    annotations: {}
   listener:
     name: http
     protocol: HTTP
@@ -87,6 +95,8 @@ gateway:
   httpRoute:
     annotations: {}
     hostnames: []
+  frontDoor:
+    profileId: ""
 
 certificate:
   enabled: false

@@ -4,90 +4,269 @@
       "plural": "dotnetregistries",
       "singular": "dotnetregistry",
       "description": "Groups of .NET package registries",
+      "attributes": {
+        "sourceurl": {
+          "type": "url",
+          "description": "Base URL of the NuGet feed from which these packages were projected, e.g. 'https://api.nuget.org/v3/index.json'. This records provenance only; a package ID denotes the same package whichever feed serves it."
+        },
+        "all_repository_signed": {
+          "type": "boolean",
+          "description": "Projects 'allRepositorySigned' from the feed's RepositorySignatures resource: whether every package the feed serves carries a repository signature produced by one of the certificates in repository_signing_certificates."
+        },
+        "repository_signing_certificates": {
+          "type": "array",
+          "item": {
+            "type": "object",
+            "attributes": {
+              "subject": {
+                "type": "string",
+                "description": "The subject distinguished name of the repository signing certificate."
+              },
+              "issuer": {
+                "type": "string",
+                "description": "The distinguished name of the certificate's issuer."
+              },
+              "fingerprint_sha256": {
+                "type": "string",
+                "description": "The lowercase hex-encoded SHA-256 fingerprint of the certificate, projected from the '2.16.840.1.101.3.4.2.1' key of the upstream 'fingerprints' object."
+              },
+              "not_before": {
+                "type": "timestamp",
+                "description": "Start of the certificate's validity period."
+              },
+              "not_after": {
+                "type": "timestamp",
+                "description": "End of the certificate's validity period."
+              },
+              "content_url": {
+                "type": "url",
+                "description": "Absolute URL of the DER-encoded public certificate."
+              }
+            }
+          },
+          "description": "The certificates the feed uses to repository-sign packages, projected from 'signingCertificates' of the RepositorySignatures resource. These describe the feed, not any individual package."
+        }
+      },
       "resources": {
         "packages": {
           "singular": "package",
+          "plural": "packages",
           "description": "NuGet packages",
           "hasdocument": false,
           "attributes": {
             "name": {
               "type": "string",
-              "description": "The display name of the package"
-            },
-            "description": {
-              "type": "string",
-              "description": "The description of the package"
+              "required": true,
+              "description": "The NuGet package ID in the casing published by the owner. This is the authoritative name of the package; the packageid is the lowercased form used for addressing and loses the owner's casing, so it MUST NOT be substituted for this value."
             },
             "version": {
               "type": "string",
-              "description": "The version of the package"
+              "description": "The verbatim upstream version string of the package, exactly as published. Consumers addressing nuget.org MUST read this attribute rather than reconstructing a version from the versionid."
+            },
+            "title": {
+              "type": "string",
+              "description": "The human readable display title declared in the .nuspec 'title' field. This is distinct from the package ID and is often absent."
             },
             "authors": {
-              "type": "string",
-              "description": "The authors of the package"
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The authors declared by the package. The NuGet API returns this as either a single string or an array of strings; both forms are projected as an array. A single string MUST be carried as one element verbatim and MUST NOT be split, because NuGet defines no escaping rule for a separator occurring inside an author name."
             },
             "summary": {
               "type": "string",
               "description": "A short summary of the package"
             },
-            "iconUrl": {
+            "language": {
               "type": "string",
+              "description": "The locale identifier declared in the .nuspec 'language' field, for example 'en-US'."
+            },
+            "icon_url": {
+              "type": "url",
               "description": "URL to the package icon"
             },
-            "licenseUrl": {
-              "type": "string",
-              "description": "URL to the license for the package"
+            "readme_url": {
+              "type": "url",
+              "description": "URL of the rendered README document served by the source, from the 'readmeUrl' field."
             },
-            "projectUrl": {
+            "license_url": {
+              "type": "url",
+              "description": "URL to the license for the package. Deprecated upstream in favour of 'license_expression'. It MUST NOT be synthesized from a license expression."
+            },
+            "license_expression": {
               "type": "string",
+              "description": "The SPDX license expression declared by the package, from the 'licenseExpression' field."
+            },
+            "require_license_acceptance": {
+              "type": "boolean",
+              "description": "Whether the package requires the consumer to accept its license before installation, from 'requireLicenseAcceptance'. It MUST be omitted when the source does not supply it rather than defaulted to false."
+            },
+            "project_url": {
+              "type": "url",
               "description": "URL to the project's homepage"
+            },
+            "package_content": {
+              "type": "url",
+              "description": "The URL of the distributable .nupkg artifact for this version, from the 'packageContent' field of the registration leaf or of its catalogEntry. The package Resource sets hasdocument to false, so this attribute is the only reference to the artifact."
+            },
+            "min_client_version": {
+              "type": "string",
+              "description": "The minimum NuGet client version required to consume the package, from 'minClientVersion'."
+            },
+            "listed": {
+              "type": "boolean",
+              "description": "Whether the version is listed, that is, visible to search. An unlisted version remains downloadable and its artifact is unchanged. It MUST be omitted when the source supplies no listing signal rather than defaulted to true."
+            },
+            "published": {
+              "type": "timestamp",
+              "description": "The upstream 'published' value for this version. nuget.org signals an unlisted version by reporting a published year of 1900; that sentinel MUST be surfaced verbatim here and MUST NOT be interpreted as a real publication date."
             },
             "tags": {
               "type": "array",
               "item": {
                 "type": "string"
               },
-              "description": "Tags that describe the package"
+              "description": "Tags that describe the package. The NuGet API returns this as either a space separated string or an array of strings; both forms are projected as an array. A single string MUST be split on whitespace, which is unambiguous because a NuGet tag cannot contain whitespace."
             },
-            "totalDownloads": {
-              "type": "number",
-              "description": "The total number of downloads for the package"
+            "package_types": {
+              "type": "array",
+              "description": "The package types declared by the package, from 'packageTypes'. Common values are 'Dependency', 'DotnetTool' and 'Template'. A package that declares no package type is a 'Dependency' package by upstream default, but this attribute MUST be omitted rather than synthesized from that default.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "name": {
+                    "type": "string",
+                    "description": "The package type name, for example 'Dependency', 'DotnetTool' or 'Template'."
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "The package type version, when the source declares one."
+                  }
+                }
+              }
             },
-            "verified": {
-              "type": "boolean",
-              "description": "Whether the package has been verified"
+            "repository": {
+              "type": "object",
+              "description": "The source repository the package was built from, from the .nuspec 'repository' element.",
+              "attributes": {
+                "type": {
+                  "type": "string",
+                  "description": "The repository kind, for example 'git'."
+                },
+                "url": {
+                  "type": "url",
+                  "description": "The repository URL."
+                },
+                "branch": {
+                  "type": "string",
+                  "description": "The branch the package was built from."
+                },
+                "commit": {
+                  "type": "string",
+                  "description": "The commit the package was built from."
+                }
+              }
+            },
+            "deprecation": {
+              "type": "object",
+              "description": "The deprecation record for this version, from the 'deprecation' field of the registration leaf. Its presence is itself the deprecation signal, so it MUST be omitted for a version that is not deprecated and MUST NOT be emitted empty.",
+              "attributes": {
+                "reasons": {
+                  "type": "array",
+                  "item": {
+                    "type": "string"
+                  },
+                  "description": "The reasons the version was deprecated. nuget.org defines the values 'Legacy', 'CriticalBugs' and 'Other'; the set is open because a source MAY define further reasons, so values outside it MUST be carried verbatim rather than discarded."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "The free form message the owner supplied with the deprecation."
+                },
+                "alternate_package": {
+                  "type": "object",
+                  "description": "The replacement package the owner recommends, from 'alternatePackage'.",
+                  "attributes": {
+                    "id": {
+                      "type": "string",
+                      "description": "The package ID of the recommended replacement, in the casing published by its owner."
+                    },
+                    "range": {
+                      "type": "string",
+                      "description": "The version range of the recommended replacement, in NuGet interval notation. The upstream wildcard '*' means any version."
+                    },
+                    "package": {
+                      "type": "xid",
+                      "description": "An xRegistry link to the recommended replacement package.",
+                      "target": "/dotnetregistries/packages"
+                    }
+                  }
+                }
+              }
+            },
+            "vulnerabilities": {
+              "type": "array",
+              "description": "The known security advisories the source reports for this version, from the 'vulnerabilities' field of the registration leaf. It MUST be omitted when the source supplies no vulnerability data; an empty array asserts that the version is known to carry no advisories and MUST be emitted only when the source makes that assertion.",
+              "item": {
+                "type": "object",
+                "attributes": {
+                  "advisory_url": {
+                    "type": "url",
+                    "description": "The URL of the advisory describing the vulnerability, from 'advisoryUrl'."
+                  },
+                  "severity": {
+                    "type": "uinteger",
+                    "description": "The severity of the advisory on the nuget.org scale, where 0 is low, 1 moderate, 2 high and 3 critical. The upstream field is a numeric string and is projected as an unsigned integer."
+                  }
+                }
+              }
             },
             "dependencies": {
               "type": "array",
               "description": "A flattened list of package dependencies across all target frameworks.",
               "item": {
                 "type": "object",
-                "properties": {
+                "attributes": {
                   "name": {
                     "type": "string",
                     "description": "The ID (name) of the dependent package."
                   },
-                  "version": {
+                  "range": {
                     "type": "string",
-                    "description": "The version range specified for the dependency."
+                    "description": "The version range specified for the dependency, in NuGet interval notation. This carries the upstream field name 'range' and MUST NOT be confused with the top level 'version' attribute, which is a published version rather than a constraint."
                   },
-                  "targetFramework": {
+                  "target_framework": {
                     "type": "string",
-                    "description": "The target framework this dependency is for (e.g., .NETStandard2.0, or 'any' if not specified)."
+                    "description": "The target framework this dependency is for, for example '.NETStandard2.0'. The literal 'any' is a sentinel defined by this specification rather than an upstream value; it denotes the framework agnostic dependency group that NuGet represents as an absent or empty targetFramework. Implementations MUST NOT emit an empty string for that group."
                   },
                   "package": {
                     "type": "xid",
                     "description": "An xRegistry link to the dependent package. This may point to a specific version if resolved, or to the base package.",
-                    "target": "/dotnetregistries/package",
-                    "optional": true
+                    "target": "/dotnetregistries/packages"
                   },
                   "resolved_version": {
                     "type": "string",
-                    "description": "The specific version string if the dependency range was resolved to an exact, existing version.",
-                    "optional": true
+                    "description": "The specific version string if the dependency range was resolved to an exact, existing version."
                   }
                 }
               }
+            }
+          },
+          "metaattributes": {
+            "owners": {
+              "type": "array",
+              "item": {
+                "type": "string"
+              },
+              "description": "The nuget.org account names that own the package, in the casing chosen by the account holder. Ownership is assigned to the account that published the package; nuget.org does NOT derive ownership from the 'authors' metadata in the .nuspec file. A package MAY be co-owned by several accounts and MAY at times have no active owner, so ownership does not partition the package namespace and is not part of the package's identity."
+            },
+            "total_downloads": {
+              "type": "uinteger",
+              "description": "The total number of downloads across all versions of the package, as reported by the search service. This is an aggregate over the package, not a property of any single version. It MUST be omitted when the source does not supply it rather than defaulted to 0."
+            },
+            "verified": {
+              "type": "boolean",
+              "description": "Whether the package ID prefix is reserved and verified by nuget.org. This is a package-level fact, not a version-level one. It MUST be omitted when the source does not supply it rather than defaulted to false."
             }
           }
         }
