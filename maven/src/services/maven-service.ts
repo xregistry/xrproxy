@@ -105,6 +105,7 @@ export class MavenService {
     private namespaceCache: { ids: string[]; counts: Map<string, number>; timestamp: number } | null = null;
     private namespaceIndexProcess: ChildProcess | null = null;
     private namespaceIndexTimer: NodeJS.Timeout | null = null;
+    private namespaceIndexRetryTimer: NodeJS.Timeout | null = null;
 
     constructor(config: MavenServiceConfig = {}) {
         this.apiBaseUrl = config.apiBaseUrl || MAVEN_REGISTRY.API_BASE_URL;
@@ -269,6 +270,10 @@ export class MavenService {
             clearInterval(this.namespaceIndexTimer);
             this.namespaceIndexTimer = null;
         }
+        if (this.namespaceIndexRetryTimer) {
+            clearTimeout(this.namespaceIndexRetryTimer);
+            this.namespaceIndexRetryTimer = null;
+        }
         if (this.namespaceIndexProcess && !this.namespaceIndexProcess.killed) {
             this.namespaceIndexProcess.kill('SIGTERM');
         }
@@ -326,6 +331,13 @@ export class MavenService {
                 console.info('Maven namespace index refresh completed');
             } else {
                 console.error(`Maven namespace index refresh exited with code ${code} and signal ${signal}`);
+                if (!this.namespaceIndexRetryTimer) {
+                    this.namespaceIndexRetryTimer = setTimeout(() => {
+                        this.namespaceIndexRetryTimer = null;
+                        this.runNamespaceIndexRefresh();
+                    }, 5 * 60 * 1000);
+                    this.namespaceIndexRetryTimer.unref();
+                }
             }
         });
     }

@@ -2,11 +2,15 @@ package org.xregistry.mavenindex;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -22,8 +26,8 @@ import org.apache.maven.index.reader.ChunkReader;
 import org.apache.maven.index.reader.IndexReader;
 import org.apache.maven.index.reader.Record;
 import org.apache.maven.index.reader.RecordExpander;
+import org.apache.maven.index.reader.ResourceHandler;
 import org.apache.maven.index.reader.resource.PathWritableResourceHandler;
-import org.apache.maven.index.reader.resource.UriResourceHandler;
 
 public final class MavenIndexSync {
     private static final int COMMIT_BATCH_SIZE = 100_000;
@@ -52,7 +56,9 @@ public final class MavenIndexSync {
         }
 
         PathWritableResourceHandler local = new PathWritableResourceHandler(indexState);
-        UriResourceHandler remote = new UriResourceHandler(remoteBase);
+        ResumableResourceHandler remote = new ResumableResourceHandler(
+                remoteBase,
+                cacheDir.resolve("maven-index-downloads"));
         IndexReader reader = new IndexReader(local, remote);
         boolean fullRefresh = !reader.isIncremental();
         Path targetDatabase = fullRefresh
@@ -61,6 +67,7 @@ public final class MavenIndexSync {
 
         if (fullRefresh) {
             Files.deleteIfExists(targetDatabase);
+            remote.invalidate("nexus-maven-repository-index.gz");
         }
 
         try {
@@ -73,6 +80,7 @@ public final class MavenIndexSync {
                         StandardCopyOption.ATOMIC_MOVE);
             }
             writeSnapshot(database, snapshot, reader.getPublishedTimestamp().toInstant().toString());
+            remote.delete(reader.getChunkNames());
             reader.close();
         } catch (Exception error) {
             local.close();
@@ -217,5 +225,142 @@ public final class MavenIndexSync {
     }
 
     private record NamespaceCount(String id, int count) {
+    }
+
+    private static final class ResumableResourceHandler implements ResourceHandler {
+        private static final int MAX_ATTEMPTS = 10;
+        private static final int BUFFER_SIZE = 1024 * 1024;
+
+        private final URI baseUri;
+        private final Path cacheDir;
+
+        private ResumableResourceHandler(URI baseUri, Path cacheDir) throws IOException {
+            this.baseUri = baseUri;
+            this.cacheDir = cacheDir;
+            Files.createDirectories(cacheDir);
+        }
+
+        @Override
+        public Resource locate(String name) {
+            return () -> {
+                if (name.endsWith(".properties")) {
+                    return baseUri.resolve(name).toURL().openStream();
+                }
+                return Files.newInputStream(download(name));
+            };
+        }
+
+        private Path download(String name) throws IOException {
+            Path completed = cacheDir.resolve(name);
+            if (Files.exists(completed)) {
+                return completed;
+            }
+
+            URL url = baseUri.resolve(name).toURL();
+            Path partial = cacheDir.resolve(name + ".part");
+            Path etagFile = cacheDir.resolve(name + ".etag");
+            RemoteMetadata metadata = readMetadata(url);
+            String previousEtag = Files.exists(etagFile)
+                    ? Files.readString(etagFile, StandardCharsets.UTF_8)
+                    : "";
+            if (!previousEtag.equals(metadata.etag())) {
+                Files.deleteIfExists(partial);
+                Files.writeString(etagFile, metadata.etag(), StandardCharsets.UTF_8);
+            }
+
+            IOException lastError = null;
+            for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                long offset = Files.exists(partial) ? Files.size(partial) : 0;
+                try {
+                    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                    connection.setConnectTimeout(30_000);
+                    connection.setReadTimeout(120_000);
+                    connection.setRequestProperty("User-Agent", "xRegistry-Maven-Index-Sync/1.0");
+                    if (offset > 0) {
+                        connection.setRequestProperty("Range", "bytes=" + offset + "-");
+                        if (!metadata.etag().isBlank()) {
+                            connection.setRequestProperty("If-Range", metadata.etag());
+                        }
+                    }
+
+                    int status = connection.getResponseCode();
+                    boolean append = offset > 0 && status == HttpURLConnection.HTTP_PARTIAL;
+                    if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_PARTIAL) {
+                        throw new IOException("Index download returned HTTP " + status + " for " + url);
+                    }
+                    if (!append) {
+                        offset = 0;
+                    }
+
+                    try (InputStream input = connection.getInputStream();
+                            var output = Files.newOutputStream(
+                                    partial,
+                                    StandardOpenOption.CREATE,
+                                    StandardOpenOption.WRITE,
+                                    append ? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING)) {
+                        input.transferTo(output);
+                    } finally {
+                        connection.disconnect();
+                    }
+
+                    long downloaded = Files.size(partial);
+                    if (metadata.length() >= 0 && downloaded != metadata.length()) {
+                        throw new IOException(
+                                "Incomplete index download: expected " + metadata.length() + " bytes, got " + downloaded);
+                    }
+                    Files.move(
+                            partial,
+                            completed,
+                            StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                    Files.deleteIfExists(etagFile);
+                    return completed;
+                } catch (IOException error) {
+                    lastError = error;
+                    if (attempt < MAX_ATTEMPTS) {
+                        try {
+                            Thread.sleep(Math.min(30_000L, attempt * 2_000L));
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("Index download interrupted", interrupted);
+                        }
+                    }
+                }
+            }
+            throw lastError == null ? new IOException("Index download failed for " + url) : lastError;
+        }
+
+        private RemoteMetadata readMetadata(URL url) throws IOException {
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("HEAD");
+            connection.setConnectTimeout(30_000);
+            connection.setReadTimeout(30_000);
+            connection.setRequestProperty("User-Agent", "xRegistry-Maven-Index-Sync/1.0");
+            try {
+                int status = connection.getResponseCode();
+                if (status != HttpURLConnection.HTTP_OK) {
+                    throw new IOException("Index metadata returned HTTP " + status + " for " + url);
+                }
+                String etag = connection.getHeaderField("ETag");
+                return new RemoteMetadata(etag == null ? "" : etag, connection.getContentLengthLong());
+            } finally {
+                connection.disconnect();
+            }
+        }
+
+        private void invalidate(String name) throws IOException {
+            Files.deleteIfExists(cacheDir.resolve(name));
+        }
+
+        private void delete(List<String> names) throws IOException {
+            for (String name : names) {
+                Files.deleteIfExists(cacheDir.resolve(name));
+                Files.deleteIfExists(cacheDir.resolve(name + ".part"));
+                Files.deleteIfExists(cacheDir.resolve(name + ".etag"));
+            }
+        }
+
+        private record RemoteMetadata(String etag, long length) {
+        }
     }
 }
