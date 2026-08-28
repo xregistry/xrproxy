@@ -1,5 +1,5 @@
 # Use official Node.js 23 Alpine image
-FROM node:25-alpine
+FROM node:26-alpine
 
 # Install diagnostic tools for troubleshooting and bash for restart script
 RUN apk add --no-cache \
